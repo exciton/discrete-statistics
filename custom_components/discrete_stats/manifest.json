@@ -1,0 +1,10 @@
+{
+  "domain": "discrete_stats",
+  "name": "Discrete Statistics",
+  "codeowners": [],
+  "dependencies": ["recorder"],
+  "documentation": "https://github.com/exciton/ha-discrete-stats",
+  "iot_class": "calculated",
+  "requirements": [],
+  "version": "0.1.0"
+}
