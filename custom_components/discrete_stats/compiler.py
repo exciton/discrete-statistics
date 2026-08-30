@@ -39,7 +39,15 @@ EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 # boundary is returned by neither. Asking from a moment earlier makes it fall
 # into the changes half; canonicalise() folds everything at or before
 # window_start into the carried state, so the extra rows are harmless.
-START_MARGIN = 1.0
+#
+# The margin is a half second, not a whole one. window_start is always an
+# exact multiple of 3600.0, so subtracting 1.0 would land on another exact
+# integer second - a timestamp a state is just as likely to carry, which
+# would move the hole rather than close it. Anything finer than a
+# microsecond is no use either: the value goes through
+# datetime.fromtimestamp, whose resolution is microseconds, so a 1-ULP
+# offset at epoch scale (~2.4e-7 s) rounds straight back to window_start.
+START_MARGIN = 0.5
 
 
 def _as_datetime(timestamp: float) -> datetime:
@@ -123,7 +131,20 @@ class Compiler:
             )
 
         buckets = bucket(carried, transitions, window_start, window_end)
-        payloads = build_payloads(cfg, buckets, window_start, window_end, base_sums)
+
+        # Every statistic already registered for this entity must get a row
+        # in every hour, even when this window saw nothing of its state.
+        # Otherwise the next window finds no row in the hour before it,
+        # restarts that statistic's cumulative sum from zero and loses the
+        # running total.
+        known_states = {
+            parts[1]
+            for statistic_id in self._registry.statistic_ids_for(cfg.entity_id)
+            if (parts := self._registry.describe(statistic_id)) is not None
+        }
+        payloads = build_payloads(
+            cfg, buckets, window_start, window_end, base_sums, frozenset(known_states)
+        )
 
         await self._registry.async_register(
             cfg.entity_id,
@@ -141,21 +162,30 @@ class Compiler:
         return next_sums
 
     async def _async_watermark(self, entity_id: str) -> float | None:
-        """Return the newest compiled hour for an entity, or None."""
+        """Return the newest compiled hour for an entity, or None.
+
+        Takes the max across every registered statistic: density is
+        guaranteed only for statistics known at the time a window was
+        compiled, so any single ID can lag the others.
+        """
         statistic_ids = self._registry.statistic_ids_for(entity_id)
         if not statistic_ids:
             return None
-        result = await get_instance(self._hass).async_add_executor_job(
-            get_last_statistics,
-            self._hass,
-            1,
-            statistic_ids[0],
-            True,
-            {"sum"},
-        )
-        if not (rows := result.get(statistic_ids[0])):
-            return None
-        return rows[0]["start"]
+        newest: float | None = None
+        for statistic_id in statistic_ids:
+            result = await get_instance(self._hass).async_add_executor_job(
+                get_last_statistics,
+                self._hass,
+                1,
+                statistic_id,
+                True,
+                {"sum"},
+            )
+            if rows := result.get(statistic_id):
+                start = rows[0]["start"]
+                if newest is None or start > newest:
+                    newest = start
+        return newest
 
     async def _async_base_sums(
         self, entity_id: str, window_start: float

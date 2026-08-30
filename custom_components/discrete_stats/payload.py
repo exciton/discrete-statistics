@@ -37,13 +37,21 @@ def build_payloads(
     window_start: float,
     window_end: float,
     base_sums: dict[str, float],
+    known_states: frozenset[str] = frozenset(),
 ) -> dict[str, tuple[dict[str, Any], list[dict[str, Any]], str, str]]:
     """Return {statistic_id: (metadata, rows, state, metric)} with cumulative sums.
 
-    Rows are dense: every hour in [window_start, window_end) gets a row for
-    every state seen in the window, carrying the running sum forward even
-    when the hourly delta is zero. Sparse rows would make the recorder's
-    `change` computation attribute a delta to the wrong bucket.
+    Rows are dense over every KNOWN statistic, not merely every state seen
+    in this window: each hour in [window_start, window_end) gets a row for
+    every state in `known_states` as well as every state in `buckets`,
+    carrying the running sum forward even when the hourly delta is zero.
+
+    Density matters twice over. Sparse rows would make the recorder's
+    `change` computation attribute a delta to the wrong bucket. And a
+    statistic left out of an hour would lose its cumulative base on the
+    next window: the caller reads the base from the hour immediately
+    before the window, finds nothing, restarts from zero, and the
+    monotonic sum goes backwards.
     """
     hours: list[float] = []
     hour = window_start
@@ -51,7 +59,7 @@ def build_payloads(
         hours.append(hour)
         hour += HOUR
 
-    states = sorted({state for state, _ in buckets})
+    states = sorted({state for state, _ in buckets} | set(known_states))
 
     payloads: dict[str, tuple[dict[str, Any], list[dict[str, Any]], str, str]] = {}
 
