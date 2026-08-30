@@ -24,6 +24,14 @@ def test_single_state_for_whole_window():
     assert result == {("on", T0): (HOUR, 0)}
 
 
+def test_transition_exactly_at_window_start_is_ignored():
+    # The canonicaliser routes ts <= window_start into carried_state, so a
+    # transition here is the same event that produced it — counting it would
+    # double-count.
+    result = bucket("on", [(T0, "off")], T0, T0 + HOUR)
+    assert result == {("on", T0): (HOUR, 0)}
+
+
 def test_transition_splits_the_hour():
     result = bucket("on", [(T0 + 900.0, "off")], T0, T0 + HOUR)
     assert result == {

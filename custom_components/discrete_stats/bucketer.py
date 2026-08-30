@@ -58,7 +58,7 @@ def bucket(
     cursor = window_start
 
     for timestamp, state in transitions:
-        if timestamp < window_start:
+        if timestamp <= window_start:
             continue
         if timestamp >= window_end:
             break
