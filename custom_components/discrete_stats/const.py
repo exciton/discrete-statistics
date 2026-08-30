@@ -23,3 +23,7 @@ DISPOSITION_RECORD = "record"
 DEFAULT_RECORD = "record"
 DEFAULT_RECORD_KNOWN = "record_known"
 DEFAULT_IGNORE = "ignore"
+
+# Skip a scheduled run when the recorder queue is deeper than this. The
+# watermark is data-derived, so a skipped run costs nothing but latency.
+BACKLOG_THRESHOLD = 1000
