@@ -56,3 +56,13 @@ def test_no_double_underscores_from_awkward_states():
 def test_state_that_slugifies_to_nothing_is_rejected():
     with pytest.raises(InvalidStatisticIdError):
         build("sensor.x", "!!!", METRIC_SECONDS)
+
+
+def test_transliterable_non_ascii_state_is_accepted():
+    result = build("sensor.x", "日本", METRIC_SECONDS)
+    assert VALID_STATISTIC_ID.match(result), result
+
+
+def test_genuine_unknown_state_is_accepted():
+    result = build("sensor.x", "unknown", METRIC_SECONDS)
+    assert result.endswith("_unknown_seconds")

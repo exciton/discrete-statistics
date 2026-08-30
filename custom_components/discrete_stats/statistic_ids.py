@@ -30,11 +30,14 @@ def build(entity_id: str, state: str, metric: str) -> str:
     slugify collapses runs of separators, so no combination of parts can
     produce the double underscore that VALID_STATISTIC_ID forbids.
     """
-    # Validate that state contains at least one alphanumeric character
-    if not re.search(r"[a-z0-9_]", state, re.IGNORECASE):
+    # Detect states that unsluggify to "unknown", which would collide with
+    # a genuine "unknown" state's statistic ID. slugify returns the literal
+    # string "unknown" for inputs that don't contain any sluggable characters.
+    slug_state = slugify(state, separator="_")
+    if slug_state == "unknown" and state.strip().lower() != "unknown":
         raise InvalidStatisticIdError(
-            f"Cannot build a valid statistic ID from entity_id={entity_id!r}, "
-            f"state={state!r}, metric={metric!r} (state contains no alphanumeric characters)"
+            f"State {state!r} does not slugify to anything distinguishable "
+            f"(would collide with the 'unknown' state's statistic ID)"
         )
 
     object_id = slugify(f"{entity_id} {state} {metric}", separator="_")
