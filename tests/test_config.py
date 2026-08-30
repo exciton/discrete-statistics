@@ -138,3 +138,42 @@ def test_entity_config_is_hashable():
         entity_id="sensor.x", name=None, default="record_known", states={}
     )
     assert isinstance(hash(cfg), int)
+
+
+def test_disposition_keyword_is_not_treated_as_a_map_target():
+    [cfg] = parse(
+        [
+            {
+                "entity_id": "sensor.x",
+                "default": "ignore",
+                "states": {"x": "ignore"},
+            }
+        ]
+    )
+    assert cfg.resolve("ignore") is None
+
+
+def test_record_keyword_is_not_treated_as_a_map_target():
+    [cfg] = parse(
+        [
+            {
+                "entity_id": "sensor.x",
+                "default": "ignore",
+                "states": {"x": "record"},
+            }
+        ]
+    )
+    assert cfg.resolve("record") is None
+
+
+def test_genuine_map_target_still_forced_under_default_ignore():
+    [cfg] = parse(
+        [
+            {
+                "entity_id": "sensor.x",
+                "default": "ignore",
+                "states": {"cool": "cooling"},
+            }
+        ]
+    )
+    assert cfg.resolve("cooling") == "cooling"

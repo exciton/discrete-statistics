@@ -64,8 +64,17 @@ class EntityConfig:
                 return raw_state
             return disposition  # a map target
 
-        # A map target is always recorded, whatever the default says.
-        if raw_state in self.states.values():
+        # A map target is always recorded, whatever the default says. The
+        # disposition keywords share the value slot with map targets, so they
+        # must be excluded — otherwise a raw state literally named "record" or
+        # "ignore" would be force-recorded because some unrelated key used that
+        # keyword.
+        map_targets = {
+            value
+            for value in self.states.values()
+            if value not in (DISPOSITION_RECORD, DISPOSITION_IGNORE)
+        }
+        if raw_state in map_targets:
             return raw_state
 
         if self.default == DEFAULT_RECORD:
