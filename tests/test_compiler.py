@@ -226,11 +226,6 @@ async def test_a_state_absent_from_a_window_keeps_its_cumulative_base(
             window_start.timestamp(),
             (window_start + timedelta(hours=2)).timestamp(),
         )
-        # Each window reads its cumulative base from the hour before it,
-        # which the previous window only queued. Drain the recorder so the
-        # next call sees it. See the report: back-to-back compiles of one
-        # entity race without this.
-        await get_instance(hass).async_block_till_done()
 
     sums = await read_sums(hass, SECONDS_OFF, start, start + timedelta(hours=6))
 
@@ -238,6 +233,51 @@ async def test_a_state_absent_from_a_window_keeps_its_cumulative_base(
     # 1800 s in the first window, nothing in the second, 900 s in the third.
     assert sums == sorted(sums), f"cumulative sum went backwards: {sums}"
     assert sums[-1] == pytest.approx(2700.0)
+
+
+async def test_back_to_back_compiles_see_the_previous_write(recorder, freezer):
+    """Adjacent windows compiled in succession must carry the base forward.
+
+    Deliberately without draining the recorder between the two calls: the
+    compiler drains its own writes before returning, so a caller compiling
+    one window after another does not have to know about the queue.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    for offset, state in (
+        (timedelta(minutes=30), "off"),
+        (timedelta(hours=1), "on"),
+        (timedelta(hours=2, minutes=30), "off"),
+        (timedelta(hours=2, minutes=45), "on"),
+        (timedelta(hours=4, minutes=15), "off"),
+        (timedelta(hours=4, minutes=30), "on"),
+    ):
+        freezer.move_to(start + offset)
+        hass.states.async_set(ENTITY, state)
+        await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=6))
+    registry = Registry(hass)
+    await registry.async_load()
+    compiler = Compiler(hass, registry)
+
+    for window in range(3):
+        window_start = start + timedelta(hours=2 * window)
+        await compiler.async_compile(
+            cfg(),
+            window_start.timestamp(),
+            (window_start + timedelta(hours=2)).timestamp(),
+        )
+
+    sums = await read_sums(hass, SECONDS_OFF, start, start + timedelta(hours=6))
+
+    # 1800 s of "off" in the first window, then 900 s in each of the next two.
+    assert sums == sorted(sums), f"cumulative sum went backwards: {sums}"
+    assert sums == [1800.0, 1800.0, 2700.0, 2700.0, 3600.0, 3600.0]
 
 
 async def test_watermark_is_the_newest_hour_across_statistics(recorder):

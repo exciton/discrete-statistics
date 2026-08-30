@@ -99,6 +99,13 @@ class Compiler:
             compiled += int((chunk_end - chunk_start) / HOUR)
             chunk_start = chunk_end
 
+        # async_add_external_statistics only enqueues. Drain before returning
+        # so a subsequent compile of this entity reads a base that includes
+        # everything we just wrote - otherwise it would miss them and restart
+        # the cumulative series at zero. On the normal path only: if the loop
+        # above raised, nothing was written and there is nothing to drain.
+        await get_instance(self._hass).async_block_till_done()
+
         return compiled
 
     async def _async_compile_chunk(
