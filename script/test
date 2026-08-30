@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Run the test suite inside the project's container image.
+#
+# Home Assistant 2026.8+ needs Python >= 3.14.2; the host Python is older,
+# so tests always run in the container. Arguments are passed to pytest:
+#
+#   script/test                       # whole suite
+#   script/test tests/test_x.py -v    # one file
+set -euo pipefail
+
+IMAGE=ha-discrete-stats-test
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  echo "Building $IMAGE (first run only)..." >&2
+  docker build -q -t "$IMAGE" -f "$REPO_ROOT/.devcontainer/Dockerfile" "$REPO_ROOT" >&2
+fi
+
+exec docker run --rm \
+  -v "$REPO_ROOT:/workspace" \
+  -w /workspace \
+  "$IMAGE" \
+  python -m pytest "$@"

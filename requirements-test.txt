@@ -1,0 +1,4 @@
+# pytest-homeassistant-custom-component pins the homeassistant version it
+# was built against and pulls in pytest, pytest-asyncio and the HA test
+# fixtures (hass, recorder_mock, freezer, async_fire_time_changed).
+pytest-homeassistant-custom-component
