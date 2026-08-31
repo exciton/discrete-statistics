@@ -75,8 +75,25 @@ def draw(size: int) -> Image.Image:
     return image
 
 
+def trimmed(size: int) -> Image.Image:
+    """Draw, crop to the artwork, and re-square.
+
+    home-assistant/brands requires the image be "trimmed, so it contains the
+    minimum amount of empty space on the edges", and untrimmed art also renders
+    smaller than its neighbours in the integrations list. Drawn oversized first
+    so the downscale is a resample rather than an upscale.
+    """
+    oversized = draw(size * 2)
+    art = oversized.crop(oversized.getbbox())
+
+    side = max(art.size)
+    square = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    square.paste(art, ((side - art.width) // 2, (side - art.height) // 2))
+    return square.resize((size, size), Image.LANCZOS)
+
+
 if __name__ == "__main__":
     here = pathlib.Path(__file__).parent
-    draw(256).save(here / "icon.png")
-    draw(512).save(here / "icon@2x.png")
+    trimmed(256).save(here / "icon.png")
+    trimmed(512).save(here / "icon@2x.png")
     print(f"wrote {here}/icon.png (256) and {here}/icon@2x.png (512)")
