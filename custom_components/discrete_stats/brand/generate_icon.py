@@ -1,11 +1,17 @@
 """Generate the brand icon: a stacked bar chart.
 
+Home Assistant serves a custom integration's brand assets from
+`<integration>/brand/` (see homeassistant/components/brands), so this
+directory must stay inside the integration, not at the repository root.
+
 Kept in the repo so the icon is reproducible rather than an opaque binary.
 Run inside the project's container image:
 
     docker run --rm -v "$PWD:/w" -w /w ha-discrete-stats-test \
-        python brand/generate_icon.py
+        python custom_components/discrete_stats/brand/generate_icon.py
 """
+
+import pathlib
 
 from PIL import Image, ImageDraw
 
@@ -70,6 +76,7 @@ def draw(size: int) -> Image.Image:
 
 
 if __name__ == "__main__":
-    draw(256).save("brand/icon.png")
-    draw(512).save("brand/icon@2x.png")
-    print("wrote brand/icon.png (256) and brand/icon@2x.png (512)")
+    here = pathlib.Path(__file__).parent
+    draw(256).save(here / "icon.png")
+    draw(512).save(here / "icon@2x.png")
+    print(f"wrote {here}/icon.png (256) and {here}/icon@2x.png (512)")
