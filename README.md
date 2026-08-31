@@ -32,7 +32,7 @@ change.
 | key | default | meaning |
 |---|---|---|
 | `entity_id` | required | the entity to track |
-| `name` | the entity's friendly name | used in statistic display names |
+| `name` | the entity's ID | used in statistic display names |
 | `default` | `record_known` | disposition for states not listed |
 | `states` | `{}` | per-state overrides |
 
@@ -62,6 +62,7 @@ discrete_stats:
     states:
       heating: record
       cooling: record
+      idle: record
       cool: cooling
 ```
 
