@@ -8,3 +8,6 @@ __pycache__/
 # published — they carry environment-specific detail.
 docs/superpowers/
 script/verify
+
+# Stray screenshots at the repo root (brand assets are in a subdirectory)
+/*.png
