@@ -1,6 +1,7 @@
 """Tests for the recompute service."""
 
 import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -146,6 +147,57 @@ async def test_service_serialises_with_scheduled_runs(recorder, freezer):
         )
 
     assert peak == 1
+
+
+async def test_recompute_logs_what_it_did(recorder, freezer, caplog):
+    """A hand-invoked service must be confirmable without debug logging."""
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    assert await async_setup_component(hass, DOMAIN, CONFIG)
+    await hass.async_block_till_done()
+
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=3))
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="custom_components.discrete_statistics"):
+        await hass.services.async_call(
+            DOMAIN, "recompute", {"entity_id": ENTITY}, blocking=True
+        )
+        await hass.async_block_till_done()
+
+    assert "Recompute: compiled" in caplog.text
+    assert ENTITY in caplog.text
+    assert "the earliest retained state" in caplog.text
+
+
+async def test_recompute_logs_the_explicit_start(recorder, freezer, caplog):
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    assert await async_setup_component(hass, DOMAIN, CONFIG)
+    await hass.async_block_till_done()
+
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=3))
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="custom_components.discrete_statistics"):
+        await hass.services.async_call(
+            DOMAIN,
+            "recompute",
+            {"entity_id": ENTITY, "start": "2026-01-01T01:00:00+00:00"},
+            blocking=True,
+        )
+        await hass.async_block_till_done()
+
+    assert "Recompute: compiled" in caplog.text
+    assert "2026-01-01T01:00:00" in caplog.text
 
 
 async def test_unconfigured_entity_is_rejected(recorder):

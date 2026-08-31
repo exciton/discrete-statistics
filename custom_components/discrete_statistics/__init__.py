@@ -142,7 +142,23 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                         # actually gone by the time we re-create it below.
                         get_instance(hass).async_clear_statistics(statistic_ids)
                         await get_instance(hass).async_block_till_done()
-                await compiler.async_compile(cfg, start)
+                        _LOGGER.info(
+                            "Cleared %s statistic(s) for %s",
+                            len(statistic_ids),
+                            cfg.entity_id,
+                        )
+                # Logged at INFO, unlike the scheduled run's DEBUG: someone
+                # invoked this by hand and should be able to confirm it ran
+                # without first turning on debug logging.
+                hours = await compiler.async_compile(cfg, start)
+                _LOGGER.info(
+                    "Recompute: compiled %s hour(s) for %s from %s",
+                    hours,
+                    cfg.entity_id,
+                    "the earliest retained state"
+                    if start_dt is None
+                    else start_dt.isoformat(),
+                )
 
     hass.services.async_register(
         DOMAIN, SERVICE_RECOMPUTE, _async_recompute, schema=RECOMPUTE_SCHEMA
