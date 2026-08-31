@@ -12,16 +12,16 @@ from homeassistant.components.recorder.statistics import async_add_external_stat
 from custom_components.discrete_statistics import compiler as compiler_module
 from custom_components.discrete_statistics.compiler import TRAILING_HOURS, Compiler
 from custom_components.discrete_statistics.config import EntityConfig
-from custom_components.discrete_statistics.const import HOUR, METRIC_COUNT, METRIC_SECONDS
+from custom_components.discrete_statistics.const import HOUR, METRIC_COUNT, METRIC_DURATION
 from custom_components.discrete_statistics.payload import metadata_for
 from custom_components.discrete_statistics.registry import Registry
 
 ENTITY = "binary_sensor.grid_status"
-SECONDS_OFF = "discrete_statistics:binary_sensor_grid_status_off_seconds"
+DURATION_OFF = "discrete_statistics:binary_sensor_grid_status_off_duration"
 COUNT_OFF = "discrete_statistics:binary_sensor_grid_status_off_count"
-SECONDS_ON = "discrete_statistics:binary_sensor_grid_status_on_seconds"
+DURATION_ON = "discrete_statistics:binary_sensor_grid_status_on_duration"
 COUNT_ON = "discrete_statistics:binary_sensor_grid_status_on_count"
-SECONDS_NO_DATA = "discrete_statistics:binary_sensor_grid_status_no_data_seconds"
+DURATION_NO_DATA = "discrete_statistics:binary_sensor_grid_status_no_data_duration"
 COUNT_NO_DATA = "discrete_statistics:binary_sensor_grid_status_no_data_count"
 
 
@@ -90,8 +90,8 @@ async def test_registers_statistic_ids_it_writes(recorder, freezer):
     compiler = Compiler(hass, registry)
     await compiler.async_compile(cfg(), start.timestamp())
 
-    assert SECONDS_ON in registry.statistic_ids_for(ENTITY)
-    assert registry.describe(SECONDS_ON) == (ENTITY, "on", "seconds")
+    assert DURATION_ON in registry.statistic_ids_for(ENTITY)
+    assert registry.describe(DURATION_ON) == (ENTITY, "on", "duration")
 
 
 async def test_records_an_outage_duration_and_count(recorder, freezer):
@@ -117,9 +117,9 @@ async def test_records_an_outage_duration_and_count(recorder, freezer):
     await compiler.async_compile(cfg(), start.timestamp())
 
     sums = await read_sums(
-        hass, SECONDS_OFF, start, start + timedelta(hours=2)
+        hass, DURATION_OFF, start, start + timedelta(hours=2)
     )
-    assert sums[0] == pytest.approx(900.0)
+    assert sums[0] == pytest.approx(0.25)
     counts = await read_sums(
         hass, COUNT_OFF, start, start + timedelta(hours=2)
     )
@@ -143,14 +143,14 @@ async def test_compiling_twice_is_idempotent(recorder, freezer):
     compiler = Compiler(hass, registry)
 
     await compiler.async_compile(cfg(), start.timestamp())
-    first = await read_sums(hass, SECONDS_OFF, start, start + timedelta(hours=2))
+    first = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=2))
     await compiler.async_compile(cfg(), start.timestamp())
-    second = await read_sums(hass, SECONDS_OFF, start, start + timedelta(hours=2))
+    second = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=2))
 
     # "off" runs from 00:30 to the end of the window: 1800 s in the first
     # hour, a full hour in the second. Assert the values, not just that two
     # reads agree - they would agree if both were empty.
-    assert first == [1800.0, 5400.0]
+    assert first == [0.5, 1.5]
     assert first == second
 
 
@@ -174,7 +174,7 @@ async def test_cadence_invariance(recorder, freezer):
     freezer.move_to(start + timedelta(hours=5))
     await compiler.async_compile(cfg(), start.timestamp())
     all_at_once = await read_sums(
-        hass, SECONDS_OFF, start, start + timedelta(hours=5)
+        hass, DURATION_OFF, start, start + timedelta(hours=5)
     )
     assert all_at_once  # the comparison below is worthless if this is empty
 
@@ -191,7 +191,7 @@ async def test_cadence_invariance(recorder, freezer):
         )
         await compiler.async_compile(cfg(), step_start, step_end.timestamp())
     stepwise = await read_sums(
-        hass, SECONDS_OFF, start, start + timedelta(hours=5)
+        hass, DURATION_OFF, start, start + timedelta(hours=5)
     )
 
     assert all_at_once == stepwise
@@ -231,12 +231,12 @@ async def test_a_state_absent_from_a_window_keeps_its_cumulative_base(
             (window_start + timedelta(hours=2)).timestamp(),
         )
 
-    sums = await read_sums(hass, SECONDS_OFF, start, start + timedelta(hours=6))
+    sums = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=6))
 
     assert len(sums) == 6
     # 1800 s in the first window, nothing in the second, 900 s in the third.
     assert sums == sorted(sums), f"cumulative sum went backwards: {sums}"
-    assert sums[-1] == pytest.approx(2700.0)
+    assert sums[-1] == pytest.approx(0.75)
 
 
 async def test_back_to_back_compiles_see_the_previous_write(recorder, freezer):
@@ -277,11 +277,11 @@ async def test_back_to_back_compiles_see_the_previous_write(recorder, freezer):
             (window_start + timedelta(hours=2)).timestamp(),
         )
 
-    sums = await read_sums(hass, SECONDS_OFF, start, start + timedelta(hours=6))
+    sums = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=6))
 
     # 1800 s of "off" in the first window, then 900 s in each of the next two.
     assert sums == sorted(sums), f"cumulative sum went backwards: {sums}"
-    assert sums == [1800.0, 1800.0, 2700.0, 2700.0, 3600.0, 3600.0]
+    assert sums == [0.5, 0.5, 0.75, 0.75, 1.0, 1.0]
 
 
 async def test_watermark_is_the_newest_hour_across_statistics(recorder):
@@ -290,16 +290,16 @@ async def test_watermark_is_the_newest_hour_across_statistics(recorder):
     start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
     registry = Registry(hass)
     await registry.async_load()
-    # COUNT_OFF sorts before SECONDS_ON, and is the one left behind.
+    # COUNT_OFF sorts before DURATION_ON, and is the one left behind.
     await registry.async_register(
         ENTITY,
-        {COUNT_OFF: ("off", METRIC_COUNT), SECONDS_ON: ("on", METRIC_SECONDS)},
+        {COUNT_OFF: ("off", METRIC_COUNT), DURATION_ON: ("on", METRIC_DURATION)},
     )
     assert registry.statistic_ids_for(ENTITY)[0] == COUNT_OFF
 
     for statistic_id, state, metric, hours in (
         (COUNT_OFF, "off", METRIC_COUNT, 2),
-        (SECONDS_ON, "on", METRIC_SECONDS, 4),
+        (DURATION_ON, "on", METRIC_DURATION, 4),
     ):
         async_add_external_statistics(
             hass,
@@ -331,9 +331,9 @@ async def test_missing_history_before_first_state_is_no_data(recorder, freezer):
     compiler = Compiler(hass, registry)
     await compiler.async_compile(cfg(), start.timestamp())
 
-    no_data = "discrete_statistics:binary_sensor_grid_status_no_data_seconds"
+    no_data = "discrete_statistics:binary_sensor_grid_status_no_data_duration"
     sums = await read_sums(hass, no_data, start, start + timedelta(hours=4))
-    assert sums[-1] == pytest.approx(2 * HOUR)
+    assert sums[-1] == pytest.approx(2.0)
 
 
 async def test_an_ignored_state_at_the_window_start_does_not_destroy_durations(
@@ -365,21 +365,21 @@ async def test_an_ignored_state_at_the_window_start_does_not_destroy_durations(
     compiler = Compiler(hass, registry)
 
     await compiler.async_compile(cfg(), start.timestamp())
-    full = await read_sums(hass, SECONDS_ON, start, start + timedelta(hours=4))
+    full = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=4))
     # `unavailable` carries "on" forward, so the entity is "on" throughout.
-    assert full == [3600.0, 7200.0, 10800.0, 14400.0]
+    assert full == [1.0, 2.0, 3.0, 4.0]
 
     # Now the trailing window the hourly run would use, whose start lands in
     # the middle of the ignored stretch.
     await compiler.async_compile(
         cfg(), (start + timedelta(hours=1)).timestamp()
     )
-    trailing = await read_sums(hass, SECONDS_ON, start, start + timedelta(hours=4))
+    trailing = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=4))
 
     assert trailing == full
 
     no_data = await read_sums(
-        hass, SECONDS_NO_DATA, start, start + timedelta(hours=4)
+        hass, DURATION_NO_DATA, start, start + timedelta(hours=4)
     )
     assert no_data in ([], [0.0, 0.0, 0.0, 0.0]), no_data
 
@@ -422,8 +422,8 @@ async def test_a_boundary_transition_is_counted_once_from_either_window(
     assert from_boundary == from_earlier
 
     # Durations are untouched by the boundary event.
-    seconds = await read_sums(hass, SECONDS_OFF, start, start + timedelta(hours=4))
-    assert seconds == [0.0, 0.0, 1800.0, 1800.0]
+    seconds = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=4))
+    assert seconds == [0.0, 0.0, 0.5, 0.5]
 
 
 async def test_no_data_has_no_count_statistic(recorder, freezer):
@@ -443,9 +443,9 @@ async def test_no_data_has_no_count_statistic(recorder, freezer):
 
     # The gap is real: the duration statistic exists and holds two hours.
     seconds = await read_sums(
-        hass, SECONDS_NO_DATA, start, start + timedelta(hours=4)
+        hass, DURATION_NO_DATA, start, start + timedelta(hours=4)
     )
-    assert seconds[-1] == pytest.approx(2 * HOUR)
+    assert seconds[-1] == pytest.approx(2.0)
 
     assert COUNT_NO_DATA not in registry.statistic_ids_for(ENTITY)
     assert COUNT_ON in registry.statistic_ids_for(ENTITY)
@@ -488,7 +488,7 @@ async def test_compiling_across_a_chunk_boundary(recorder, freezer, monkeypatch)
     duration_ids = [
         statistic_id
         for statistic_id in registry.statistic_ids_for(ENTITY)
-        if registry.describe(statistic_id)[2] == METRIC_SECONDS
+        if registry.describe(statistic_id)[2] == METRIC_DURATION
     ]
     assert len(duration_ids) >= 2, duration_ids
 
@@ -501,8 +501,8 @@ async def test_compiling_across_a_chunk_boundary(recorder, freezer, monkeypatch)
 
     # Time is conserved across the seam: every second of the six hours is
     # attributed to exactly one state.
-    assert total == pytest.approx(6 * HOUR)
+    assert total == pytest.approx(6.0)
 
-    off_seconds = await read_sums(hass, SECONDS_OFF, start, end)
+    off_duration = await read_sums(hass, DURATION_OFF, start, end)
     # off runs 0:30-1:45, 2:15-3:45 and 4:30-5:30.
-    assert off_seconds[-1] == pytest.approx(4500 + 5400 + 3600)
+    assert off_duration[-1] == pytest.approx((4500 + 5400 + 3600) / 3600)

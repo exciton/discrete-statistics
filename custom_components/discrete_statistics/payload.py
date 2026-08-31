@@ -8,10 +8,10 @@ from typing import Any
 from homeassistant.components.recorder.models import StatisticMeanType
 
 from .config import EntityConfig
-from .const import DOMAIN, HOUR, METRIC_COUNT, METRIC_SECONDS, NO_DATA
+from .const import DOMAIN, HOUR, METRIC_COUNT, METRIC_DURATION, NO_DATA
 from .statistic_ids import build as build_statistic_id
 
-_METRIC_LABEL = {METRIC_SECONDS: "duration", METRIC_COUNT: "count"}
+_METRIC_LABEL = {METRIC_DURATION: "duration", METRIC_COUNT: "count"}
 
 
 def metadata_for(
@@ -26,8 +26,8 @@ def metadata_for(
         "name": f"{display}: {state} ({_METRIC_LABEL[metric]})",
         "source": DOMAIN,
         "statistic_id": statistic_id,
-        "unit_of_measurement": "s" if metric == METRIC_SECONDS else None,
-        "unit_class": "duration" if metric == METRIC_SECONDS else None,
+        "unit_of_measurement": "h" if metric == METRIC_DURATION else None,
+        "unit_class": "duration" if metric == METRIC_DURATION else None,
     }
 
 
@@ -69,14 +69,20 @@ def build_payloads(
     payloads: dict[str, tuple[dict[str, Any], list[dict[str, Any]], str, str]] = {}
 
     for state in states:
-        for metric, index in ((METRIC_SECONDS, 0), (METRIC_COUNT, 1)):
+        # The bucketer works in seconds because that is what timestamp
+        # arithmetic yields; durations are converted once, here, so an hourly
+        # bucket of solid state reads as 1.0 rather than 3600.
+        for metric, index, scale in (
+            (METRIC_DURATION, 0, 1.0 / HOUR),
+            (METRIC_COUNT, 1, 1.0),
+        ):
             if state == NO_DATA and metric == METRIC_COUNT:
                 continue
             statistic_id = build_statistic_id(cfg.entity_id, state, metric)
             running = base_sums.get(statistic_id, 0.0)
             rows: list[dict[str, Any]] = []
             for hour in hours:
-                running += buckets.get((state, hour), (0.0, 0))[index]
+                running += buckets.get((state, hour), (0.0, 0))[index] * scale
                 rows.append(
                     {
                         "start": datetime.fromtimestamp(hour, tz=timezone.utc),

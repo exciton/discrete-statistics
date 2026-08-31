@@ -9,7 +9,7 @@ from custom_components.discrete_statistics.const import HOUR, NO_DATA
 T0 = 1767225600.0
 
 
-def total_seconds(result):
+def total_duration(result):
     return sum(seconds for seconds, _ in result.values())
 
 
@@ -35,7 +35,7 @@ def test_transition_exactly_at_window_start_is_counted():
     # Durations are untouched: the boundary event contributes zero seconds,
     # so "on" gets no bucket at all and the window still conserves time.
     assert ("on", T0) not in result
-    assert total_seconds(result) == pytest.approx(HOUR)
+    assert total_duration(result) == pytest.approx(HOUR)
 
 
 def test_boundary_transition_is_counted_once_from_either_window():
@@ -110,7 +110,7 @@ def test_span_of_many_days_conserves_time():
         T0,
         T0 + window,
     )
-    assert total_seconds(result) == pytest.approx(window)
+    assert total_duration(result) == pytest.approx(window)
 
 
 @pytest.mark.parametrize("transition_offset", [0.5, 1.5, 23.5, 47.9])
@@ -119,7 +119,7 @@ def test_every_window_conserves_time(transition_offset):
     result = bucket(
         "on", [(T0 + transition_offset * HOUR, "off")], T0, T0 + window
     )
-    assert total_seconds(result) == pytest.approx(window)
+    assert total_duration(result) == pytest.approx(window)
 
 
 def test_transitions_outside_the_window_are_ignored():

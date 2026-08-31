@@ -44,7 +44,7 @@ def bucket(
     """
     result: dict[BucketKey, BucketValue] = {}
 
-    def add_seconds(state: str, start: float, end: float) -> None:
+    def add_duration(state: str, start: float, end: float) -> None:
         while start < end:
             hour = hour_start(start)
             edge = min(hour + HOUR, end)
@@ -65,10 +65,10 @@ def bucket(
             continue
         if timestamp >= window_end:
             break
-        add_seconds(current, cursor, timestamp)
+        add_duration(current, cursor, timestamp)
         add_count(state, timestamp)
         current = state
         cursor = timestamp
 
-    add_seconds(current, cursor, window_end)
+    add_duration(current, cursor, window_end)
     return result

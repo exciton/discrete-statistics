@@ -9,7 +9,7 @@ HOUR = 3600.0
 # source rows have been purged.
 NO_DATA = "no_data"
 
-METRIC_SECONDS = "seconds"
+METRIC_DURATION = "duration"
 METRIC_COUNT = "count"
 
 # States ignored by the `record_known` default.

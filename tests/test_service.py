@@ -15,7 +15,7 @@ from homeassistant.exceptions import ServiceValidationError
 from custom_components.discrete_statistics.const import DOMAIN
 
 ENTITY = "binary_sensor.grid_status"
-SECONDS_OFF = "discrete_statistics:binary_sensor_grid_status_off_seconds"
+DURATION_OFF = "discrete_statistics:binary_sensor_grid_status_off_duration"
 
 CONFIG = {DOMAIN: [{"entity_id": ENTITY, "name": "Grid Status"}]}
 
@@ -79,7 +79,7 @@ async def test_backfill_writes_history(recorder, freezer):
     )
     await hass.async_block_till_done()
 
-    sums = await read_sums(hass, SECONDS_OFF, start, start + timedelta(hours=2))
+    sums = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=2))
     assert sums
     assert sums[-1] > 0
 
@@ -198,7 +198,7 @@ async def test_recompute_leaves_statistics_outside_the_range_untouched(
         DOMAIN, "recompute", {"entity_id": ENTITY}, blocking=True
     )
     await hass.async_block_till_done()
-    before = await read_sums(hass, SECONDS_OFF, start, start + timedelta(hours=6))
+    before = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=6))
     assert before
 
     # Recompute a LATER window only; the early buckets must survive.
@@ -209,7 +209,7 @@ async def test_recompute_leaves_statistics_outside_the_range_untouched(
         blocking=True,
     )
     await hass.async_block_till_done()
-    after = await read_sums(hass, SECONDS_OFF, start, start + timedelta(hours=6))
+    after = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=6))
 
     assert after == before
 

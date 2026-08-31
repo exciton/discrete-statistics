@@ -86,12 +86,13 @@ discrete_statistics:
 For each state, two statistics:
 
 ```
-discrete_statistics:<entity>_<state>_seconds
+discrete_statistics:<entity>_<state>_duration
 discrete_statistics:<entity>_<state>_count
 ```
 
 Both are cumulative sums, so charts use the `change` stat type to show
-per-bucket values. Statistics for a state appear the first time that state
+per-bucket values. Durations are in **hours**, so an hourly bucket in a single
+state reads as `1.0` and a full day sums to `24`. Statistics for a state appear the first time that state
 is observed — no configuration change is needed when a new state shows up.
 
 ### The `no_data` state
@@ -102,7 +103,7 @@ purged — it attributes the time to `no_data`. Durations therefore always
 sum to 24h per day, and gaps are visible in the chart rather than silently
 filled in.
 
-`no_data` has a `_seconds` statistic only. Nothing transitions *into* it —
+`no_data` has a `_duration` statistic only. Nothing transitions *into* it —
 it is what is left when no state can be carried in — so there is no
 `no_data_count`.
 
@@ -133,9 +134,9 @@ days_to_show: 30
 stat_types:
   - change
 entities:
-  - discrete_statistics:binary_sensor_grid_status_on_seconds
-  - discrete_statistics:binary_sensor_grid_status_off_seconds
-  - discrete_statistics:binary_sensor_grid_status_no_data_seconds
+  - discrete_statistics:binary_sensor_grid_status_on_duration
+  - discrete_statistics:binary_sensor_grid_status_off_duration
+  - discrete_statistics:binary_sensor_grid_status_no_data_duration
 ```
 
 Weekly heat pump behaviour over three months:
@@ -149,9 +150,9 @@ days_to_show: 90
 stat_types:
   - change
 entities:
-  - discrete_statistics:sensor_heat_pump_hvac_action_heating_seconds
-  - discrete_statistics:sensor_heat_pump_hvac_action_cooling_seconds
-  - discrete_statistics:sensor_heat_pump_hvac_action_idle_seconds
+  - discrete_statistics:sensor_heat_pump_hvac_action_heating_duration
+  - discrete_statistics:sensor_heat_pump_hvac_action_cooling_duration
+  - discrete_statistics:sensor_heat_pump_hvac_action_idle_duration
 ```
 
 A state that appears later accumulates immediately but must be added to the

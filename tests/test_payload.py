@@ -18,10 +18,10 @@ def cfg(name=None):
     )
 
 
-SECONDS_ON = "discrete_statistics:binary_sensor_grid_status_on_seconds"
+DURATION_ON = "discrete_statistics:binary_sensor_grid_status_on_duration"
 COUNT_ON = "discrete_statistics:binary_sensor_grid_status_on_count"
-SECONDS_OFF = "discrete_statistics:binary_sensor_grid_status_off_seconds"
-SECONDS_NO_DATA = "discrete_statistics:binary_sensor_grid_status_no_data_seconds"
+DURATION_OFF = "discrete_statistics:binary_sensor_grid_status_off_duration"
+DURATION_NO_DATA = "discrete_statistics:binary_sensor_grid_status_no_data_duration"
 COUNT_NO_DATA = "discrete_statistics:binary_sensor_grid_status_no_data_count"
 
 
@@ -29,16 +29,16 @@ def test_single_hour_single_state():
     payloads = build_payloads(
         cfg(), {("on", T0): (HOUR, 0)}, T0, T0 + HOUR, {}
     )
-    metadata, rows, state, metric = payloads[SECONDS_ON]
+    metadata, rows, state, metric = payloads[DURATION_ON]
     assert state == "on"
-    assert metric == "seconds"
+    assert metric == "duration"
     assert metadata["source"] == "discrete_statistics"
-    assert metadata["statistic_id"] == SECONDS_ON
+    assert metadata["statistic_id"] == DURATION_ON
     assert metadata["has_sum"] is True
-    assert metadata["unit_of_measurement"] == "s"
+    assert metadata["unit_of_measurement"] == "h"
     assert metadata["unit_class"] == "duration"
     assert rows == [
-        {"start": datetime.fromtimestamp(T0, tz=timezone.utc), "sum": HOUR}
+        {"start": datetime.fromtimestamp(T0, tz=timezone.utc), "sum": 1.0}
     ]
 
 
@@ -64,10 +64,10 @@ def test_sums_are_cumulative_across_hours():
 
 def test_base_sums_continue_the_running_total():
     payloads = build_payloads(
-        cfg(), {("on", T0): (HOUR, 1)}, T0, T0 + HOUR, {SECONDS_ON: 500.0}
+        cfg(), {("on", T0): (HOUR, 1)}, T0, T0 + HOUR, {DURATION_ON: 500.0}
     )
-    _, rows, _, _ = payloads[SECONDS_ON]
-    assert rows[0]["sum"] == 500.0 + HOUR
+    _, rows, _, _ = payloads[DURATION_ON]
+    assert rows[0]["sum"] == 500.0 + 1.0
 
 
 def test_rows_are_dense_even_when_a_state_is_absent_from_an_hour():
@@ -77,10 +77,10 @@ def test_rows_are_dense_even_when_a_state_is_absent_from_an_hour():
         ("off", T0 + HOUR): (HOUR, 1),
     }
     payloads = build_payloads(cfg(), buckets, T0, T0 + 2 * HOUR, {})
-    _, off_rows, _, _ = payloads[SECONDS_OFF]
+    _, off_rows, _, _ = payloads[DURATION_OFF]
     assert len(off_rows) == 2
     assert off_rows[0]["sum"] == 0.0
-    assert off_rows[1]["sum"] == HOUR
+    assert off_rows[1]["sum"] == 1.0
 
 
 def test_sums_never_decrease():
@@ -97,7 +97,7 @@ def test_sums_never_decrease():
 
 def test_name_defaults_to_entity_id_when_not_configured():
     payloads = build_payloads(cfg(), {("on", T0): (HOUR, 0)}, T0, T0 + HOUR, {})
-    metadata, _, _, _ = payloads[SECONDS_ON]
+    metadata, _, _, _ = payloads[DURATION_ON]
     assert "binary_sensor.grid_status" in metadata["name"]
 
 
@@ -105,13 +105,13 @@ def test_configured_name_is_used():
     payloads = build_payloads(
         cfg(name="Grid Status"), {("on", T0): (HOUR, 0)}, T0, T0 + HOUR, {}
     )
-    metadata, _, _, _ = payloads[SECONDS_ON]
+    metadata, _, _, _ = payloads[DURATION_ON]
     assert metadata["name"] == "Grid Status: on (duration)"
 
 
 def test_start_times_are_utc_aware():
     payloads = build_payloads(cfg(), {("on", T0): (HOUR, 0)}, T0, T0 + HOUR, {})
-    _, rows, _, _ = payloads[SECONDS_ON]
+    _, rows, _, _ = payloads[DURATION_ON]
     assert rows[0]["start"].tzinfo is not None
 
 
@@ -123,7 +123,7 @@ def test_no_data_gets_a_duration_but_no_count():
         T0 + 2 * HOUR,
         {},
     )
-    assert SECONDS_NO_DATA in payloads
+    assert DURATION_NO_DATA in payloads
     assert COUNT_NO_DATA not in payloads
     # Every other state keeps both metrics.
     assert COUNT_ON in payloads
@@ -134,5 +134,5 @@ def test_no_data_count_is_not_emitted_even_when_already_known():
     payloads = build_payloads(
         cfg(), {}, T0, T0 + HOUR, {}, frozenset({NO_DATA, "on"})
     )
-    assert SECONDS_NO_DATA in payloads
+    assert DURATION_NO_DATA in payloads
     assert COUNT_NO_DATA not in payloads
