@@ -13,8 +13,8 @@ from PIL import Image, ImageDraw
 # a recorded state, a second recorded state, and a no_data gap.
 SEGMENT_COLOURS = [
     (56, 132, 255, 255),   # blue
-    (245, 166, 35, 255),   # amber
-    (148, 163, 184, 255),  # slate — the gap band
+    (34, 168, 108, 255),   # green
+    (146, 96, 214, 255),   # purple
 ]
 
 # (bottom segment, middle, top) heights per bar, in a 256px grid.
