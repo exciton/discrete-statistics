@@ -181,12 +181,21 @@ data:
   start: "2026-01-01T00:00:00Z"
 ```
 
-`clear: true` deletes the entity's existing statistics first, including
-their metadata. Use it only to remove statistics that should no longer
-exist, such as an orphaned state after a mapping change. It cannot be
-combined with `start` — clearing removes every hour, not only the ones
-after `start`, so it always rebuilds from the oldest retained state.
-Passing both is rejected.
+### Recompute never deletes
+
+`recompute` only writes. It rewrites the buckets it has recorder history for
+and leaves everything outside that range untouched, so a rebuild can never
+discard statistics whose source states have already been purged.
+
+A consequence worth knowing: if you change a state mapping, the statistics for
+the old state stop growing but remain as a historical record. That is
+deliberate — they describe hours that really happened, and the recorder can no
+longer prove otherwise. Drop them from your charts if they are noise.
+
+To delete one properly, use Home Assistant's own tool at **Settings → System →
+Tools → Statistics**, which removes a single statistic with a confirmation
+step. Deletion should be a decision you make, not a side effect of a routine
+rebuild.
 
 ## How it works
 

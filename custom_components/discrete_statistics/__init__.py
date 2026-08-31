@@ -30,7 +30,6 @@ RECOMPUTE_SCHEMA = vol.Schema(
     {
         vol.Optional("entity_id"): cv.entity_id,
         vol.Optional("start"): cv.datetime,
-        vol.Optional("clear", default=False): cv.boolean,
     }
 )
 
@@ -98,17 +97,6 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _async_on_started)
 
     async def _async_recompute(call: ServiceCall) -> None:
-        # `clear` deletes every statistic ID for the entity, rows and
-        # metadata alike, so a rebuild that starts anywhere later than the
-        # beginning silently destroys everything before it - unrecoverably,
-        # once recorder history has passed purge_keep_days.
-        if call.data["clear"] and call.data.get("start") is not None:
-            raise ServiceValidationError(
-                "clear: true cannot be combined with start: clearing deletes "
-                "every statistic for the entity, so it always requires a full "
-                "backfill. Omit start."
-            )
-
         entity_id = call.data.get("entity_id")
         if entity_id is None:
             targets = list(data["configs"])
@@ -130,23 +118,6 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         # outside, never from within compile_all.
         async with data["lock"]:
             for cfg in targets:
-                if call.data["clear"]:
-                    statistic_ids = await registry.async_forget(cfg.entity_id)
-                    if statistic_ids:
-                        # clear_statistics's own delete() asserts it runs on
-                        # the recorder's single worker thread specifically,
-                        # not merely a db-executor thread, so it must go
-                        # through the recorder's task queue (async_clear_
-                        # statistics) rather than async_add_executor_job.
-                        # Drain before compiling so the forgotten metadata is
-                        # actually gone by the time we re-create it below.
-                        get_instance(hass).async_clear_statistics(statistic_ids)
-                        await get_instance(hass).async_block_till_done()
-                        _LOGGER.info(
-                            "Cleared %s statistic(s) for %s",
-                            len(statistic_ids),
-                            cfg.entity_id,
-                        )
                 # Logged at INFO, unlike the scheduled run's DEBUG: someone
                 # invoked this by hand and should be able to confirm it ran
                 # without first turning on debug logging.

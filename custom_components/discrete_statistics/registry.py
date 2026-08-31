@@ -56,12 +56,3 @@ class Registry:
                 changed = True
         if changed:
             await self._async_save()
-
-    async def async_forget(self, entity_id: str) -> list[str]:
-        """Remove and return every statistic ID belonging to an entity."""
-        removed = self.statistic_ids_for(entity_id)
-        for statistic_id in removed:
-            del self._statistics[statistic_id]
-        if removed:
-            await self._async_save()
-        return removed

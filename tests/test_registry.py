@@ -42,15 +42,3 @@ async def test_survives_a_reload(hass):
     reloaded = Registry(hass)
     await reloaded.async_load()
     assert reloaded.describe(SECONDS_ON) == (ENTITY, "on", "seconds")
-
-
-async def test_forget_returns_and_removes_ids(hass):
-    registry = Registry(hass)
-    await registry.async_load()
-    await registry.async_register(
-        ENTITY, {SECONDS_ON: ("on", "seconds"), COUNT_ON: ("on", "count")}
-    )
-    removed = await registry.async_forget(ENTITY)
-    assert sorted(removed) == sorted([SECONDS_ON, COUNT_ON])
-    assert registry.statistic_ids_for(ENTITY) == []
-    assert registry.describe(SECONDS_ON) is None

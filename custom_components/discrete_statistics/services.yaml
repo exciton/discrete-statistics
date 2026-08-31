@@ -18,16 +18,3 @@ recompute:
       required: false
       selector:
         datetime:
-    clear:
-      name: Clear first
-      description: >-
-        Delete the entity's existing statistics before recomputing. Needed
-        only to remove statistics that should no longer exist, such as an
-        orphaned state after a mapping change. This deletes the statistics
-        metadata, not just the rows. Cannot be combined with a start time:
-        clearing removes every hour, so it always rebuilds from the oldest
-        retained state.
-      required: false
-      default: false
-      selector:
-        boolean:
