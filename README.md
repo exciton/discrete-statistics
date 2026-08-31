@@ -11,9 +11,22 @@ as external statistics, which are never purged.
 
 ## Installation
 
+Requires Home Assistant 2026.8.3 or later.
+
+### HACS (recommended)
+
+This is not in the HACS default store, so add it as a custom repository:
+
+1. HACS → three-dot menu → **Custom repositories**
+2. Repository: `https://github.com/exciton/discrete-statistics`
+3. Type: **Integration**
+4. Add, then install **Discrete Statistics**
+5. Restart Home Assistant
+
+### Manually
+
 Copy `custom_components/discrete_stats` into your `config/custom_components`
-directory and restart Home Assistant. Requires Home Assistant 2026.8.3 or
-later.
+directory and restart Home Assistant.
 
 ## Configuration
 

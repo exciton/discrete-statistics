@@ -1,0 +1,41 @@
+name: Validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Catch HACS/hassfest rule changes without a push.
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+jobs:
+  hacs:
+    name: HACS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hacs/action@main
+        with:
+          category: integration
+          # `brands` requires the domain to be registered in
+          # home-assistant/brands, which only applies to integrations shipped
+          # in the HACS default store. This is a custom repository.
+          ignore: brands
+
+  hassfest:
+    name: hassfest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master
+
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # script/test builds .devcontainer/Dockerfile on first use. Home
+      # Assistant 2026.8.3 needs Python >= 3.14.2, so the suite runs in the
+      # same image used locally rather than via setup-python.
+      - run: script/test tests/ -q
