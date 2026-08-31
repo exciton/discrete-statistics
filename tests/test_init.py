@@ -81,3 +81,31 @@ async def test_backlog_gate_skips_the_run(recorder, freezer):
         await hass.async_block_till_done()
 
     assert not compile_mock.called
+
+
+async def test_runs_do_not_overlap(recorder, freezer):
+    """Two concurrent runs must serialise; overlapping compiles corrupt sums."""
+    hass = recorder
+    freezer.move_to(datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc))
+    assert await async_setup_component(hass, DOMAIN, CONFIG)
+    await hass.async_block_till_done()
+
+    concurrent = 0
+    peak = 0
+
+    async def fake_compile(self, cfg):
+        nonlocal concurrent, peak
+        concurrent += 1
+        peak = max(peak, concurrent)
+        await asyncio.sleep(0)
+        concurrent -= 1
+        return 0
+
+    with patch(
+        "custom_components.discrete_stats.Compiler.async_compile_incremental",
+        fake_compile,
+    ):
+        compile_all = hass.data[DOMAIN]["compile_all"]
+        await asyncio.gather(compile_all(), compile_all())
+
+    assert peak == 1
