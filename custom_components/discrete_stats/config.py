@@ -98,6 +98,24 @@ def _no_reserved_state(states: dict[str, str]) -> dict[str, str]:
     return states
 
 
+def _no_duplicate_entities(configs: list[EntityConfig]) -> list[EntityConfig]:
+    """Reject an entity configured more than once.
+
+    Two configurations for one entity resolve the same raw states through
+    different disposition tables and write conflicting values to the same
+    statistic IDs.
+    """
+    seen: set[str] = set()
+    for cfg in configs:
+        if cfg.entity_id in seen:
+            raise vol.Invalid(
+                f"{cfg.entity_id} is configured more than once; "
+                f"{DOMAIN} allows one configuration per entity"
+            )
+        seen.add(cfg.entity_id)
+    return configs
+
+
 ENTITY_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_ENTITY_ID): cv.entity_id,
@@ -124,6 +142,7 @@ CONFIG_SCHEMA = vol.Schema(
         DOMAIN: vol.All(
             cv.ensure_list,
             [vol.All(ENTITY_SCHEMA, _to_entity_config)],
+            _no_duplicate_entities,
         )
     },
     extra=vol.ALLOW_EXTRA,

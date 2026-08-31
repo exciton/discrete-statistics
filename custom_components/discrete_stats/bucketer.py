@@ -33,7 +33,10 @@ def bucket(
 
     transitions must be ascending by timestamp, contain no two consecutive
     entries with the same state, and hold canonical state names only.
-    Transitions outside (window_start, window_end) are ignored.
+    Transitions outside [window_start, window_end) are ignored. One
+    landing exactly on window_start contributes zero seconds and one
+    count, so a boundary transition is counted once whichever window
+    covers it.
 
     Durations are split at hour boundaries so that the total seconds
     returned always equals window_end - window_start. Counts are attributed
@@ -58,7 +61,7 @@ def bucket(
     cursor = window_start
 
     for timestamp, state in transitions:
-        if timestamp <= window_start:
+        if timestamp < window_start:
             continue
         if timestamp >= window_end:
             break

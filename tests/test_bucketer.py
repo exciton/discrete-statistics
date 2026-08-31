@@ -24,12 +24,28 @@ def test_single_state_for_whole_window():
     assert result == {("on", T0): (HOUR, 0)}
 
 
-def test_transition_exactly_at_window_start_is_ignored():
-    # The canonicaliser routes ts <= window_start into carried_state, so a
-    # transition here is the same event that produced it — counting it would
-    # double-count.
+def test_transition_exactly_at_window_start_is_counted():
+    # The canonicaliser routes only ts < window_start into carried_state, so
+    # a transition landing exactly on the boundary is a genuine event and is
+    # counted here. Counting it in the window that starts on it, and in any
+    # window that merely contains it, is what makes the count independent of
+    # where the moving window happens to begin.
     result = bucket("on", [(T0, "off")], T0, T0 + HOUR)
-    assert result == {("on", T0): (HOUR, 0)}
+    assert result == {("off", T0): (HOUR, 1)}
+    # Durations are untouched: the boundary event contributes zero seconds,
+    # so "on" gets no bucket at all and the window still conserves time.
+    assert ("on", T0) not in result
+    assert total_seconds(result) == pytest.approx(HOUR)
+
+
+def test_boundary_transition_is_counted_once_from_either_window():
+    """The same event, seen from an earlier window and from one on it."""
+    transitions = [(T0 + HOUR, "off")]
+    from_earlier = bucket("on", transitions, T0, T0 + 2 * HOUR)
+    from_boundary = bucket("on", transitions, T0 + HOUR, T0 + 2 * HOUR)
+
+    assert from_earlier[("off", T0 + HOUR)][1] == 1
+    assert from_boundary[("off", T0 + HOUR)][1] == 1
 
 
 def test_transition_splits_the_hour():

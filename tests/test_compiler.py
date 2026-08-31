@@ -9,6 +9,7 @@ from homeassistant.setup import async_setup_component
 
 from homeassistant.components.recorder.statistics import async_add_external_statistics
 
+from custom_components.discrete_stats import compiler as compiler_module
 from custom_components.discrete_stats.compiler import TRAILING_HOURS, Compiler
 from custom_components.discrete_stats.config import EntityConfig
 from custom_components.discrete_stats.const import HOUR, METRIC_COUNT, METRIC_SECONDS
@@ -19,6 +20,9 @@ ENTITY = "binary_sensor.grid_status"
 SECONDS_OFF = "discrete_stats:binary_sensor_grid_status_off_seconds"
 COUNT_OFF = "discrete_stats:binary_sensor_grid_status_off_count"
 SECONDS_ON = "discrete_stats:binary_sensor_grid_status_on_seconds"
+COUNT_ON = "discrete_stats:binary_sensor_grid_status_on_count"
+SECONDS_NO_DATA = "discrete_stats:binary_sensor_grid_status_no_data_seconds"
+COUNT_NO_DATA = "discrete_stats:binary_sensor_grid_status_no_data_count"
 
 
 def cfg():
@@ -330,3 +334,175 @@ async def test_missing_history_before_first_state_is_no_data(recorder, freezer):
     no_data = "discrete_stats:binary_sensor_grid_status_no_data_seconds"
     sums = await read_sums(hass, no_data, start, start + timedelta(hours=4))
     assert sums[-1] == pytest.approx(2 * HOUR)
+
+
+async def test_an_ignored_state_at_the_window_start_does_not_destroy_durations(
+    recorder, freezer
+):
+    """A trailing compile across an ignored stretch must agree with a full one.
+
+    `include_start_time_state` returns exactly one row before the boundary.
+    When that row is `unavailable`, the recordable state one row further back
+    is invisible and the whole span would be attributed to no_data - and then
+    written over the correct rows, because the upsert is idempotent and the
+    window start moves every run.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    for offset, state in (
+        (timedelta(0), "on"),
+        (timedelta(minutes=30), "unavailable"),
+        (timedelta(hours=2, minutes=30), "on"),
+    ):
+        freezer.move_to(start + offset)
+        hass.states.async_set(ENTITY, state)
+        await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=4))
+    registry = Registry(hass)
+    await registry.async_load()
+    compiler = Compiler(hass, registry)
+
+    await compiler.async_compile(cfg(), start.timestamp())
+    full = await read_sums(hass, SECONDS_ON, start, start + timedelta(hours=4))
+    # `unavailable` carries "on" forward, so the entity is "on" throughout.
+    assert full == [3600.0, 7200.0, 10800.0, 14400.0]
+
+    # Now the trailing window the hourly run would use, whose start lands in
+    # the middle of the ignored stretch.
+    await compiler.async_compile(
+        cfg(), (start + timedelta(hours=1)).timestamp()
+    )
+    trailing = await read_sums(hass, SECONDS_ON, start, start + timedelta(hours=4))
+
+    assert trailing == full
+
+    no_data = await read_sums(
+        hass, SECONDS_NO_DATA, start, start + timedelta(hours=4)
+    )
+    assert no_data in ([], [0.0, 0.0, 0.0, 0.0]), no_data
+
+
+async def test_a_boundary_transition_is_counted_once_from_either_window(
+    recorder, freezer
+):
+    """A transition exactly on an hour must not depend on the window start."""
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    for offset, state in (
+        (timedelta(0), "on"),
+        (timedelta(hours=2), "off"),
+        (timedelta(hours=2, minutes=30), "on"),
+    ):
+        freezer.move_to(start + offset)
+        hass.states.async_set(ENTITY, state)
+        await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=4))
+    registry = Registry(hass)
+    await registry.async_load()
+    compiler = Compiler(hass, registry)
+
+    await compiler.async_compile(cfg(), start.timestamp())
+    from_earlier = await read_sums(
+        hass, COUNT_OFF, start, start + timedelta(hours=4)
+    )
+    assert from_earlier == [0, 0, 1, 1]
+
+    # Recompile a window that begins exactly on the transition.
+    await compiler.async_compile(
+        cfg(), (start + timedelta(hours=2)).timestamp()
+    )
+    from_boundary = await read_sums(
+        hass, COUNT_OFF, start, start + timedelta(hours=4)
+    )
+
+    assert from_boundary == from_earlier
+
+    # Durations are untouched by the boundary event.
+    seconds = await read_sums(hass, SECONDS_OFF, start, start + timedelta(hours=4))
+    assert seconds == [0.0, 0.0, 1800.0, 1800.0]
+
+
+async def test_no_data_has_no_count_statistic(recorder, freezer):
+    """no_data has no transitions into it, so a count would be a fixed zero."""
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start + timedelta(hours=2))
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=4))
+    registry = Registry(hass)
+    await registry.async_load()
+    compiler = Compiler(hass, registry)
+    await compiler.async_compile(cfg(), start.timestamp())
+
+    # The gap is real: the duration statistic exists and holds two hours.
+    seconds = await read_sums(
+        hass, SECONDS_NO_DATA, start, start + timedelta(hours=4)
+    )
+    assert seconds[-1] == pytest.approx(2 * HOUR)
+
+    assert COUNT_NO_DATA not in registry.statistic_ids_for(ENTITY)
+    assert COUNT_ON in registry.statistic_ids_for(ENTITY)
+    assert (
+        await read_sums(hass, COUNT_NO_DATA, start, start + timedelta(hours=4))
+        == []
+    )
+
+
+async def test_compiling_across_a_chunk_boundary(recorder, freezer, monkeypatch):
+    """A window longer than CHUNK_HOURS must carry sums across the seam."""
+    monkeypatch.setattr(compiler_module, "CHUNK_HOURS", 2)
+
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    # Transitions on both sides of every 2-hour chunk seam.
+    for offset, state in (
+        (timedelta(minutes=30), "off"),
+        (timedelta(hours=1, minutes=45), "on"),
+        (timedelta(hours=2, minutes=15), "off"),
+        (timedelta(hours=3, minutes=45), "on"),
+        (timedelta(hours=4, minutes=30), "off"),
+        (timedelta(hours=5, minutes=30), "on"),
+    ):
+        freezer.move_to(start + offset)
+        hass.states.async_set(ENTITY, state)
+        await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=6))
+    registry = Registry(hass)
+    await registry.async_load()
+    compiler = Compiler(hass, registry)
+    assert await compiler.async_compile(cfg(), start.timestamp()) == 6
+
+    end = start + timedelta(hours=6)
+    duration_ids = [
+        statistic_id
+        for statistic_id in registry.statistic_ids_for(ENTITY)
+        if registry.describe(statistic_id)[2] == METRIC_SECONDS
+    ]
+    assert len(duration_ids) >= 2, duration_ids
+
+    total = 0.0
+    for statistic_id in duration_ids:
+        sums = await read_sums(hass, statistic_id, start, end)
+        assert len(sums) == 6, (statistic_id, sums)
+        assert sums == sorted(sums), f"{statistic_id} went backwards: {sums}"
+        total += sums[-1]
+
+    # Time is conserved across the seam: every second of the six hours is
+    # attributed to exactly one state.
+    assert total == pytest.approx(6 * HOUR)
+
+    off_seconds = await read_sums(hass, SECONDS_OFF, start, end)
+    # off runs 0:30-1:45, 2:15-3:45 and 4:30-5:30.
+    assert off_seconds[-1] == pytest.approx(4500 + 5400 + 3600)

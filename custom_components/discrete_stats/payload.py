@@ -8,7 +8,7 @@ from typing import Any
 from homeassistant.components.recorder.models import StatisticMeanType
 
 from .config import EntityConfig
-from .const import DOMAIN, HOUR, METRIC_COUNT, METRIC_SECONDS
+from .const import DOMAIN, HOUR, METRIC_COUNT, METRIC_SECONDS, NO_DATA
 from .statistic_ids import build as build_statistic_id
 
 _METRIC_LABEL = {METRIC_SECONDS: "duration", METRIC_COUNT: "count"}
@@ -52,6 +52,11 @@ def build_payloads(
     next window: the caller reads the base from the hour immediately
     before the window, finds nothing, restarts from zero, and the
     monotonic sum goes backwards.
+
+    NO_DATA is the one state with no `count` metric. Nothing ever emits a
+    transition INTO it - it exists only as the fallback when no state can be
+    carried in - so the count would be a permanent zero written densely
+    forever.
     """
     hours: list[float] = []
     hour = window_start
@@ -65,6 +70,8 @@ def build_payloads(
 
     for state in states:
         for metric, index in ((METRIC_SECONDS, 0), (METRIC_COUNT, 1)):
+            if state == NO_DATA and metric == METRIC_COUNT:
+                continue
             statistic_id = build_statistic_id(cfg.entity_id, state, metric)
             running = base_sums.get(statistic_id, 0.0)
             rows: list[dict[str, Any]] = []

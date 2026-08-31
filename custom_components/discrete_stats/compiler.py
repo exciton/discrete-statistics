@@ -37,7 +37,8 @@ EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 # `last_updated_ts < start_time` and the changes with a strict
 # `last_updated_ts > start_time`, so a state recorded exactly on the window
 # boundary is returned by neither. Asking from a moment earlier makes it fall
-# into the changes half; canonicalise() folds everything at or before
+# into the changes half, where it becomes a transition contributing zero
+# seconds and one count; canonicalise() folds everything strictly before
 # window_start into the carried state, so the extra rows are harmless.
 #
 # The margin is a half second, not a whole one. window_start is always an
@@ -48,6 +49,19 @@ EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 # datetime.fromtimestamp, whose resolution is microseconds, so a 1-ULP
 # offset at epoch scale (~2.4e-7 s) rounds straight back to window_start.
 START_MARGIN = 0.5
+
+# Lookbacks tried, in order, when the rows returned for a window contain a
+# state at window_start but every one of them resolves to nothing (an
+# ignored state, or an unlisted one under `default: ignore`).
+# `include_start_time_state` returns exactly ONE row before the boundary, so
+# a single ignored row there hides the perfectly good state behind it. The
+# whole span would then be attributed to no_data — and because window_start
+# moves with the watermark on every run, the idempotent upsert would
+# overwrite already-correct duration rows downward, permanently. Widening
+# until a recordable state appears preserves carry-forward, and still leaves
+# the two legitimate no_data cases (an entity's pre-history, and a gap whose
+# rows were purged) falling through to no_data.
+WIDENING_LOOKBACKS = (HOUR, 24 * HOUR, 30 * 24 * HOUR)
 
 
 def _as_datetime(timestamp: float) -> datetime:
@@ -108,6 +122,27 @@ class Compiler:
 
         return compiled
 
+    async def _async_history(
+        self, cfg: EntityConfig, query_start: float, window_end: float
+    ) -> list:
+        """Return the recorder rows for [query_start, window_end).
+
+        The start-time state is included, so the first row is the state in
+        effect at query_start whatever its timestamp.
+        """
+        history = await get_instance(self._hass).async_add_executor_job(
+            state_changes_during_period,
+            self._hass,
+            _as_datetime(query_start - START_MARGIN),
+            _as_datetime(window_end),
+            cfg.entity_id,
+            True,  # no_attributes
+            False,  # descending
+            None,  # limit
+            True,  # include_start_time_state
+        )
+        return history.get(cfg.entity_id, [])
+
     async def _async_compile_chunk(
         self,
         cfg: EntityConfig,
@@ -116,20 +151,25 @@ class Compiler:
         base_sums: dict[str, float],
     ) -> dict[str, float]:
         """Compile one chunk, returning the sums to carry into the next."""
-        history = await get_instance(self._hass).async_add_executor_job(
-            state_changes_during_period,
-            self._hass,
-            _as_datetime(window_start - START_MARGIN),
-            _as_datetime(window_end),
-            cfg.entity_id,
-            True,  # no_attributes
-            False,  # descending
-            None,  # limit
-            True,  # include_start_time_state
-        )
-        rows = history.get(cfg.entity_id, [])
-
+        rows = await self._async_history(cfg, window_start, window_end)
         carried, transitions = canonicalise(cfg, rows, window_start)
+
+        if carried is None and any(
+            row.last_changed_timestamp < window_start for row in rows
+        ):
+            # A state existed before window_start, it was merely ignored.
+            # Look further back for the last recordable one. Every extra row
+            # a wider query returns lies before window_start, so it can only
+            # change the carried state; the transitions inside the window are
+            # unaffected.
+            for lookback in WIDENING_LOOKBACKS:
+                wider = await self._async_history(
+                    cfg, window_start - lookback, window_end
+                )
+                carried, transitions = canonicalise(cfg, wider, window_start)
+                if carried is not None:
+                    break
+
         if carried is None:
             _LOGGER.warning(
                 "No recoverable state for %s at %s; attributing the span to no_data",

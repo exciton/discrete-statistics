@@ -89,6 +89,10 @@ purged — it attributes the time to `no_data`. Durations therefore always
 sum to 24h per day, and gaps are visible in the chart rather than silently
 filled in.
 
+`no_data` has a `_seconds` statistic only. Nothing transitions *into* it —
+it is what is left when no state can be carried in — so there is no
+`no_data_count`.
+
 ## Charts
 
 Outages per day for the last week:
@@ -166,7 +170,10 @@ data:
 
 `clear: true` deletes the entity's existing statistics first, including
 their metadata. Use it only to remove statistics that should no longer
-exist, such as an orphaned state after a mapping change.
+exist, such as an orphaned state after a mapping change. It cannot be
+combined with `start` — clearing removes every hour, not only the ones
+after `start`, so it always rebuilds from the oldest retained state.
+Passing both is rejected.
 
 ## How it works
 

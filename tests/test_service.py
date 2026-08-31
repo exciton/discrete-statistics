@@ -9,6 +9,8 @@ from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.statistics import statistics_during_period
 from homeassistant.setup import async_setup_component
 
+from homeassistant.exceptions import ServiceValidationError
+
 from custom_components.discrete_stats.const import DOMAIN
 
 ENTITY = "binary_sensor.grid_status"
@@ -150,10 +152,77 @@ async def test_unconfigured_entity_is_rejected(recorder):
     hass = recorder
     assert await async_setup_component(hass, DOMAIN, CONFIG)
     await hass.async_block_till_done()
-    with pytest.raises(Exception):
+    with pytest.raises(ServiceValidationError, match="not configured"):
         await hass.services.async_call(
             DOMAIN,
             "recompute",
             {"entity_id": "binary_sensor.not_configured"},
             blocking=True,
         )
+
+
+async def test_clear_with_start_is_rejected(recorder, freezer):
+    """clear deletes every hour, so a partial rebuild would destroy history."""
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    assert await async_setup_component(hass, DOMAIN, CONFIG)
+    await hass.async_block_till_done()
+
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    freezer.move_to(start + timedelta(minutes=30))
+    hass.states.async_set(ENTITY, "off")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=4))
+    await hass.services.async_call(
+        DOMAIN, "recompute", {"entity_id": ENTITY}, blocking=True
+    )
+    await hass.async_block_till_done()
+    before = await read_sums(hass, SECONDS_OFF, start, start + timedelta(hours=4))
+    assert len(before) == 4, before
+
+    with pytest.raises(ServiceValidationError, match="cannot be combined"):
+        await hass.services.async_call(
+            DOMAIN,
+            "recompute",
+            {
+                "entity_id": ENTITY,
+                "clear": True,
+                "start": start + timedelta(hours=2),
+            },
+            blocking=True,
+        )
+    await hass.async_block_till_done()
+
+    # Nothing was deleted: the hours before `start` are still there.
+    after = await read_sums(hass, SECONDS_OFF, start, start + timedelta(hours=4))
+    assert after == before
+    assert hass.data[DOMAIN]["registry"].statistic_ids_for(ENTITY)
+
+
+async def test_clear_without_start_is_still_allowed(recorder, freezer):
+    """The rejection must not break the legitimate full-rebuild workflow."""
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    assert await async_setup_component(hass, DOMAIN, CONFIG)
+    await hass.async_block_till_done()
+
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    freezer.move_to(start + timedelta(minutes=30))
+    hass.states.async_set(ENTITY, "off")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=4))
+    await hass.services.async_call(
+        DOMAIN, "recompute", {"entity_id": ENTITY, "clear": True}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+    sums = await read_sums(hass, SECONDS_OFF, start, start + timedelta(hours=4))
+    assert sums == [1800.0, 5400.0, 9000.0, 12600.0]

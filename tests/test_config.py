@@ -177,3 +177,31 @@ def test_genuine_map_target_still_forced_under_default_ignore():
         ]
     )
     assert cfg.resolve("cooling") == "cooling"
+
+
+def test_duplicate_entity_id_is_rejected():
+    """Two configs for one entity write conflicting values to the same IDs."""
+    with pytest.raises(vol.Invalid, match="configured more than once"):
+        parse(
+            [
+                {"entity_id": "binary_sensor.grid_status"},
+                {
+                    "entity_id": "binary_sensor.grid_status",
+                    "default": "ignore",
+                    "states": {"on": "record"},
+                },
+            ]
+        )
+
+
+def test_distinct_entity_ids_are_accepted():
+    configs = parse(
+        [
+            {"entity_id": "binary_sensor.grid_status"},
+            {"entity_id": "binary_sensor.other"},
+        ]
+    )
+    assert [cfg.entity_id for cfg in configs] == [
+        "binary_sensor.grid_status",
+        "binary_sensor.other",
+    ]

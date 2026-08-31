@@ -98,6 +98,17 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _async_on_started)
 
     async def _async_recompute(call: ServiceCall) -> None:
+        # `clear` deletes every statistic ID for the entity, rows and
+        # metadata alike, so a rebuild that starts anywhere later than the
+        # beginning silently destroys everything before it - unrecoverably,
+        # once recorder history has passed purge_keep_days.
+        if call.data["clear"] and call.data.get("start") is not None:
+            raise ServiceValidationError(
+                "clear: true cannot be combined with start: clearing deletes "
+                "every statistic for the entity, so it always requires a full "
+                "backfill. Omit start."
+            )
+
         entity_id = call.data.get("entity_id")
         if entity_id is None:
             targets = list(data["configs"])
