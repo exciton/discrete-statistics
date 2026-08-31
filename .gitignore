@@ -3,3 +3,8 @@ __pycache__/
 .venv/
 .pytest_cache/
 .superpowers/
+
+# Local-only: design docs and the verification helper. Deliberately not
+# published — they carry environment-specific detail.
+docs/superpowers/
+script/verify
