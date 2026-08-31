@@ -1,0 +1,31 @@
+recompute:
+  name: Recompute
+  description: >-
+    Recompute discrete statistics from recorder history. Omit start for a
+    full backfill from the oldest retained state.
+  fields:
+    entity_id:
+      name: Entity
+      description: Entity to recompute. Omit for every configured entity.
+      required: false
+      selector:
+        entity:
+    start:
+      name: Start
+      description: >-
+        UTC timestamp to recompute from. Omit to start at the oldest
+        retained state.
+      required: false
+      selector:
+        datetime:
+    clear:
+      name: Clear first
+      description: >-
+        Delete the entity's existing statistics before recomputing. Needed
+        only to remove statistics that should no longer exist, such as an
+        orphaned state after a mapping change. This deletes the statistics
+        metadata, not just the rows.
+      required: false
+      default: false
+      selector:
+        boolean:

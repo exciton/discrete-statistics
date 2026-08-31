@@ -6,9 +6,12 @@ import asyncio
 import logging
 from typing import Any
 
+import voluptuous as vol
 from homeassistant.components.recorder import get_instance
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, EVENT_HOMEASSISTANT_STOP
-from homeassistant.core import Event, HomeAssistant
+from homeassistant.core import Event, HomeAssistant, ServiceCall
+from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_track_time_change
 from homeassistant.helpers.typing import ConfigType
 
@@ -20,6 +23,16 @@ from .registry import Registry
 _LOGGER = logging.getLogger(__name__)
 
 __all__ = ["CONFIG_SCHEMA", "async_setup"]
+
+SERVICE_RECOMPUTE = "recompute"
+
+RECOMPUTE_SCHEMA = vol.Schema(
+    {
+        vol.Optional("entity_id"): cv.entity_id,
+        vol.Optional("start"): cv.datetime,
+        vol.Optional("clear", default=False): cv.boolean,
+    }
+)
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -83,5 +96,45 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         await _async_compile_all()
 
     hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _async_on_started)
+
+    async def _async_recompute(call: ServiceCall) -> None:
+        entity_id = call.data.get("entity_id")
+        if entity_id is None:
+            targets = list(data["configs"])
+        else:
+            targets = [c for c in data["configs"] if c.entity_id == entity_id]
+            if not targets:
+                raise ServiceValidationError(
+                    f"{entity_id} is not configured for discrete_stats"
+                )
+
+        start_dt = call.data.get("start")
+        start = start_dt.timestamp() if start_dt is not None else None
+
+        # Same lock the hourly run uses. Two overlapping compiles of one
+        # entity can both read the same stale cumulative base, and the second
+        # restarts that statistic's series at zero. asyncio.Lock is NOT
+        # reentrant, so this must never be acquired from inside a context that
+        # already holds it — the service handler is always called from
+        # outside, never from within compile_all.
+        async with data["lock"]:
+            for cfg in targets:
+                if call.data["clear"]:
+                    statistic_ids = await registry.async_forget(cfg.entity_id)
+                    if statistic_ids:
+                        # clear_statistics's own delete() asserts it runs on
+                        # the recorder's single worker thread specifically,
+                        # not merely a db-executor thread, so it must go
+                        # through the recorder's task queue (async_clear_
+                        # statistics) rather than async_add_executor_job.
+                        # Drain before compiling so the forgotten metadata is
+                        # actually gone by the time we re-create it below.
+                        get_instance(hass).async_clear_statistics(statistic_ids)
+                        await get_instance(hass).async_block_till_done()
+                await compiler.async_compile(cfg, start)
+
+    hass.services.async_register(
+        DOMAIN, SERVICE_RECOMPUTE, _async_recompute, schema=RECOMPUTE_SCHEMA
+    )
 
     return True
