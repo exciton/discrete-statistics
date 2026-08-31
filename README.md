@@ -200,3 +200,6 @@ idempotent and the next run catches up.
   `recompute`.
 - Charts name their statistics explicitly; a newly appearing state must be
   added to the card.
+- An entity that stays `unavailable`/`unknown` for more than 30 days may have
+  part of that stretch attributed to `no_data` rather than to its last known
+  state, depending on when compilation runs. Durations still sum correctly.
