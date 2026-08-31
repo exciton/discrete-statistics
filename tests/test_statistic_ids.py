@@ -4,8 +4,8 @@ import re
 
 import pytest
 
-from custom_components.discrete_stats.const import METRIC_COUNT, METRIC_SECONDS
-from custom_components.discrete_stats.statistic_ids import (
+from custom_components.discrete_statistics.const import METRIC_COUNT, METRIC_SECONDS
+from custom_components.discrete_statistics.statistic_ids import (
     InvalidStatisticIdError,
     build,
 )
@@ -19,14 +19,14 @@ VALID_STATISTIC_ID = re.compile(
 def test_builds_expected_id():
     assert (
         build("binary_sensor.grid_status", "off", METRIC_SECONDS)
-        == "discrete_stats:binary_sensor_grid_status_off_seconds"
+        == "discrete_statistics:binary_sensor_grid_status_off_seconds"
     )
 
 
 def test_count_metric():
     assert (
         build("binary_sensor.grid_status", "on", METRIC_COUNT)
-        == "discrete_stats:binary_sensor_grid_status_on_count"
+        == "discrete_statistics:binary_sensor_grid_status_on_count"
     )
 
 

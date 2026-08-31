@@ -9,20 +9,20 @@ from homeassistant.setup import async_setup_component
 
 from homeassistant.components.recorder.statistics import async_add_external_statistics
 
-from custom_components.discrete_stats import compiler as compiler_module
-from custom_components.discrete_stats.compiler import TRAILING_HOURS, Compiler
-from custom_components.discrete_stats.config import EntityConfig
-from custom_components.discrete_stats.const import HOUR, METRIC_COUNT, METRIC_SECONDS
-from custom_components.discrete_stats.payload import metadata_for
-from custom_components.discrete_stats.registry import Registry
+from custom_components.discrete_statistics import compiler as compiler_module
+from custom_components.discrete_statistics.compiler import TRAILING_HOURS, Compiler
+from custom_components.discrete_statistics.config import EntityConfig
+from custom_components.discrete_statistics.const import HOUR, METRIC_COUNT, METRIC_SECONDS
+from custom_components.discrete_statistics.payload import metadata_for
+from custom_components.discrete_statistics.registry import Registry
 
 ENTITY = "binary_sensor.grid_status"
-SECONDS_OFF = "discrete_stats:binary_sensor_grid_status_off_seconds"
-COUNT_OFF = "discrete_stats:binary_sensor_grid_status_off_count"
-SECONDS_ON = "discrete_stats:binary_sensor_grid_status_on_seconds"
-COUNT_ON = "discrete_stats:binary_sensor_grid_status_on_count"
-SECONDS_NO_DATA = "discrete_stats:binary_sensor_grid_status_no_data_seconds"
-COUNT_NO_DATA = "discrete_stats:binary_sensor_grid_status_no_data_count"
+SECONDS_OFF = "discrete_statistics:binary_sensor_grid_status_off_seconds"
+COUNT_OFF = "discrete_statistics:binary_sensor_grid_status_off_count"
+SECONDS_ON = "discrete_statistics:binary_sensor_grid_status_on_seconds"
+COUNT_ON = "discrete_statistics:binary_sensor_grid_status_on_count"
+SECONDS_NO_DATA = "discrete_statistics:binary_sensor_grid_status_no_data_seconds"
+COUNT_NO_DATA = "discrete_statistics:binary_sensor_grid_status_no_data_count"
 
 
 def cfg():
@@ -331,7 +331,7 @@ async def test_missing_history_before_first_state_is_no_data(recorder, freezer):
     compiler = Compiler(hass, registry)
     await compiler.async_compile(cfg(), start.timestamp())
 
-    no_data = "discrete_stats:binary_sensor_grid_status_no_data_seconds"
+    no_data = "discrete_statistics:binary_sensor_grid_status_no_data_seconds"
     sums = await read_sums(hass, no_data, start, start + timedelta(hours=4))
     assert sums[-1] == pytest.approx(2 * HOUR)
 

@@ -8,7 +8,7 @@ import pytest
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
-from custom_components.discrete_stats.const import DOMAIN
+from custom_components.discrete_statistics.const import DOMAIN
 
 ENTITY = "binary_sensor.grid_status"
 
@@ -49,7 +49,7 @@ async def test_hourly_schedule_triggers_a_compile(recorder, freezer):
     await hass.async_block_till_done()
 
     with patch(
-        "custom_components.discrete_stats.Compiler.async_compile_incremental",
+        "custom_components.discrete_statistics.Compiler.async_compile_incremental",
         return_value=0,
     ) as compile_mock:
         freezer.move_to(datetime(2026, 1, 1, 11, 3, 0, tzinfo=timezone.utc))
@@ -67,11 +67,11 @@ async def test_backlog_gate_skips_the_run(recorder, freezer):
 
     with (
         patch(
-            "custom_components.discrete_stats.Compiler.async_compile_incremental",
+            "custom_components.discrete_statistics.Compiler.async_compile_incremental",
             return_value=0,
         ) as compile_mock,
         patch(
-            "custom_components.discrete_stats.get_instance",
+            "custom_components.discrete_statistics.get_instance",
             return_value=Mock(backlog=10_000),
         ),
     ):
@@ -102,7 +102,7 @@ async def test_runs_do_not_overlap(recorder, freezer):
         return 0
 
     with patch(
-        "custom_components.discrete_stats.Compiler.async_compile_incremental",
+        "custom_components.discrete_statistics.Compiler.async_compile_incremental",
         fake_compile,
     ):
         compile_all = hass.data[DOMAIN]["compile_all"]

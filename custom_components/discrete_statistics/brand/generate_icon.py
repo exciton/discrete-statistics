@@ -8,7 +8,7 @@ Kept in the repo so the icon is reproducible rather than an opaque binary.
 Run inside the project's container image:
 
     docker run --rm -v "$PWD:/w" -w /w ha-discrete-stats-test \
-        python custom_components/discrete_stats/brand/generate_icon.py
+        python custom_components/discrete_statistics/brand/generate_icon.py
 """
 
 import pathlib

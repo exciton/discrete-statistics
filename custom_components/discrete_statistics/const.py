@@ -1,6 +1,6 @@
-"""Constants for the discrete_stats integration."""
+"""Constants for the discrete_statistics integration."""
 
-DOMAIN = "discrete_stats"
+DOMAIN = "discrete_statistics"
 
 HOUR = 3600.0
 

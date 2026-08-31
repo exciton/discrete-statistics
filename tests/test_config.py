@@ -3,8 +3,8 @@
 import pytest
 import voluptuous as vol
 
-from custom_components.discrete_stats.config import CONFIG_SCHEMA, EntityConfig
-from custom_components.discrete_stats.const import DOMAIN
+from custom_components.discrete_statistics.config import CONFIG_SCHEMA, EntityConfig
+from custom_components.discrete_statistics.const import DOMAIN
 
 
 def parse(entities):

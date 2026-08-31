@@ -2,8 +2,8 @@
 
 from dataclasses import dataclass
 
-from custom_components.discrete_stats.canonicalise import canonicalise
-from custom_components.discrete_stats.config import EntityConfig
+from custom_components.discrete_statistics.canonicalise import canonicalise
+from custom_components.discrete_statistics.config import EntityConfig
 
 T0 = 1767225600.0
 

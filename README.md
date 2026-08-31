@@ -25,13 +25,13 @@ This is not in the HACS default store, so add it as a custom repository:
 
 ### Manually
 
-Copy `custom_components/discrete_stats` into your `config/custom_components`
+Copy `custom_components/discrete_statistics` into your `config/custom_components`
 directory and restart Home Assistant.
 
 ## Configuration
 
 ```yaml
-discrete_stats:
+discrete_statistics:
   - entity_id: binary_sensor.grid_status
     name: "Grid Status"
 ```
@@ -62,7 +62,7 @@ Each entry in `states:` is one of:
 - another state name — map onto that state
 
 ```yaml
-discrete_stats:
+discrete_statistics:
   # chart dropouts as their own band
   - entity_id: binary_sensor.grid_status
     states:
@@ -86,8 +86,8 @@ discrete_stats:
 For each state, two statistics:
 
 ```
-discrete_stats:<entity>_<state>_seconds
-discrete_stats:<entity>_<state>_count
+discrete_statistics:<entity>_<state>_seconds
+discrete_statistics:<entity>_<state>_count
 ```
 
 Both are cumulative sums, so charts use the `change` stat type to show
@@ -119,7 +119,7 @@ days_to_show: 7
 stat_types:
   - change
 entities:
-  - discrete_stats:binary_sensor_grid_status_off_count
+  - discrete_statistics:binary_sensor_grid_status_off_count
 ```
 
 Time in each state per day, stacked:
@@ -133,9 +133,9 @@ days_to_show: 30
 stat_types:
   - change
 entities:
-  - discrete_stats:binary_sensor_grid_status_on_seconds
-  - discrete_stats:binary_sensor_grid_status_off_seconds
-  - discrete_stats:binary_sensor_grid_status_no_data_seconds
+  - discrete_statistics:binary_sensor_grid_status_on_seconds
+  - discrete_statistics:binary_sensor_grid_status_off_seconds
+  - discrete_statistics:binary_sensor_grid_status_no_data_seconds
 ```
 
 Weekly heat pump behaviour over three months:
@@ -149,9 +149,9 @@ days_to_show: 90
 stat_types:
   - change
 entities:
-  - discrete_stats:sensor_heat_pump_hvac_action_heating_seconds
-  - discrete_stats:sensor_heat_pump_hvac_action_cooling_seconds
-  - discrete_stats:sensor_heat_pump_hvac_action_idle_seconds
+  - discrete_statistics:sensor_heat_pump_hvac_action_heating_seconds
+  - discrete_statistics:sensor_heat_pump_hvac_action_cooling_seconds
+  - discrete_statistics:sensor_heat_pump_hvac_action_idle_seconds
 ```
 
 A state that appears later accumulates immediately but must be added to the
@@ -163,7 +163,7 @@ Statistics are compiled forward from the moment the component is installed.
 To derive them from history the recorder still holds:
 
 ```yaml
-action: discrete_stats.recompute
+action: discrete_statistics.recompute
 data:
   entity_id: binary_sensor.grid_status
 ```
@@ -175,7 +175,7 @@ statistics.
 To repair a range after correcting history:
 
 ```yaml
-action: discrete_stats.recompute
+action: discrete_statistics.recompute
 data:
   entity_id: binary_sensor.grid_status
   start: "2026-01-01T00:00:00Z"

@@ -11,10 +11,10 @@ from homeassistant.setup import async_setup_component
 
 from homeassistant.exceptions import ServiceValidationError
 
-from custom_components.discrete_stats.const import DOMAIN
+from custom_components.discrete_statistics.const import DOMAIN
 
 ENTITY = "binary_sensor.grid_status"
-SECONDS_OFF = "discrete_stats:binary_sensor_grid_status_off_seconds"
+SECONDS_OFF = "discrete_statistics:binary_sensor_grid_status_off_seconds"
 
 CONFIG = {DOMAIN: [{"entity_id": ENTITY, "name": "Grid Status"}]}
 
@@ -132,9 +132,9 @@ async def test_service_serialises_with_scheduled_runs(recorder, freezer):
         return 0
 
     with (
-        patch("custom_components.discrete_stats.Compiler.async_compile", fake),
+        patch("custom_components.discrete_statistics.Compiler.async_compile", fake),
         patch(
-            "custom_components.discrete_stats.Compiler.async_compile_incremental",
+            "custom_components.discrete_statistics.Compiler.async_compile_incremental",
             fake,
         ),
     ):

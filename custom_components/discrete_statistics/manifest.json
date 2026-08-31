@@ -1,5 +1,5 @@
 {
-  "domain": "discrete_stats",
+  "domain": "discrete_statistics",
   "name": "Discrete Statistics",
   "codeowners": ["@exciton"],
   "dependencies": ["recorder"],

@@ -2,11 +2,11 @@
 
 import pytest
 
-from custom_components.discrete_stats.registry import Registry
+from custom_components.discrete_statistics.registry import Registry
 
 ENTITY = "binary_sensor.grid_status"
-SECONDS_ON = "discrete_stats:binary_sensor_grid_status_on_seconds"
-COUNT_ON = "discrete_stats:binary_sensor_grid_status_on_count"
+SECONDS_ON = "discrete_statistics:binary_sensor_grid_status_on_seconds"
+COUNT_ON = "discrete_statistics:binary_sensor_grid_status_on_count"
 
 
 async def test_starts_empty(hass):

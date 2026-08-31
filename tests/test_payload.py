@@ -2,9 +2,9 @@
 
 from datetime import datetime, timezone
 
-from custom_components.discrete_stats.config import EntityConfig
-from custom_components.discrete_stats.const import HOUR, NO_DATA
-from custom_components.discrete_stats.payload import build_payloads
+from custom_components.discrete_statistics.config import EntityConfig
+from custom_components.discrete_statistics.const import HOUR, NO_DATA
+from custom_components.discrete_statistics.payload import build_payloads
 
 T0 = 1767225600.0
 
@@ -18,11 +18,11 @@ def cfg(name=None):
     )
 
 
-SECONDS_ON = "discrete_stats:binary_sensor_grid_status_on_seconds"
-COUNT_ON = "discrete_stats:binary_sensor_grid_status_on_count"
-SECONDS_OFF = "discrete_stats:binary_sensor_grid_status_off_seconds"
-SECONDS_NO_DATA = "discrete_stats:binary_sensor_grid_status_no_data_seconds"
-COUNT_NO_DATA = "discrete_stats:binary_sensor_grid_status_no_data_count"
+SECONDS_ON = "discrete_statistics:binary_sensor_grid_status_on_seconds"
+COUNT_ON = "discrete_statistics:binary_sensor_grid_status_on_count"
+SECONDS_OFF = "discrete_statistics:binary_sensor_grid_status_off_seconds"
+SECONDS_NO_DATA = "discrete_statistics:binary_sensor_grid_status_no_data_seconds"
+COUNT_NO_DATA = "discrete_statistics:binary_sensor_grid_status_no_data_count"
 
 
 def test_single_hour_single_state():
@@ -32,7 +32,7 @@ def test_single_hour_single_state():
     metadata, rows, state, metric = payloads[SECONDS_ON]
     assert state == "on"
     assert metric == "seconds"
-    assert metadata["source"] == "discrete_stats"
+    assert metadata["source"] == "discrete_statistics"
     assert metadata["statistic_id"] == SECONDS_ON
     assert metadata["has_sum"] is True
     assert metadata["unit_of_measurement"] == "s"

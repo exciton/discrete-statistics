@@ -2,8 +2,8 @@
 
 import pytest
 
-from custom_components.discrete_stats.bucketer import bucket, hour_start
-from custom_components.discrete_stats.const import HOUR, NO_DATA
+from custom_components.discrete_statistics.bucketer import bucket, hour_start
+from custom_components.discrete_statistics.const import HOUR, NO_DATA
 
 # 2026-01-01T00:00:00Z
 T0 = 1767225600.0

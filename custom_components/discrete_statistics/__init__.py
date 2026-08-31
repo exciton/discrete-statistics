@@ -36,7 +36,7 @@ RECOMPUTE_SCHEMA = vol.Schema(
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Set up discrete_stats from YAML."""
+    """Set up discrete_statistics from YAML."""
     configs: list[EntityConfig] = config.get(DOMAIN, [])
 
     registry = Registry(hass)
@@ -116,7 +116,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             targets = [c for c in data["configs"] if c.entity_id == entity_id]
             if not targets:
                 raise ServiceValidationError(
-                    f"{entity_id} is not configured for discrete_stats"
+                    f"{entity_id} is not configured for discrete_statistics"
                 )
 
         start_dt = call.data.get("start")
