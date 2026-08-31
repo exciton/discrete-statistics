@@ -11,3 +11,6 @@ script/verify
 
 # Stray screenshots at the repo root (brand assets are in a subdirectory)
 /*.png
+
+# Local working notes: references specific installation detail
+/TODO.md
