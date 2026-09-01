@@ -210,20 +210,28 @@ async def test_removing_a_clashing_entry_clears_its_issue(recorder):
 
 
 async def test_entry_backfills_history_end_to_end(recorder, freezer):
-    """A helper created over existing history compiles all of it."""
+    """A helper created over existing history compiles all of it.
+
+    Seeded history must run comfortably longer than TRAILING_HOURS (3): the
+    no-watermark branch of async_compile_incremental is supposed to start
+    from the entity's earliest state, not from a trailing window. At exactly
+    TRAILING_HOURS of history the two are indistinguishable and this test
+    would pass even if that branch regressed to trailing-window arithmetic -
+    do not shrink this back down to 3.
+    """
     hass = recorder
     start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
 
-    # Seed three hours of history: on for two hours, then off for one.
+    # Seed five hours of history: on for three hours, then off for two.
     freezer.move_to(start)
     hass.states.async_set(ENTITY, "on")
     await hass.async_block_till_done()
-    freezer.move_to(start + timedelta(hours=2))
+    freezer.move_to(start + timedelta(hours=3))
     hass.states.async_set(ENTITY, "off")
     await hass.async_block_till_done()
     await async_wait_recording_done(hass)
 
-    freezer.move_to(start + timedelta(hours=3))
+    freezer.move_to(start + timedelta(hours=5))
     hass.set_state(CoreState.running)
     assert await async_setup_component(hass, DOMAIN, {})
     entry = make_entry()
@@ -237,13 +245,13 @@ async def test_entry_backfills_history_end_to_end(recorder, freezer):
         statistics_during_period,
         hass,
         start,
-        start + timedelta(hours=3),
+        start + timedelta(hours=5),
         {DURATION_ON, DURATION_OFF},
         "hour",
         None,
         {"sum"},
     )
     # Durations are cumulative sums in hours; the last sum of each state
-    # over three hours must total exactly three.
+    # over five hours must total exactly five.
     total = sum(rows[-1]["sum"] for rows in stats.values())
-    assert total == pytest.approx(3.0)
+    assert total == pytest.approx(5.0)
