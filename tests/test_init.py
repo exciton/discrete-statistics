@@ -8,9 +8,11 @@ import pytest
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
-from custom_components.discrete_statistics.const import DOMAIN
+from custom_components.discrete_statistics.config import EntityConfig
+from custom_components.discrete_statistics.const import DEFAULT_RECORD_KNOWN, DOMAIN
 
 ENTITY = "binary_sensor.grid_status"
+OTHER_ENTITY = "binary_sensor.water_pump"
 
 CONFIG = {DOMAIN: [{"entity_id": ENTITY, "name": "Grid Status"}]}
 
@@ -38,8 +40,22 @@ async def test_setup_stores_runtime_data(recorder):
     assert await async_setup_component(hass, DOMAIN, CONFIG)
     await hass.async_block_till_done()
     assert DOMAIN in hass.data
-    assert len(hass.data[DOMAIN]["configs"]) == 1
-    assert hass.data[DOMAIN]["configs"][0].entity_id == ENTITY
+    assert len(hass.data[DOMAIN]["yaml_configs"]) == 1
+    assert hass.data[DOMAIN]["yaml_configs"][0].entity_id == ENTITY
+
+
+async def test_all_configs_joins_yaml_and_entries(recorder):
+    hass = recorder
+    assert await async_setup_component(hass, DOMAIN, CONFIG)
+    await hass.async_block_till_done()
+    data = hass.data[DOMAIN]
+
+    assert [c.entity_id for c in data["all_configs"]()] == [ENTITY]
+
+    data["entry_configs"]["entry-1"] = EntityConfig(
+        entity_id=OTHER_ENTITY, name=None, default=DEFAULT_RECORD_KNOWN
+    )
+    assert [c.entity_id for c in data["all_configs"]()] == [ENTITY, OTHER_ENTITY]
 
 
 async def test_hourly_schedule_triggers_a_compile(recorder, freezer):

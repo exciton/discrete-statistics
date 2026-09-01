@@ -51,12 +51,26 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     lock = asyncio.Lock()
 
     data: dict[str, Any] = {
-        "configs": configs,
+        "yaml_configs": configs,
+        "entry_configs": {},
         "registry": registry,
         "compiler": compiler,
         "lock": lock,
     }
     hass.data[DOMAIN] = data
+
+    def _all_configs() -> list[EntityConfig]:
+        """Every configured entity, YAML first, then config entries.
+
+        An entity appears at most once: the flow refuses one that YAML
+        owns, and async_setup_entry fails an entry that clashes with a
+        YAML block added later. Two configurations for one entity resolve
+        the same raw states through different disposition tables and write
+        conflicting values to the same statistic IDs.
+        """
+        return [*data["yaml_configs"], *data["entry_configs"].values()]
+
+    data["all_configs"] = _all_configs
 
     async def _async_compile_all(_now: Any = None) -> None:
         backlog = get_instance(hass).backlog
@@ -68,7 +82,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             )
             return
         async with lock:
-            for cfg in data["configs"]:
+            for cfg in data["all_configs"]():
                 try:
                     hours = await compiler.async_compile_incremental(cfg)
                 except Exception:  # noqa: BLE001 - a bad entity must not stop the rest
@@ -99,9 +113,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     async def _async_recompute(call: ServiceCall) -> None:
         entity_id = call.data.get("entity_id")
         if entity_id is None:
-            targets = list(data["configs"])
+            targets = list(data["all_configs"]())
         else:
-            targets = [c for c in data["configs"] if c.entity_id == entity_id]
+            targets = [c for c in data["all_configs"]() if c.entity_id == entity_id]
             if not targets:
                 raise ServiceValidationError(
                     f"{entity_id} is not configured for discrete_statistics"
