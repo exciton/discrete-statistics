@@ -6,6 +6,7 @@ import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_ENTITY_ID, CONF_NAME
 from homeassistant.core import CoreState
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -174,3 +175,27 @@ async def test_compile_failure_notifies_instead_of_raising(recorder):
 
     notifications = hass.data.get("persistent_notification", {})
     assert any("recorder exploded" in n["message"] for n in notifications.values())
+
+
+async def test_removing_a_clashing_entry_clears_its_issue(recorder):
+    # A user who resolves a YAML clash the obvious way - deleting the helper
+    # - must not be left with a permanent repair card naming an entry that
+    # no longer exists. async_unload_entry never runs for a SETUP_ERROR
+    # entry, so the issue has to be cleared from async_remove_entry instead.
+    hass = recorder
+    yaml_config = {DOMAIN: [{"entity_id": ENTITY, "name": "From YAML"}]}
+    assert await async_setup_component(hass, DOMAIN, yaml_config)
+    await hass.async_block_till_done()
+
+    entry = make_entry()
+    entry.add_to_hass(hass)
+    assert not await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    registry = ir.async_get(hass)
+    assert registry.async_get_issue(DOMAIN, f"yaml_clash_{entry.entry_id}") is not None
+
+    assert await hass.config_entries.async_remove(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert registry.async_get_issue(DOMAIN, f"yaml_clash_{entry.entry_id}") is None
