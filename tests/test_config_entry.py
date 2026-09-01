@@ -185,6 +185,55 @@ async def test_compile_failure_notifies_instead_of_raising(recorder):
     assert any("recorder exploded" in n["message"] for n in notifications.values())
 
 
+async def test_notification_names_the_entity_and_its_id(recorder):
+    # The name is what labels the charts; the entity ID is what you search
+    # for in the log and the statistics list. A notification about work you
+    # cannot see needs both.
+    hass = recorder
+    hass.set_state(CoreState.running)
+    assert await async_setup_component(hass, DOMAIN, {})
+    entry = make_entry()
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.discrete_statistics.Compiler.async_compile_incremental",
+        return_value=7,
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+    [notification] = hass.data.get("persistent_notification", {}).values()
+    assert f"Grid Status ({ENTITY})" in notification["message"]
+    assert "7 hour(s)" in notification["message"]
+
+
+async def test_notification_without_a_name_shows_the_id_once(recorder):
+    # An unnamed helper has nothing to distinguish, so printing the entity ID
+    # twice would be noise rather than information.
+    hass = recorder
+    hass.set_state(CoreState.running)
+    assert await async_setup_component(hass, DOMAIN, {})
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENTITY_ID: ENTITY},
+        options={CONF_NAME: None, CONF_DEFAULT: DEFAULT_RECORD_KNOWN},
+        unique_id=ENTITY,
+        title=ENTITY,
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.discrete_statistics.Compiler.async_compile_incremental",
+        return_value=1,
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+    [notification] = hass.data.get("persistent_notification", {}).values()
+    assert ENTITY in notification["message"]
+    assert notification["message"].count(ENTITY) == 1
+
+
 async def test_removing_a_clashing_entry_clears_its_issue(recorder):
     # A user who resolves a YAML clash the obvious way - deleting the helper
     # - must not be left with a permanent repair card naming an entry that

@@ -176,6 +176,19 @@ def _clash_issue_id(entry: ConfigEntry) -> str:
     return f"yaml_clash_{entry.entry_id}"
 
 
+def _describe(cfg: EntityConfig) -> str:
+    """Name an entity the way a notification's reader thinks of it.
+
+    The name is what they typed and what labels their charts; the entity ID
+    is what they search for in the log and in Settings > Statistics. A helper
+    with no name of its own has nothing to distinguish, so the ID stands
+    alone rather than being printed twice.
+    """
+    if cfg.name and cfg.name != cfg.entity_id:
+        return f"{cfg.name} ({cfg.entity_id})"
+    return cfg.entity_id
+
+
 async def _async_compile_and_notify(
     hass: HomeAssistant, entry: ConfigEntry, cfg: EntityConfig, *, full: bool
 ) -> None:
@@ -199,12 +212,12 @@ async def _async_compile_and_notify(
                 hours = await compiler.async_compile_incremental(cfg)
     except Exception as err:  # noqa: BLE001 - reported, not swallowed
         _LOGGER.exception("Compiling %s failed", cfg.entity_id)
-        message = f"Could not compile statistics for {cfg.entity_id}: {err}"
+        message = f"Could not compile statistics for {_describe(cfg)}: {err}"
     else:
         message = (
-            f"Compiled {hours} hour(s) of statistics for {cfg.entity_id}."
+            f"Compiled {hours} hour(s) of statistics for {_describe(cfg)}."
             if hours
-            else f"No history to compile yet for {cfg.entity_id}."
+            else f"No history to compile yet for {_describe(cfg)}."
         )
         _LOGGER.info("%s", message)
 
