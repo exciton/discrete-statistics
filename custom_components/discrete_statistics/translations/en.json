@@ -1,0 +1,53 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add discrete statistics",
+        "description": "Records how long this entity spends in each state, and how often it changes, as long-term statistics kept independently of the recorder's purge window.",
+        "data": {
+          "entity_id": "Entity",
+          "name": "Name",
+          "default": "States to record"
+        },
+        "data_description": {
+          "entity_id": "The binary or enum entity to track. It cannot be changed later, because it determines the statistic IDs.",
+          "name": "Shown on charts. Defaults to the entity ID.",
+          "default": "Time in an ignored state is credited to the previous recorded state - it never creates a gap, and it does not count as a transition."
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "This entity already has discrete statistics.",
+      "yaml_configured": "This entity is configured in configuration.yaml. Edit it there, or remove it from YAML first."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Discrete statistics options",
+        "data": {
+          "name": "Name",
+          "default": "States to record"
+        },
+        "data_description": {
+          "name": "Shown on charts. Defaults to the entity ID.",
+          "default": "Time in an ignored state is credited to the previous recorded state - it never creates a gap, and it does not count as a transition. Changing this recompiles the entity's whole history."
+        }
+      }
+    }
+  },
+  "selector": {
+    "default": {
+      "options": {
+        "record": "Record every state, including unavailable and unknown",
+        "record_known": "Record known states, ignoring unavailable and unknown"
+      }
+    }
+  },
+  "issues": {
+    "yaml_clash": {
+      "title": "Duplicate configuration for {entity_id}",
+      "description": "{entity_id} is configured both in configuration.yaml and as a helper. The YAML configuration is being used and the helper has been disabled, because two configurations write conflicting values to the same statistics. Remove one of them."
+    }
+  }
+}
