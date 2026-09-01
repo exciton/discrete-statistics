@@ -213,6 +213,25 @@ async def _async_compile_and_notify(
     )
 
 
+async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Apply changed options and recompile the entity's whole history.
+
+    Deliberately not hass.config_entries.async_reload(): reload re-runs
+    async_setup_entry, whose compile is incremental, and a changed
+    disposition reattributes every past hour. Updating in place and running
+    the full recompute here is the difference between a corrected history
+    and a seam at the moment of the edit.
+    """
+    data = hass.data[DOMAIN]
+    cfg = entity_config_from_entry(entry.data, entry.options)
+    data["entry_configs"][entry.entry_id] = cfg
+    entry.async_create_background_task(
+        hass,
+        _async_compile_and_notify(hass, entry, cfg, full=True),
+        name=f"{DOMAIN} recompute {cfg.entity_id}",
+    )
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up one UI-configured entity."""
     data = hass.data[DOMAIN]
@@ -239,6 +258,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     async_delete_issue(hass, DOMAIN, _clash_issue_id(entry))
     data["entry_configs"][entry.entry_id] = cfg
+    entry.async_on_unload(entry.add_update_listener(_async_entry_updated))
 
     # Only when Home Assistant is already running, which means a genuine
     # creation or reload. At boot the EVENT_HOMEASSISTANT_STARTED handler

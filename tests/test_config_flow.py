@@ -6,6 +6,7 @@ import pytest
 import voluptuous as vol
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.const import CONF_ENTITY_ID, CONF_NAME
+from homeassistant.core import CoreState
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -121,3 +122,45 @@ async def test_flow_does_not_offer_ignore(recorder):
         result["data_schema"](
             {CONF_ENTITY_ID: ENTITY, CONF_DEFAULT: DEFAULT_IGNORE}
         )
+
+
+async def test_options_flow_updates_and_recompiles(recorder):
+    hass = recorder
+    hass.set_state(CoreState.running)
+    assert await async_setup_component(hass, DOMAIN, {})
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENTITY_ID: ENTITY},
+        options={CONF_NAME: "Grid Status", CONF_DEFAULT: DEFAULT_RECORD_KNOWN},
+        unique_id=ENTITY,
+        title="Grid Status",
+    )
+    entry.add_to_hass(hass)
+    with patch(
+        "custom_components.discrete_statistics.Compiler.async_compile_incremental",
+        return_value=0,
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    with patch(
+        "custom_components.discrete_statistics.Compiler.async_compile",
+        return_value=48,
+    ) as full_mock:
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        assert result["step_id"] == "init"
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {CONF_NAME: "Grid", CONF_DEFAULT: DEFAULT_RECORD},
+        )
+        await hass.async_block_till_done()
+
+    assert entry.options == {CONF_NAME: "Grid", CONF_DEFAULT: DEFAULT_RECORD}
+    # A disposition change reattributes every past hour, so the recompute
+    # must start from the earliest retained state, not from the watermark.
+    assert full_mock.called
+    assert full_mock.call_args.args[1] is None
+    # The stored config reflects the new options.
+    cfg = hass.data[DOMAIN]["entry_configs"][entry.entry_id]
+    assert cfg.default == DEFAULT_RECORD
+    assert cfg.name == "Grid"

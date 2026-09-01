@@ -11,8 +11,14 @@ from __future__ import annotations
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
 from homeassistant.const import CONF_ENTITY_ID, CONF_NAME
+from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .config import CONF_DEFAULT, is_configured
@@ -69,4 +75,36 @@ class DiscreteStatisticsConfigFlow(ConfigFlow, domain=DOMAIN):
             title=name or entity_id,
             data={CONF_ENTITY_ID: entity_id},
             options={CONF_NAME: name, CONF_DEFAULT: user_input[CONF_DEFAULT]},
+        )
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+        """Return the options flow. entity_id is not editable here."""
+        return DiscreteStatisticsOptionsFlow()
+
+
+class DiscreteStatisticsOptionsFlow(OptionsFlow):
+    """Edit the name and the recording default.
+
+    entity_id is absent by design: it builds every statistic ID, so
+    changing it would orphan the entity's whole series.
+    """
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Show and save the editable options."""
+        if user_input is not None:
+            return self.async_create_entry(
+                data={
+                    CONF_NAME: user_input.get(CONF_NAME) or None,
+                    CONF_DEFAULT: user_input[CONF_DEFAULT],
+                }
+            )
+        return self.async_show_form(
+            step_id="init",
+            data_schema=self.add_suggested_values_to_schema(
+                OPTIONS_SCHEMA, self.config_entry.options
+            ),
         )
