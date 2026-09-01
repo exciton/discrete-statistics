@@ -7,22 +7,39 @@ import logging
 from typing import Any
 
 import voluptuous as vol
+from homeassistant.components import persistent_notification
 from homeassistant.components.recorder import get_instance
-from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, EVENT_HOMEASSISTANT_STOP
-from homeassistant.core import Event, HomeAssistant, ServiceCall
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import (
+    CONF_ENTITY_ID,
+    EVENT_HOMEASSISTANT_STARTED,
+    EVENT_HOMEASSISTANT_STOP,
+)
+from homeassistant.core import CoreState, Event, HomeAssistant, ServiceCall
+from homeassistant.exceptions import ConfigEntryError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_track_time_change
+from homeassistant.helpers.issue_registry import (
+    IssueSeverity,
+    async_create_issue,
+    async_delete_issue,
+)
 from homeassistant.helpers.typing import ConfigType
 
 from .compiler import Compiler
-from .config import CONFIG_SCHEMA, EntityConfig  # noqa: F401  (CONFIG_SCHEMA is the HA hook)
+from .config import CONFIG_SCHEMA, EntityConfig, entity_config_from_entry, is_configured  # noqa: F401  (CONFIG_SCHEMA is the HA hook)
 from .const import BACKLOG_THRESHOLD, DOMAIN
 from .registry import Registry
 
 _LOGGER = logging.getLogger(__name__)
 
-__all__ = ["CONFIG_SCHEMA", "async_setup"]
+__all__ = [
+    "CONFIG_SCHEMA",
+    "async_setup",
+    "async_setup_entry",
+    "async_unload_entry",
+    "async_remove_entry",
+]
 
 SERVICE_RECOMPUTE = "recompute"
 
@@ -150,3 +167,103 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     )
 
     return True
+
+
+def _clash_issue_id(entry: ConfigEntry) -> str:
+    return f"yaml_clash_{entry.entry_id}"
+
+
+async def _async_compile_and_notify(
+    hass: HomeAssistant, entry: ConfigEntry, cfg: EntityConfig, *, full: bool
+) -> None:
+    """Compile one entity and report the outcome as a notification.
+
+    Runs as a background task, so an exception here would otherwise surface
+    only as an unhandled-task traceback after a Submit that looked fine.
+    One notification id per entry, so repeated edits replace rather than
+    stack.
+    """
+    data = hass.data[DOMAIN]
+    compiler: Compiler = data["compiler"]
+    try:
+        # The same lock the hourly run uses; a full recompute can hold it
+        # for minutes and the hourly run simply awaits it. Never acquired
+        # from inside compile_all - asyncio.Lock is not reentrant.
+        async with data["lock"]:
+            if full:
+                hours = await compiler.async_compile(cfg, None)
+            else:
+                hours = await compiler.async_compile_incremental(cfg)
+    except Exception as err:  # noqa: BLE001 - reported, not swallowed
+        _LOGGER.exception("Compiling %s failed", cfg.entity_id)
+        message = f"Could not compile statistics for {cfg.entity_id}: {err}"
+    else:
+        message = (
+            f"Compiled {hours} hour(s) of statistics for {cfg.entity_id}."
+            if hours
+            else f"No history to compile yet for {cfg.entity_id}."
+        )
+        _LOGGER.info("%s", message)
+
+    persistent_notification.async_create(
+        hass,
+        message,
+        title="Discrete Statistics",
+        notification_id=f"{DOMAIN}_{entry.entry_id}",
+    )
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up one UI-configured entity."""
+    data = hass.data[DOMAIN]
+    cfg = entity_config_from_entry(entry.data, entry.options)
+
+    # YAML is read at startup and can name an entity a helper already owns.
+    # YAML wins because async_setup runs first; failing setup here is what
+    # keeps the entry out of all_configs(), so the exclusion cannot drift
+    # from the failure.
+    if is_configured(data["yaml_configs"], cfg.entity_id):
+        async_create_issue(
+            hass,
+            DOMAIN,
+            _clash_issue_id(entry),
+            is_fixable=False,
+            severity=IssueSeverity.ERROR,
+            translation_key="yaml_clash",
+            translation_placeholders={"entity_id": cfg.entity_id},
+        )
+        raise ConfigEntryError(
+            f"{cfg.entity_id} is also configured in configuration.yaml. "
+            "Remove one of the two configurations."
+        )
+
+    async_delete_issue(hass, DOMAIN, _clash_issue_id(entry))
+    data["entry_configs"][entry.entry_id] = cfg
+
+    # Only when Home Assistant is already running, which means a genuine
+    # creation or reload. At boot the EVENT_HOMEASSISTANT_STARTED handler
+    # compiles every config, and doing it here too would compile twice.
+    if hass.state is CoreState.running:
+        entry.async_create_background_task(
+            hass,
+            _async_compile_and_notify(hass, entry, cfg, full=False),
+            name=f"{DOMAIN} compile {cfg.entity_id}",
+        )
+    return True
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Stop compiling one entity. The shared machinery stays up."""
+    hass.data[DOMAIN]["entry_configs"].pop(entry.entry_id, None)
+    async_delete_issue(hass, DOMAIN, _clash_issue_id(entry))
+    return True
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Log what removal kept. Nothing here deletes statistics."""
+    _LOGGER.info(
+        "Removed %s from %s. Its statistics are kept; delete them in "
+        "Settings > System > Tools > Statistics if you no longer want them",
+        entry.data[CONF_ENTITY_ID],
+        DOMAIN,
+    )
