@@ -3,8 +3,19 @@
 import pytest
 import voluptuous as vol
 
-from custom_components.discrete_statistics.config import CONFIG_SCHEMA, EntityConfig
-from custom_components.discrete_statistics.const import DOMAIN
+from homeassistant.const import CONF_ENTITY_ID, CONF_NAME
+from custom_components.discrete_statistics.config import (
+    CONF_DEFAULT,
+    CONFIG_SCHEMA,
+    EntityConfig,
+    entity_config_from_entry,
+    is_configured,
+)
+from custom_components.discrete_statistics.const import (
+    DEFAULT_RECORD,
+    DEFAULT_RECORD_KNOWN,
+    DOMAIN,
+)
 
 
 def parse(entities):
@@ -207,22 +218,12 @@ def test_distinct_entity_ids_are_accepted():
     ]
 
 
-from homeassistant.const import CONF_ENTITY_ID, CONF_NAME
-
-from custom_components.discrete_statistics.config import (
-    CONF_DEFAULT,
-    EntityConfig,
-    entity_config_from_entry,
-    is_configured,
-)
-from custom_components.discrete_statistics.const import (
-    DEFAULT_RECORD,
-    DEFAULT_RECORD_KNOWN,
-)
-
-
 def test_is_configured_matches_on_entity_id():
-    configs = [EntityConfig(entity_id="binary_sensor.a", name=None, default=DEFAULT_RECORD)]
+    configs = [
+        EntityConfig(
+            entity_id="binary_sensor.a", name=None, default=DEFAULT_RECORD
+        )
+    ]
     assert is_configured(configs, "binary_sensor.a")
     assert not is_configured(configs, "binary_sensor.b")
     assert not is_configured([], "binary_sensor.a")
