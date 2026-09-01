@@ -1,19 +1,27 @@
 """Tests for the config entry lifecycle."""
 
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
+from homeassistant.components.recorder import get_instance
+from homeassistant.components.recorder.statistics import statistics_during_period
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_ENTITY_ID, CONF_NAME
 from homeassistant.core import CoreState
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.components.recorder.common import (
+    async_wait_recording_done,
+)
 
 from custom_components.discrete_statistics.config import CONF_DEFAULT
 from custom_components.discrete_statistics.const import DEFAULT_RECORD_KNOWN, DOMAIN
 
 ENTITY = "binary_sensor.grid_status"
+DURATION_ON = "discrete_statistics:binary_sensor_grid_status_on_duration"
+DURATION_OFF = "discrete_statistics:binary_sensor_grid_status_off_duration"
 
 
 @pytest.fixture(autouse=True)
@@ -199,3 +207,43 @@ async def test_removing_a_clashing_entry_clears_its_issue(recorder):
     await hass.async_block_till_done()
 
     assert registry.async_get_issue(DOMAIN, f"yaml_clash_{entry.entry_id}") is None
+
+
+async def test_entry_backfills_history_end_to_end(recorder, freezer):
+    """A helper created over existing history compiles all of it."""
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+
+    # Seed three hours of history: on for two hours, then off for one.
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    freezer.move_to(start + timedelta(hours=2))
+    hass.states.async_set(ENTITY, "off")
+    await hass.async_block_till_done()
+    await async_wait_recording_done(hass)
+
+    freezer.move_to(start + timedelta(hours=3))
+    hass.set_state(CoreState.running)
+    assert await async_setup_component(hass, DOMAIN, {})
+    entry = make_entry()
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    # The compile runs as a background task (see _async_compile_and_notify);
+    # plain async_block_till_done does not wait for those.
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    stats = await get_instance(hass).async_add_executor_job(
+        statistics_during_period,
+        hass,
+        start,
+        start + timedelta(hours=3),
+        {DURATION_ON, DURATION_OFF},
+        "hour",
+        None,
+        {"sum"},
+    )
+    # Durations are cumulative sums in hours; the last sum of each state
+    # over three hours must total exactly three.
+    total = sum(rows[-1]["sum"] for rows in stats.values())
+    assert total == pytest.approx(3.0)

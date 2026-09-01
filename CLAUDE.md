@@ -39,6 +39,7 @@ A pure pipeline with a single I/O boundary. Dependencies point one way:
 const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds, count)}
        ├─ statistic_ids     pure: build an external statistic ID
        ├─ config ── canonicalise   pure: recorder rows -> canonical transitions
+       │        └─ config_flow    HA UI: entity -> EntityConfig, as a helper
        ├─ registry          .storage: statistic_id -> (entity, state, metric)
        └─ payload           pure: buckets -> cumulative StatisticData rows
                 │
@@ -63,6 +64,13 @@ The hourly run and the service do not call it directly: they call
 (`watermark - (TRAILING_HOURS - 1) * HOUR`, or the entity's earliest state when
 there is no watermark) before delegating. Keep the derivation of `start` there
 and the compiling in `async_compile`.
+
+Configuration arrives from two sources. `hass.data[DOMAIN]["yaml_configs"]`
+is static; `["entry_configs"]` holds one `EntityConfig` per config entry;
+`["all_configs"]()` joins them, YAML first, and is what the hourly run and
+the `recompute` service iterate. The registry, compiler, lock and hourly
+timer stay singletons built in `async_setup` — a per-entry timer would let
+two entities compile concurrently and defeat the lock.
 
 ## Invariants
 
@@ -139,6 +147,13 @@ buckets it has source data for and leaves everything else alone, so a rebuild
 can never discard statistics whose source states have already been purged.
 Deleting a statistic is the user's decision, made in Settings → System → Tools
 → Statistics.
+
+**An entity is configured once, from one source.** Two configurations
+resolve the same raw states through different disposition tables and write
+conflicting values to the same statistic IDs. The flow refuses an entity
+YAML owns; `async_setup_entry` raises `ConfigEntryError` when YAML claims
+one an entry already owns, which is also what keeps it out of
+`all_configs()`. YAML wins, because `async_setup` runs first.
 
 ## Home Assistant APIs, and their traps
 

@@ -81,6 +81,32 @@ discrete_statistics:
 
 `no_data` is reserved and cannot be used as a state name or map target.
 
+## Configuring from the UI
+
+Settings → Devices & Services → Helpers → **Create helper** → **Discrete
+Statistics**. Pick an entity, optionally name it, and choose which states
+to record. The entity's full retained history is compiled in the
+background as soon as you press Submit, and a notification reports how
+many hours were compiled.
+
+Changing a helper's options recompiles that entity's whole history, so a
+change of recording rule applies to the past as well as the future.
+
+The entity itself cannot be changed after creation: it determines the
+statistic IDs, so a change would orphan the existing series. Delete the
+helper and make a new one instead.
+
+An entity may be configured once, either in YAML or as a helper. The
+helper dialog refuses an entity that YAML already configures; a YAML block
+added later for an entity that a helper owns disables that helper and
+raises a repair issue.
+
+Removing a helper stops compiling. It never deletes statistics — do that
+in Settings → System → Tools → Statistics.
+
+YAML configuration keeps working unchanged, and is still the only way to
+set per-state dispositions and the `ignore` default.
+
 ## Statistics produced
 
 For each state, two statistics:
