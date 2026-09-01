@@ -27,7 +27,10 @@ from homeassistant.helpers.issue_registry import (
 from homeassistant.helpers.typing import ConfigType
 
 from .compiler import Compiler
-from .config import CONFIG_SCHEMA, EntityConfig, entity_config_from_entry, is_configured  # noqa: F401  (CONFIG_SCHEMA is the HA hook)
+from .config import CONFIG_SCHEMA, EntityConfig, entity_config_from_entry, is_configured
+# CONFIG_SCHEMA is the HA hook: HA looks it up by name on this module to
+# validate the YAML block, so it must stay imported even though nothing here
+# calls it directly.
 from .const import BACKLOG_THRESHOLD, DOMAIN
 from .registry import Registry
 
@@ -214,17 +217,45 @@ async def _async_compile_and_notify(
 
 
 async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Apply changed options and recompile the entity's whole history.
+    """Apply changed options and recompile only when attribution changed.
 
-    Deliberately not hass.config_entries.async_reload(): reload re-runs
-    async_setup_entry, whose compile is incremental, and a changed
-    disposition reattributes every past hour. Updating in place and running
-    the full recompute here is the difference between a corrected history
-    and a seam at the moment of the edit.
+    add_update_listener fires on every async_update_entry, not only on an
+    options change - including a title-only rename from the Helpers list.
+    Comparing the freshly-built EntityConfig against the one on file is what
+    keeps a cosmetic rename from taking the shared lock for a full recompute
+    and raising a notification nobody asked for. Of what is left, only
+    `default` changes past attribution; `payload` rebuilds statistic metadata
+    on every compile, so a `name`-only change reaches the display name on the
+    next ordinary run with no rewrite needed.
+
+    Deliberately not hass.config_entries.async_reload() for the recompute
+    path: reload re-runs async_setup_entry, whose compile is incremental, and
+    a changed disposition reattributes every past hour. Updating in place and
+    running the full recompute here is the difference between a corrected
+    history and a seam at the moment of the edit.
     """
     data = hass.data[DOMAIN]
+    old_cfg = data["entry_configs"].get(entry.entry_id)
     cfg = entity_config_from_entry(entry.data, entry.options)
+    if cfg == old_cfg:
+        return
     data["entry_configs"][entry.entry_id] = cfg
+
+    # Keep the Helpers row's title matching the name option; async_setup_entry
+    # only sets the title once, at creation. This call re-fires this very
+    # listener, which is safe *only* because of the equality check above: on
+    # that re-entry entity_config_from_entry reproduces the same cfg, so it
+    # matches what was just stored and the listener returns immediately
+    # instead of looping or recompiling a second time. Do not remove the
+    # equality check while this call stays - it looks unrelated but it is
+    # what stops the recursion.
+    title = cfg.name or cfg.entity_id
+    if title != entry.title:
+        hass.config_entries.async_update_entry(entry, title=title)
+
+    if old_cfg is not None and cfg.default == old_cfg.default:
+        return
+
     entry.async_create_background_task(
         hass,
         _async_compile_and_notify(hass, entry, cfg, full=True),

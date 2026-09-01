@@ -209,6 +209,34 @@ async def test_removing_a_clashing_entry_clears_its_issue(recorder):
     assert registry.async_get_issue(DOMAIN, f"yaml_clash_{entry.entry_id}") is None
 
 
+async def test_update_listener_does_not_fire_after_unload(recorder):
+    # entry.async_on_unload(entry.add_update_listener(...)) is what
+    # unregisters the listener on unload. _async_entry_updated writes
+    # entry_configs[entry.entry_id], so a leaked listener firing after
+    # unload would resurrect an unloaded entry's config into all_configs().
+    hass = recorder
+    assert await async_setup_component(hass, DOMAIN, {})
+    entry = make_entry()
+    entry.add_to_hass(hass)
+    with patch(
+        "custom_components.discrete_statistics.Compiler.async_compile_incremental",
+        return_value=0,
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.data[DOMAIN]["all_configs"]() == []
+
+    hass.config_entries.async_update_entry(
+        entry, options={CONF_NAME: "Renamed", CONF_DEFAULT: DEFAULT_RECORD_KNOWN}
+    )
+    await hass.async_block_till_done()
+
+    assert hass.data[DOMAIN]["all_configs"]() == []
+
+
 async def test_entry_backfills_history_end_to_end(recorder, freezer):
     """A helper created over existing history compiles all of it.
 
@@ -251,7 +279,11 @@ async def test_entry_backfills_history_end_to_end(recorder, freezer):
         None,
         {"sum"},
     )
-    # Durations are cumulative sums in hours; the last sum of each state
-    # over five hours must total exactly five.
-    total = sum(rows[-1]["sum"] for rows in stats.values())
-    assert total == pytest.approx(5.0)
+    # Durations are cumulative sums in hours. Checking only the combined
+    # total would pass a mis-attribution that moved hours between series
+    # while keeping the sum at 5.0, so check each series individually too.
+    on_total = stats[DURATION_ON][-1]["sum"]
+    off_total = stats[DURATION_OFF][-1]["sum"]
+    assert on_total == pytest.approx(3.0)
+    assert off_total == pytest.approx(2.0)
+    assert on_total + off_total == pytest.approx(5.0)

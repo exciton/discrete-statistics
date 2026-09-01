@@ -164,3 +164,78 @@ async def test_options_flow_updates_and_recompiles(recorder):
     cfg = hass.data[DOMAIN]["entry_configs"][entry.entry_id]
     assert cfg.default == DEFAULT_RECORD
     assert cfg.name == "Grid"
+
+
+async def test_options_flow_name_only_change_skips_recompile(recorder):
+    # A name-only edit changes only how a series is displayed - payload
+    # rebuilds statistic metadata on every ordinary compile, so it needs no
+    # history rewrite. A full recompute here would take the shared lock for
+    # no reason and raise a notification the user did not ask for.
+    hass = recorder
+    hass.set_state(CoreState.running)
+    assert await async_setup_component(hass, DOMAIN, {})
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENTITY_ID: ENTITY},
+        options={CONF_NAME: "Grid Status", CONF_DEFAULT: DEFAULT_RECORD_KNOWN},
+        unique_id=ENTITY,
+        title="Grid Status",
+    )
+    entry.add_to_hass(hass)
+    with patch(
+        "custom_components.discrete_statistics.Compiler.async_compile_incremental",
+        return_value=0,
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    with patch(
+        "custom_components.discrete_statistics.Compiler.async_compile",
+    ) as full_mock:
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {CONF_NAME: "Grid", CONF_DEFAULT: DEFAULT_RECORD_KNOWN},
+        )
+        await hass.async_block_till_done()
+
+    assert entry.options == {CONF_NAME: "Grid", CONF_DEFAULT: DEFAULT_RECORD_KNOWN}
+    assert not full_mock.called
+    cfg = hass.data[DOMAIN]["entry_configs"][entry.entry_id]
+    assert cfg.name == "Grid"
+
+
+async def test_options_flow_keeps_title_in_sync_with_name(recorder):
+    # Creation sets title=name; nothing else did, so editing Name in options
+    # used to rename the chart series while leaving the Helpers row's title
+    # stale forever.
+    hass = recorder
+    hass.set_state(CoreState.running)
+    assert await async_setup_component(hass, DOMAIN, {})
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENTITY_ID: ENTITY},
+        options={CONF_NAME: "Grid Status", CONF_DEFAULT: DEFAULT_RECORD_KNOWN},
+        unique_id=ENTITY,
+        title="Grid Status",
+    )
+    entry.add_to_hass(hass)
+    with patch(
+        "custom_components.discrete_statistics.Compiler.async_compile_incremental",
+        return_value=0,
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    with patch(
+        "custom_components.discrete_statistics.Compiler.async_compile",
+        return_value=0,
+    ):
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {CONF_NAME: "Grid", CONF_DEFAULT: DEFAULT_RECORD_KNOWN},
+        )
+        await hass.async_block_till_done()
+
+    assert entry.title == "Grid"

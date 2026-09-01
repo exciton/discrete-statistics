@@ -85,12 +85,15 @@ discrete_statistics:
 
 Settings → Devices & Services → Helpers → **Create helper** → **Discrete
 Statistics**. Pick an entity, optionally name it, and choose which states
-to record. The entity's full retained history is compiled in the
-background as soon as you press Submit, and a notification reports how
-many hours were compiled.
+to record. Compiling starts in the background as soon as you press Submit,
+and a notification reports how many hours were compiled: the entity's full
+retained history for a genuinely new entity, or just the trailing window if
+it was previously configured and deleted, since statistics are kept on
+removal and compiling resumes from that watermark.
 
-Changing a helper's options recompiles that entity's whole history, so a
-change of recording rule applies to the past as well as the future.
+Changing a helper's recording rule recompiles that entity's whole history, so
+the change applies to the past as well as the future; changing only its name
+does not.
 
 The entity itself cannot be changed after creation: it determines the
 statistic IDs, so a change would orphan the existing series. Delete the

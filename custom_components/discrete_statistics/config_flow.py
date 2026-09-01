@@ -66,6 +66,14 @@ class DiscreteStatisticsConfigFlow(ConfigFlow, domain=DOMAIN):
         await self.async_set_unique_id(entity_id)
         self._abort_if_unique_id_configured()
 
+        # On a fresh install with no YAML and no existing entries, the
+        # component has never run: starting a flow only imports this module,
+        # and async_setup runs when the first entry is created - so
+        # hass.data[DOMAIN] genuinely does not exist yet. This guard is the
+        # only thing standing between that state and a KeyError on the very
+        # first helper anyone creates. Skipping the YAML check in that case
+        # is also correct: with no async_setup having run, no YAML config
+        # can exist to clash with.
         data = self.hass.data.get(DOMAIN)
         if data is not None and is_configured(data["yaml_configs"], entity_id):
             return self.async_abort(reason="yaml_configured")
