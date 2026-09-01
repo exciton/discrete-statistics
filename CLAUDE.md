@@ -25,6 +25,12 @@ script/test tests/test_compiler.py::test_name   # one test
 must stay there: declaring `pytest_plugins` in a non-rootdir conftest is an
 error in modern pytest and breaks the entire suite.
 
+CI (`.github/workflows/validate.yml`) runs the suite through the same
+`script/test`, plus HACS and hassfest. Those two have no local equivalent, so a
+manifest or repository-structure mistake surfaces only after a push — when
+touching `manifest.json`, `hacs.json` or the directory layout, expect that
+round trip.
+
 ## Architecture
 
 A pure pipeline with a single I/O boundary. Dependencies point one way:
@@ -45,10 +51,18 @@ Everything except `compiler` and `registry` is pure and testable without a
 `hass` instance. Keep it that way: if a change needs recorder access in a lower
 module, the design is drifting.
 
-`compiler.async_compile(cfg, start, end=None)` is the single entry point for
-live compilation, catch-up after downtime, and backfill. They differ only in
-the start timestamp. Preserve that — it is what makes all three paths share
-one set of tests.
+`Compiler` is a class built from `(hass, registry)`; the entry points are its
+methods, not module-level functions.
+`Compiler.async_compile(cfg, start, end=None)` compiles `[start, end)` and is
+the single implementation behind live compilation, catch-up after downtime, and
+backfill. They differ only in the start timestamp. Preserve that — it is what
+makes all three paths share one set of tests.
+
+The hourly run and the service do not call it directly: they call
+`async_compile_incremental`, which is only watermark arithmetic
+(`watermark - (TRAILING_HOURS - 1) * HOUR`, or the entity's earliest state when
+there is no watermark) before delegating. Keep the derivation of `start` there
+and the compiling in `async_compile`.
 
 ## Invariants
 
@@ -82,6 +96,28 @@ threshold.
 **Only completed hours are emitted.** Writing a partial bucket that a later run
 revises would make cumulative sums briefly wrong.
 
+**A boundary state that resolves to nothing widens the lookback
+(`WIDENING_LOOKBACKS`).** `include_start_time_state` returns exactly *one* row
+before the boundary, so a single ignored row there hides the perfectly good
+state behind it and the whole span falls to `no_data`. Because `window_start`
+moves with the watermark on every run, the idempotent upsert then rewrites
+already-correct duration rows downward, permanently. `compiler` widens the
+lookback until a recordable state appears; the two legitimate `no_data` cases
+(an entity's pre-history, a gap whose rows were purged) still fall through.
+
+**A long compile is chunked, and the base sum is threaded through it.**
+`async_compile` walks the window in `CHUNK_HOURS` slices to bound memory during
+a backfill, and each slice returns the base sums the next one starts from.
+Re-reading the base per chunk instead would break monotonicity in exactly the
+way the density invariant describes, because the recorder writes are still
+queued.
+
+**A scheduled run is skipped, not queued, when the recorder is behind.**
+`__init__` compares `get_instance(hass).backlog` against `BACKLOG_THRESHOLD`
+and returns early. This is safe only because the watermark is data-derived: a
+skipped run costs latency and nothing else, and the next run picks up the same
+hours. Do not add catch-up bookkeeping for it.
+
 **Windows are half-open, `[window_start, window_end)`.** `canonicalise` routes
 rows *strictly* before `window_start` into the carried state; `bucketer` skips
 transitions *strictly* before it. Together they tile the timeline with no
@@ -98,24 +134,21 @@ cannot determine a real state — before an entity's first known state, or acros
 a gap whose source rows were purged. It has a duration statistic but no count:
 nothing ever transitions *into* it, so a count would be structurally zero.
 
-**Recompute never deletes.** It overwrites buckets it has source data for and
-leaves everything else alone, so a rebuild can never discard statistics whose
-source states have already been purged. A `clear` option existed and was
-removed for exactly this reason. Deleting a statistic is the user's decision,
-made in Settings → System → Tools → Statistics.
+**Nothing in this integration deletes statistics.** Recompute overwrites
+buckets it has source data for and leaves everything else alone, so a rebuild
+can never discard statistics whose source states have already been purged.
+Deleting a statistic is the user's decision, made in Settings → System → Tools
+→ Statistics.
 
 ## Home Assistant APIs, and their traps
 
 Verified against 2026.8.3. Each of these was got wrong once.
 
 - `async_add_external_statistics` is a `@callback` — call it, do not await it.
-  It only *enqueues*; `async_compile` drains via `async_block_till_done()`
+  It only *enqueues*; `Compiler.async_compile` drains via `async_block_till_done()`
   before returning so a subsequent compile reads a base including those writes.
 - Every other recorder query is synchronous and must run through
   `get_instance(hass).async_add_executor_job(...)`.
-- `clear_statistics` is the exception: it mutates metadata and asserts it is on
-  the recorder's own thread, so it must be queued with
-  `Recorder.async_clear_statistics`, not dispatched to the db executor.
 - `include_start_time_state=True` does **not** return the state as of
   `start_time`. Both underlying queries use strict comparisons, so a row landing
   exactly on the boundary is returned by neither. `compiler` queries from
