@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 import voluptuous as vol
 from homeassistant.const import CONF_ENTITY_ID, CONF_NAME
@@ -147,3 +147,26 @@ CONFIG_SCHEMA = vol.Schema(
     },
     extra=vol.ALLOW_EXTRA,
 )
+
+
+def is_configured(configs: Iterable[EntityConfig], entity_id: str) -> bool:
+    """Whether an entity already has a configuration in `configs`."""
+    return any(cfg.entity_id == entity_id for cfg in configs)
+
+
+def entity_config_from_entry(
+    data: Mapping[str, Any], options: Mapping[str, Any]
+) -> EntityConfig:
+    """Build an EntityConfig from a config entry's data and options.
+
+    Takes mappings rather than a ConfigEntry so this module stays pure and
+    testable without Home Assistant. `entity_id` lives in data because it is
+    identity: it builds every statistic ID and is never editable. An empty
+    name arrives from the text field as "" and is normalised to None, which
+    payload renders as the entity ID.
+    """
+    return EntityConfig(
+        entity_id=data[CONF_ENTITY_ID],
+        name=options.get(CONF_NAME) or None,
+        default=options.get(CONF_DEFAULT, DEFAULT_RECORD_KNOWN),
+    )

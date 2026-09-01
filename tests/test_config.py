@@ -205,3 +205,53 @@ def test_distinct_entity_ids_are_accepted():
         "binary_sensor.grid_status",
         "binary_sensor.other",
     ]
+
+
+from homeassistant.const import CONF_ENTITY_ID, CONF_NAME
+
+from custom_components.discrete_statistics.config import (
+    CONF_DEFAULT,
+    EntityConfig,
+    entity_config_from_entry,
+    is_configured,
+)
+from custom_components.discrete_statistics.const import (
+    DEFAULT_RECORD,
+    DEFAULT_RECORD_KNOWN,
+)
+
+
+def test_is_configured_matches_on_entity_id():
+    configs = [EntityConfig(entity_id="binary_sensor.a", name=None, default=DEFAULT_RECORD)]
+    assert is_configured(configs, "binary_sensor.a")
+    assert not is_configured(configs, "binary_sensor.b")
+    assert not is_configured([], "binary_sensor.a")
+
+
+def test_entity_config_from_entry_reads_data_and_options():
+    cfg = entity_config_from_entry(
+        {CONF_ENTITY_ID: "binary_sensor.a"},
+        {CONF_NAME: "Grid", CONF_DEFAULT: DEFAULT_RECORD},
+    )
+    assert cfg == EntityConfig(
+        entity_id="binary_sensor.a", name="Grid", default=DEFAULT_RECORD
+    )
+
+
+def test_entity_config_from_entry_defaults_and_blank_name():
+    cfg = entity_config_from_entry({CONF_ENTITY_ID: "binary_sensor.a"}, {})
+    assert cfg.default == DEFAULT_RECORD_KNOWN
+    assert cfg.name is None
+
+    # An empty text field arrives as "" and must not become the display name.
+    blank = entity_config_from_entry(
+        {CONF_ENTITY_ID: "binary_sensor.a"}, {CONF_NAME: ""}
+    )
+    assert blank.name is None
+
+
+def test_entity_config_from_entry_has_no_state_map():
+    # The v1 UI offers no per-state mapping; resolve() must fall through
+    # to the default for every state.
+    cfg = entity_config_from_entry({CONF_ENTITY_ID: "binary_sensor.a"}, {})
+    assert cfg.states == {}
