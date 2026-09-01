@@ -26,10 +26,20 @@ must stay there: declaring `pytest_plugins` in a non-rootdir conftest is an
 error in modern pytest and breaks the entire suite.
 
 CI (`.github/workflows/validate.yml`) runs the suite through the same
-`script/test`, plus HACS and hassfest. Those two have no local equivalent, so a
-manifest or repository-structure mistake surfaces only after a push — when
-touching `manifest.json`, `hacs.json` or the directory layout, expect that
-round trip.
+`script/test`, plus HACS and hassfest. hassfest validates `manifest.json`,
+`strings.json` and `translations/`, and it can be run locally against a Home
+Assistant core checkout (`/home/bonne/Code/home_assistant_core`, kept on the
+pinned tag) rather than waiting for a push:
+
+```bash
+docker run --rm -v "$PWD:/workspace" -v /home/bonne/Code/home_assistant_core:/core \
+  -w /core ha-discrete-stats-test bash -c \
+  "pip install -q ruff; python -m script.hassfest \
+   --integration-path /workspace/custom_components/discrete_statistics --action validate"
+```
+
+hassfest needs `ruff`, which the test image does not carry. The HACS check
+still has no local equivalent.
 
 ## Architecture
 
