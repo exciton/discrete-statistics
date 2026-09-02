@@ -146,8 +146,8 @@ sum to 24h per day, and gaps are visible in the chart rather than silently
 filled in.
 
 `no_data` also covers a state that cannot be recorded at all: an empty one,
-which Home Assistant stores when an entity is removed, or one made only of
-punctuation. Those spans show as a gap rather than being folded into whatever
+which Home Assistant stores when an entity is removed *or reloaded*, or one
+made only of punctuation. Those spans show as a gap rather than being folded into whatever
 came before.
 
 `no_data` has a `_duration` statistic only — it describes spans we cannot

@@ -49,9 +49,9 @@ def state_token(state: str) -> str:
 def is_recordable_state(state: str) -> bool:
     """False when a state cannot be represented in a statistic ID.
 
-    Two ways that happens. An empty state - what the recorder stores when an
-    entity is removed - tokenises to nothing and would leave a double
-    underscore. And anything unsluggable tokenises to the literal "unknown",
+    Two ways that happens. An empty state - what the recorder stores as NULL
+    when an entity is removed or reloaded, and what the history API hands
+    back as "" - tokenises to nothing and would leave a double underscore. And anything unsluggable tokenises to the literal "unknown",
     which would silently merge with a genuine `unknown`.
 
     Callers resolve these to no_data rather than dropping them, so the span

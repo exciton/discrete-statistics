@@ -282,7 +282,7 @@ def test_a_map_target_tokenising_to_no_data_is_rejected():
 
 
 def test_an_empty_state_becomes_no_data():
-    """The recorder stores an empty state when an entity is removed.
+    """The recorder stores an empty state when an entity is removed or reloaded.
 
     It cannot be put in a statistic ID, and carrying the previous state
     across it would claim the entity was still in it. no_data is the honest

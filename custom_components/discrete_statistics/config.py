@@ -49,10 +49,11 @@ class EntityConfig:
         own name, and testing the input would forbid mapping it away.
 
         A state that cannot be represented in an ID at all - an empty one,
-        which is what the recorder stores when an entity is removed - becomes
-        NO_DATA. Carrying the previous state forward would claim the entity
-        was still in it; no_data says plainly that we cannot tell, and shows
-        as a band on the chart.
+        which the recorder stores as NULL when an entity is removed or
+        reloaded - becomes NO_DATA. Carrying the previous state forward would
+        claim the entity was still in it; no_data says plainly that we cannot
+        tell, and shows as a band on the chart. A reload is instantaneous, so
+        it costs a span of very nearly zero.
         """
         canonical = self._resolve(raw_state)
         if canonical is None:

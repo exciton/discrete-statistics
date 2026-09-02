@@ -948,8 +948,9 @@ async def test_a_removed_entity_becomes_no_data_rather_than_failing(
 ):
     """The live failure: group.family, state='', every hour forever.
 
-    Home Assistant records an empty state when an entity is removed. It
-    cannot go in a statistic ID, and letting build() raise aborted the whole
+    Home Assistant records an empty state when an entity is removed or
+    reloaded - a group reload writes one and restores the state in the same
+    second. It cannot go in a statistic ID, and letting build() raise aborted the whole
     entity's compile - permanently, since the watermark never advanced past
     it. The span is attributed to no_data instead, which keeps the durations
     tiling the clock and shows the gap on a chart.
@@ -961,7 +962,7 @@ async def test_a_removed_entity_becomes_no_data_rather_than_failing(
     await hass.async_block_till_done()
 
     freezer.move_to(start + timedelta(hours=1))
-    hass.states.async_set(ENTITY, "")  # the entity is removed
+    hass.states.async_set(ENTITY, "")  # removed, or reloaded
     await hass.async_block_till_done()
 
     freezer.move_to(start + timedelta(hours=3))
