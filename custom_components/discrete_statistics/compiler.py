@@ -97,7 +97,12 @@ class Compiler:
         }
 
     async def async_compile_incremental(self, cfg: EntityConfig) -> int:
-        """Compile from the watermark, recomputing the trailing window."""
+        """Compile from the watermark, recomputing the trailing window.
+
+        With no watermark - a new helper, or one whose statistics have all
+        been deleted - there is nothing to trail, so it compiles the whole
+        of the entity's retained history instead.
+        """
         existing = await self._async_existing(cfg.entity_id)
         watermark = await self._async_watermark(existing)
         if watermark is None:
@@ -106,6 +111,15 @@ class Compiler:
                 return 0
         else:
             start = watermark - (TRAILING_HOURS - 1) * HOUR
+        # `existing` is deliberately NOT handed on: async_compile reads it
+        # again for itself. That looks like a wasted query - the filter
+        # bypasses the recorder's metadata cache, so it is a real one - but
+        # reusing this read makes the deletion tests flaky, one run in three.
+        # The read above happens before _async_watermark's round-trips; the
+        # one in async_compile happens after them, and only the later view
+        # reliably reflects a statistic deleted moments earlier. Reading
+        # density from a stale view omits statistics from the window and
+        # leaves them sparse, which is unrecoverable. Do not merge the two.
         return await self.async_compile(cfg, start)
 
     async def async_compile(
@@ -128,20 +142,28 @@ class Compiler:
 
         compiled = 0
         chunk_start = window_start
-        while chunk_start < window_end:
-            chunk_end = min(chunk_start + CHUNK_HOURS * HOUR, window_end)
-            base_sums, hours, existing = await self._async_compile_chunk(
-                cfg, chunk_start, chunk_end, base_sums, existing
-            )
-            compiled += hours
-            chunk_start = chunk_end
-
-        # async_add_external_statistics only enqueues. Drain before returning
-        # so a subsequent compile of this entity reads a base that includes
-        # everything we just wrote - otherwise it would miss them and restart
-        # the cumulative series at zero. On the normal path only: if the loop
-        # above raised, nothing was written and there is nothing to drain.
-        await get_instance(self._hass).async_block_till_done()
+        try:
+            while chunk_start < window_end:
+                chunk_end = min(chunk_start + CHUNK_HOURS * HOUR, window_end)
+                base_sums, hours, existing = await self._async_compile_chunk(
+                    cfg, chunk_start, chunk_end, base_sums, existing
+                )
+                compiled += hours
+                chunk_start = chunk_end
+        finally:
+            # async_add_external_statistics only enqueues. Drain before
+            # returning so a subsequent compile reads a base, and a set of
+            # existing statistics, that include everything we just wrote.
+            #
+            # In `finally`, and this is load-bearing. A chunk that raises
+            # leaves the earlier chunks' writes on the queue, and the next
+            # compile derives density from a live read of `statistics_meta`
+            # - so it could see half of them, omit the rest from its window,
+            # and leave those statistics sparse. The next window after that
+            # finds no base in the preceding hour and restarts them at zero,
+            # permanently. The registry this replaced could not tear that way
+            # because it was saved inside the loop, independent of the queue.
+            await get_instance(self._hass).async_block_till_done()
 
         return compiled
 
@@ -203,17 +225,20 @@ class Compiler:
         trimmed = False
         if carried is None and not existing:
             # Nothing has ever been compiled for this entity, so there is no
-            # earlier series that a leading no_data would complete. All it
-            # could record is the sliver between the top of the first hour
-            # and the entity's first recordable state - and by the density
-            # invariant that sliver would earn the entity a no_data statistic
-            # that is then written, densely, forever. Start at the first
-            # whole hour whose state we actually know instead.
+            # earlier series that a leading no_data would complete. Compiling
+            # the first hour anyway would earn the entity a no_data statistic
+            # for the sliver before its first known state - and by the density
+            # invariant that statistic is then written forever. Start at the
+            # first whole hour whose state we know instead.
+            #
+            # This drops the whole first partial hour, not merely the sliver:
+            # any transitions already recorded in it go too, and no later run
+            # reaches back for them. That is the price of the durations
+            # summing to wall-clock time - a part-known hour cannot do both.
             #
             # Deliberately conditional on the entity having no statistics.
-            # Trimming
-            # hours once statistics exist would leave a hole, and the next
-            # run would find no base in the hour before its window and
+            # Trimming hours once statistics exist would leave a hole, and the
+            # next run would find no base in the hour before its window and
             # restart every cumulative sum at zero.
             if not transitions:
                 return base_sums, 0, existing
@@ -226,6 +251,14 @@ class Compiler:
             # Re-fold the same rows against the later boundary: the first
             # transition now falls before it and becomes the carried state.
             carried, transitions = canonicalise(cfg, rows, window_start)
+            if transitions and transitions[0][0] == window_start:
+                # The first state landed exactly on the hour, so the trim was
+                # a no-op and canonicalise left it as a transition. Nothing
+                # transitioned INTO it - this is the entity's first known
+                # state - so carry it instead, or its birth would be counted
+                # as an event purely because it fell on a minute boundary.
+                carried = transitions[0][1]
+                transitions = transitions[1:]
             trimmed = True
 
         if carried is None and not trimmed:

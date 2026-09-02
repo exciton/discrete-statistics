@@ -117,9 +117,15 @@ def test_source_state_no_data_is_ignored_at_runtime():
     assert cfg.resolve("no_data") is None
 
 
-def test_no_data_rejected_as_a_states_key():
-    with pytest.raises(vol.Invalid, match="no_data"):
-        parse([{"entity_id": "sensor.x", "states": {"no_data": "record"}}])
+def test_no_data_is_allowed_as_a_states_key_but_not_recorded_as_itself():
+    """A key is a raw source state and never becomes a statistic ID.
+
+    Recording it under its own name would collide with the compiler's
+    reserved band, so `record` still resolves to nothing - but the key
+    itself is accepted, which is what makes mapping it away possible.
+    """
+    cfg = parse([{"entity_id": "sensor.x", "states": {"no_data": "record"}}])[0]
+    assert cfg.resolve("no_data") is None
 
 
 def test_no_data_rejected_as_a_map_target():
@@ -256,3 +262,27 @@ def test_entity_config_from_entry_has_no_state_map():
     # to the default for every state.
     cfg = entity_config_from_entry({CONF_ENTITY_ID: "binary_sensor.a"}, {})
     assert cfg.states == {}
+
+
+def test_a_state_that_tokenises_to_no_data_can_be_mapped_away():
+    """The reserved band must not be a dead end.
+
+    A raw `No Data` would reach the compiler's own statistic ID if recorded
+    under its own name, so it is ignored by default - but mapping it
+    elsewhere is safe and must be allowed, because otherwise an entity that
+    reports it has no way to record that state at all.
+    """
+    cfg = parse([{"entity_id": "sensor.x", "states": {"No Data": "missing"}}])[0]
+    assert cfg.resolve("No Data") == "missing"
+
+
+def test_an_unmapped_state_tokenising_to_no_data_is_still_ignored():
+    cfg = parse([{"entity_id": "sensor.x", "default": "record"}])[0]
+    assert cfg.resolve("No Data") is None
+    assert cfg.resolve("no_data") is None
+    assert cfg.resolve("nodata") is None
+
+
+def test_a_map_target_tokenising_to_no_data_is_rejected():
+    with pytest.raises(vol.Invalid, match="no_data"):
+        parse([{"entity_id": "sensor.x", "states": {"weird": "No Data"}}])

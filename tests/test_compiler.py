@@ -56,7 +56,7 @@ async def recorder(recorder_mock, hass):
 
 
 async def existing(hass, entity_id=ENTITY):
-    """The statistic IDs the recorder holds for an entity - the new registry."""
+    """The statistic IDs the recorder holds for an entity."""
     await get_instance(hass).async_block_till_done()
     metadata = await get_instance(hass).async_add_executor_job(
         ft.partial(get_metadata, hass, statistic_source="discrete_statistics")
@@ -744,24 +744,6 @@ async def test_a_deleted_statistic_is_forgotten_not_recreated(recorder, freezer)
     assert off == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
 
 
-async def test_a_deleted_statistic_stays_deleted_for_a_fresh_compiler(
-    recorder, freezer
-):
-    """Nothing is cached: a new Compiler sees the same deletion."""
-    hass = recorder
-    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
-    await _seed_two_states(hass, freezer, start)
-
-    freezer.move_to(start + timedelta(hours=4))
-    await Compiler(hass).async_compile(cfg(), start.timestamp())
-
-    await _delete(hass, [DURATION_ON, COUNT_ON])
-    freezer.move_to(start + timedelta(hours=6))
-    await Compiler(hass).async_compile_incremental(cfg())
-
-    assert DURATION_ON not in await existing(hass)
-
-
 async def test_deleting_one_metric_sticks_until_its_state_recurs(recorder, freezer):
     """Deletion is per statistic now, not per state.
 
@@ -797,30 +779,13 @@ async def test_deleting_one_metric_sticks_until_its_state_recurs(recorder, freez
     assert DURATION_ON in await existing(hass)
 
 
-async def test_nothing_is_forgotten_while_its_statistic_exists(recorder, freezer):
-    """A healthy entity must keep every statistic it has."""
-    hass = recorder
-    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
-    await _seed_two_states(hass, freezer, start)
+async def test_a_healthy_entity_keeps_every_statistic_dense(recorder, freezer):
+    """The density invariant, asserted on rows rather than on ID membership.
 
-    freezer.move_to(start + timedelta(hours=4))
-    compiler = Compiler(hass)
-    await compiler.async_compile(cfg(), start.timestamp())
-    before = await existing(hass)
-    assert before
-
-    freezer.move_to(start + timedelta(hours=6))
-    await compiler.async_compile_incremental(cfg())
-
-    assert await existing(hass) == before
-
-
-async def test_renaming_a_helper_relabels_a_state_it_has_not_seen(recorder, freezer):
-    """The whole reason build_payloads takes the stored names.
-
-    `on` occurs only in the first hour, so a later compile never rebuilds
-    its metadata from a bucket. Without the display swap its chart label
-    would keep the old name until the state next occurred.
+    Membership alone proves nothing: nothing in this integration ever removes
+    a statistics_meta row, so `existing == before` holds however badly the
+    compile behaves. What must hold is that a state absent from the window
+    still gets a row in each of its hours, carrying its sum forward.
     """
     hass = recorder
     start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
@@ -829,14 +794,150 @@ async def test_renaming_a_helper_relabels_a_state_it_has_not_seen(recorder, free
     freezer.move_to(start + timedelta(hours=4))
     compiler = Compiler(hass)
     await compiler.async_compile(cfg(), start.timestamp())
-    assert await stored_name(hass, DURATION_ON) == "Grid Status: on (duration)"
 
-    renamed = EntityConfig(
-        entity_id=ENTITY, name="Mains Power", default="record_known", states={}
-    )
     freezer.move_to(start + timedelta(hours=6))
-    await compiler.async_compile_incremental(renamed)
+    await compiler.async_compile_incremental(cfg())
 
-    assert await stored_name(hass, DURATION_ON) == "Mains Power: on (duration)"
-    # And the state half is untouched, not replaced by its token.
-    assert await stored_name(hass, DURATION_OFF) == "Mains Power: off (duration)"
+    # "on" happened only in hour 0 and never again, so every later hour is a
+    # carried row: same sum, and a zero hourly value.
+    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=6))
+    assert on == [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    off = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=6))
+    assert off == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+    # And the two still tile the clock in every hour.
+    for hour, (a, b) in enumerate(zip(on, off)):
+        total = (a - (on[hour - 1] if hour else 0.0)) + (
+            b - (off[hour - 1] if hour else 0.0)
+        )
+        assert total == pytest.approx(1.0), (hour, a, b)
+
+
+async def test_a_statistic_created_in_one_chunk_stays_dense_in_the_next(
+    recorder, freezer, monkeypatch
+):
+    """The carry-forward of newly created statistics across a chunk seam.
+
+    A statistic first written in chunk N is NOT yet in the recorder's
+    metadata when chunk N+1 asks - the write is still queued - so the chunk
+    has to hand it forward itself. Without that, "on" would have no row in
+    hours 2 onward, and the next window would find no base in the hour before
+    it and restart the series at zero.
+    """
+    monkeypatch.setattr(compiler_module, "CHUNK_HOURS", 2)
+
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    # "on" ends inside the first chunk and never returns.
+    freezer.move_to(start + timedelta(minutes=30))
+    hass.states.async_set(ENTITY, "off")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=6))
+    compiler = Compiler(hass)
+    assert await compiler.async_compile(cfg(), start.timestamp()) == 6
+
+    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=6))
+    assert on == [0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+
+
+async def test_an_entity_with_no_recordable_state_compiles_nothing(recorder, freezer):
+    """Every row resolves to nothing, so there is no first hour to start at.
+
+    Without the guard the trim indexes transitions[0] on an empty list and
+    the hourly run for this entity dies with an IndexError.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    for offset in (timedelta(minutes=5), timedelta(hours=1), timedelta(hours=2)):
+        freezer.move_to(start + offset)
+        hass.states.async_set(ENTITY, "unavailable")
+        await hass.async_block_till_done()
+        hass.states.async_set(ENTITY, "unknown")
+        await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=4))
+    compiler = Compiler(hass)
+
+    # record_known ignores both states, so nothing is recordable at all.
+    assert await compiler.async_compile(cfg(), start.timestamp()) == 0
+    assert await existing(hass) == []
+
+
+OTHER = "binary_sensor.grid_status_pump"
+OTHER_DURATION_ON = "discrete_statistics:binary_sensor_grid_status_pump_on_duration"
+
+
+async def test_two_entities_never_write_into_each_others_statistics(
+    recorder, freezer
+):
+    """`belongs_to` is what keeps them apart, and it is load-bearing now.
+
+    The entity IDs are chosen so one slug is a prefix of the other at an
+    underscore boundary - the case that collided under the old ID scheme.
+    A filter that is too broad would have each compile write dense rows into
+    the other entity's series, and rename its metadata to its own name.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    other_cfg = EntityConfig(
+        entity_id=OTHER, name="Pump", default="record_known", states={}
+    )
+
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on")
+    hass.states.async_set(OTHER, "off")
+    await hass.async_block_till_done()
+    freezer.move_to(start + timedelta(hours=2))
+    hass.states.async_set(OTHER, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=4))
+    compiler = Compiler(hass)
+    await compiler.async_compile(cfg(), start.timestamp())
+    await compiler.async_compile(other_cfg, start.timestamp())
+
+    assert OTHER_DURATION_ON not in await existing(hass, ENTITY)
+    assert DURATION_ON not in await existing(hass, OTHER)
+
+    # Each keeps its own name, and its own values.
+    assert await stored_name(hass, DURATION_ON) == "Grid Status: on (duration)"
+    assert await stored_name(hass, OTHER_DURATION_ON) == "Pump: on (duration)"
+    assert await read_sums(hass, DURATION_ON, start, start + timedelta(hours=4)) == [
+        1.0,
+        2.0,
+        3.0,
+        4.0,
+    ]
+    assert await read_sums(
+        hass, OTHER_DURATION_ON, start, start + timedelta(hours=4)
+    ) == [0.0, 0.0, 1.0, 2.0]
+
+
+async def test_an_entitys_first_state_is_not_counted_as_a_transition(
+    recorder, freezer
+):
+    """Whether it lands on the hour must not change the count.
+
+    Mid-hour the trim makes it the carried state; on the hour the trim is a
+    no-op and canonicalise leaves it as a transition. Nothing transitioned
+    INTO an entity's first known state, so neither should be counted.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start + timedelta(hours=2))  # exactly on the hour
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=5))
+    compiler = Compiler(hass)
+    await compiler.async_compile(cfg(), start.timestamp())
+
+    counts = await read_sums(hass, COUNT_ON, start, start + timedelta(hours=5))
+    assert counts == [0, 0, 0]

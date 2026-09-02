@@ -89,7 +89,14 @@ def parse(statistic_id: str) -> tuple[str, str, str] | None:
 
 
 def belongs_to(statistic_id: str, entity_id: str) -> bool:
-    """True when this ID was built for this entity."""
+    """True when this ID was built for this entity.
+
+    Exact at the state/metric boundary, which is what the single-token state
+    buys. Not at the domain/object_id one: `sensor.a_b` and `sensor_a.b`
+    slugify identically, so both would claim the same IDs. That needs a
+    domain containing an underscore paired with an object_id that completes
+    it, and it collided under the previous scheme too.
+    """
     if (parts := parse(statistic_id)) is None:
         return False
     return parts[0] == slugify(entity_id, separator="_")

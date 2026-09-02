@@ -49,7 +49,8 @@ A pure pipeline with a single I/O boundary. Dependencies point one way:
 const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds, count)}
        ├─ statistic_ids     pure: build, parse and match an external statistic ID
        ├─ config ── canonicalise   pure: recorder rows -> canonical transitions
-       │        └─ config_flow    HA UI: entity -> EntityConfig, as a helper
+       │   │    └─ config_flow    HA UI: entity -> EntityConfig, as a helper
+       │   └─ statistic_ids       for the reserved-token comparison
        └─ payload           pure: buckets -> cumulative StatisticData rows
                 │
             compiler        the only module that touches the recorder
@@ -57,8 +58,9 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
             __init__        setup, hourly schedule, recompute service
 ```
 
-Everything except `compiler` is pure and testable without a `hass` instance. Keep it that way: if a change needs recorder access in a lower
-module, the design is drifting.
+Everything except `compiler` and `config_flow` is pure and testable without
+a `hass` instance. Keep it that way: if a change needs recorder access in a
+lower module, the design is drifting.
 
 `Compiler` is a class built from `(hass,)`; the entry points are its methods,
 not module-level functions.
@@ -67,11 +69,13 @@ the single implementation behind live compilation, catch-up after downtime, and
 backfill. They differ only in the start timestamp. Preserve that — it is what
 makes all three paths share one set of tests.
 
-The hourly run and the service do not call it directly: they call
+The hourly run does not call it directly: it calls
 `async_compile_incremental`, which is only watermark arithmetic
 (`watermark - (TRAILING_HOURS - 1) * HOUR`, or the entity's earliest state when
 there is no watermark) before delegating. Keep the derivation of `start` there
-and the compiling in `async_compile`.
+and the compiling in `async_compile`. The `recompute` service calls
+`async_compile` directly, because the whole point of its `start:` is to
+override that arithmetic — do not "tidy" it onto the incremental path.
 
 Configuration arrives from two sources. `hass.data[DOMAIN]["yaml_configs"]`
 is static; `["entry_configs"]` holds one `EntityConfig` per config entry;
@@ -94,9 +98,9 @@ derive per-bucket values. A sum that decreases is always a bug.
 
 **Rows are dense over every *known* statistic, not merely the states seen in
 the window.** `payload.build_payloads` takes `existing`, which `compiler`
-sources from the recorder's own `statistics_meta`. Emitting only the window's own states leaves a
-statistic with no row in the hour before the next window, so its cumulative
-base reads as zero and the series restarts — the sum goes down, and the loss
+sources from the recorder's own `statistics_meta`. Emitting only the window's
+own states leaves a statistic with no row in the hour before the next window,
+so its cumulative base reads as zero and the series restarts — the sum goes down, and the loss
 is permanent because the next run bases on the deflated rows.
 
 Density is also what makes the `mean` correct. Every row carries the hour's
@@ -235,6 +239,14 @@ Verified against 2026.8.3. Each of these was got wrong once.
   idempotent. It holds only when recomputation starts from a bucket whose base
   sum is known, which is why the base is read from the bucket *preceding* the
   window rather than the newest one.
+- `Compiler.async_compile` drains the recorder in a `finally`, not on the
+  success path. A chunk that raises leaves earlier chunks' writes queued, and
+  density is now read live from `statistics_meta` — so the next compile could
+  see half of them and leave the rest sparse.
+- The two `_async_existing` reads in an incremental compile are not
+  redundant. Reusing the first one — taken before `_async_watermark`'s
+  round-trips — makes a recently deleted statistic intermittently still
+  visible, and the deletion tests flaky about one run in three.
 - An `asyncio.Lock` in `hass.data` serialises the hourly run against the
   service. It is not reentrant: never call `compile_all` from inside it.
 

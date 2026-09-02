@@ -147,7 +147,7 @@ filled in.
 
 `no_data` has a `_duration` statistic only. Nothing transitions *into* it —
 it is what is left when no state can be carried in — so there is no
-`no_data_count`.
+`nodata_count`.
 
 A statistic is never *opened* with `no_data`, though. An entity's first state
 rarely lands exactly on the hour, and recording the few minutes before it would
@@ -224,8 +224,11 @@ card's `entities` list to be drawn.
 
 ## Backfilling
 
-Statistics are compiled forward from the moment the component is installed.
-To derive them from history the recorder still holds:
+A new helper compiles the entity's whole retained history on its first
+ordinary run — there is no watermark to trail, so there is nothing to do but
+start at the beginning. `recompute` is for the cases that first run cannot
+cover: re-attributing history after a configuration change, repairing a range,
+or filling in hours written before a feature existed.
 
 ```yaml
 action: discrete_statistics.recompute

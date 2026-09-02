@@ -54,14 +54,20 @@ class EntityConfig:
 
         None means carry-forward: the previous canonical state continues and
         no transition is counted.
-        """
-        # NO_DATA is reserved for the compiler. A source entity reporting it
-        # is ignored rather than allowed to merge with the reserved band.
-        # Compared as tokens because that is the granularity a statistic ID
-        # has: a state named "nodata" reaches the same ID as "no_data".
-        if state_token(raw_state) == _NO_DATA_TOKEN:
-            return None
 
+        The reserved band is checked on the RESULT, not the input. A statistic
+        ID carries only the state's token, so a raw state of `No Data` would
+        reach the same ID as the compiler's own `no_data` - but only if it is
+        recorded under its own name. Mapping it somewhere else is a perfectly
+        good answer, and testing the input would take that escape hatch away.
+        """
+        canonical = self._resolve(raw_state)
+        if canonical is not None and state_token(canonical) == _NO_DATA_TOKEN:
+            return None
+        return canonical
+
+    def _resolve(self, raw_state: str) -> str | None:
+        """Apply the disposition table and the default, without the guard."""
         if (disposition := self.states.get(raw_state)) is not None:
             if disposition == DISPOSITION_IGNORE:
                 return None
@@ -90,12 +96,14 @@ class EntityConfig:
 
 
 def _no_reserved_state(states: dict[str, str]) -> dict[str, str]:
-    """Reject the reserved NO_DATA name as a key or a map target."""
-    for key, value in states.items():
-        if state_token(key) == _NO_DATA_TOKEN:
-            raise vol.Invalid(
-                f"{NO_DATA!r} is reserved and cannot be used as a state key"
-            )
+    """Reject the reserved NO_DATA name as a map target.
+
+    Only a target becomes a canonical state, and only a canonical state
+    becomes part of a statistic ID. Keys are raw values read from the
+    recorder and are deliberately unrestricted - refusing them would make an
+    entity that genuinely reports `No Data` impossible to map anywhere.
+    """
+    for value in states.values():
         if state_token(value) == _NO_DATA_TOKEN:
             raise vol.Invalid(
                 f"{NO_DATA!r} is reserved and cannot be used as a map target"
