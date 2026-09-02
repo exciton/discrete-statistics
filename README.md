@@ -144,6 +144,13 @@ filled in.
 it is what is left when no state can be carried in — so there is no
 `no_data_count`.
 
+A statistic is never *opened* with `no_data`, though. An entity's first state
+rarely lands exactly on the hour, and recording the few minutes before it would
+give every entity a permanent `no_data` statistic describing nothing more than
+the moment it was switched on. Compilation starts at the first whole hour whose
+state is known, so most entities never grow a `no_data` statistic at all — and
+one that appears later is a genuine gap worth looking at.
+
 ## Charts
 
 Outages per day for the last week:

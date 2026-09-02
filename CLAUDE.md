@@ -158,6 +158,16 @@ cannot determine a real state — before an entity's first known state, or acros
 a gap whose source rows were purged. It has a duration statistic but no count:
 nothing ever transitions *into* it, so a count would be structurally zero.
 
+**A series never opens with `no_data`.** An entity's first state rarely lands
+on the hour, so compiling from the hour containing it would give every helper
+a `no_data` statistic recording the minutes before it — and by the density
+invariant that statistic is then written forever. `_async_compile_chunk`
+advances `window_start` to the first whole hour that begins in a recordable
+state instead. The trim is conditional on the registry holding nothing for the
+entity, and must stay that way: once statistics exist, skipping hours leaves a
+hole, and the next run finds no base in the hour before its window and restarts
+every cumulative sum at zero.
+
 **Nothing in this integration deletes statistics.** Recompute overwrites
 buckets it has source data for and leaves everything else alone, so a rebuild
 can never discard statistics whose source states have already been purged.

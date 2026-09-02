@@ -317,7 +317,14 @@ async def test_watermark_is_the_newest_hour_across_statistics(recorder):
     assert watermark == (start + timedelta(hours=3)).timestamp()
 
 
-async def test_missing_history_before_first_state_is_no_data(recorder, freezer):
+async def test_recompiling_back_past_known_history_is_no_data(recorder, freezer):
+    """Reaching back before an established series still yields no_data.
+
+    The leading no_data is trimmed only on an entity's first compile. Once
+    statistics exist, a recompute asked to start earlier than the entity's
+    history has a real gap to describe, and trimming it would leave a hole
+    the next run would read as a missing cumulative base.
+    """
     hass = recorder
     start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
     freezer.move_to(start + timedelta(hours=2))
@@ -329,10 +336,15 @@ async def test_missing_history_before_first_state_is_no_data(recorder, freezer):
     registry = Registry(hass)
     await registry.async_load()
     compiler = Compiler(hass, registry)
+
+    # First compile: establishes the series, and emits no no_data at all.
+    await compiler.async_compile(cfg(), start.timestamp())
+    assert DURATION_NO_DATA not in registry.statistic_ids_for(ENTITY)
+
+    # Second compile, reaching back before the first known state.
     await compiler.async_compile(cfg(), start.timestamp())
 
-    no_data = "discrete_statistics:binary_sensor_grid_status_no_data_duration"
-    sums = await read_sums(hass, no_data, start, start + timedelta(hours=4))
+    sums = await read_sums(hass, DURATION_NO_DATA, start, start + timedelta(hours=4))
     assert sums[-1] == pytest.approx(2.0)
 
 
@@ -439,6 +451,10 @@ async def test_no_data_has_no_count_statistic(recorder, freezer):
     registry = Registry(hass)
     await registry.async_load()
     compiler = Compiler(hass, registry)
+    # Twice: the first compile establishes the series, and only then does a
+    # start before the entity's history describe a gap rather than the
+    # trimmed opening sliver.
+    await compiler.async_compile(cfg(), start.timestamp())
     await compiler.async_compile(cfg(), start.timestamp())
 
     # The gap is real: the duration statistic exists and holds two hours.
@@ -566,3 +582,136 @@ async def test_hourly_values_roll_up_into_a_daily_mean_min_and_max(recorder, fre
     assert rows[0]["max"] == 1.0
     # The sum is untouched by the reduction: it stays the cumulative total.
     assert rows[0]["sum"] == pytest.approx(2.5)
+
+
+async def test_a_new_entity_does_not_open_with_no_data(recorder, freezer):
+    """The first compile starts at the first whole hour it knows.
+
+    An entity's first state almost never lands on the hour, so compiling
+    from the hour containing it would give every helper a permanent
+    no_data statistic recording a few minutes of ignorance.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start + timedelta(hours=2, minutes=23))
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=5))
+    registry = Registry(hass)
+    await registry.async_load()
+    compiler = Compiler(hass, registry)
+    hours = await compiler.async_compile(cfg(), start.timestamp())
+
+    assert DURATION_NO_DATA not in registry.statistic_ids_for(ENTITY)
+    assert COUNT_NO_DATA not in registry.statistic_ids_for(ENTITY)
+    # Hours 3 and 4 only: the partial hour 2 is dropped along with hours 0-1.
+    assert hours == 2
+    assert await read_sums(hass, DURATION_ON, start, start + timedelta(hours=5)) == [
+        1.0,
+        2.0,
+    ]
+
+
+async def test_a_first_state_on_the_hour_loses_nothing(recorder, freezer):
+    """No hour is trimmed when the first state already sits on a boundary."""
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start + timedelta(hours=2))
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=5))
+    registry = Registry(hass)
+    await registry.async_load()
+    compiler = Compiler(hass, registry)
+    await compiler.async_compile(cfg(), start.timestamp())
+
+    assert DURATION_NO_DATA not in registry.statistic_ids_for(ENTITY)
+    assert await read_sums(hass, DURATION_ON, start, start + timedelta(hours=5)) == [
+        1.0,
+        2.0,
+        3.0,
+    ]
+
+
+async def test_an_unknown_opening_state_is_trimmed_too(recorder, freezer):
+    """`unknown` is the usual first state, and it is not a state we record.
+
+    Trimming to the hour containing the first *row* would leave the gap in
+    place; it has to be the first row the config actually resolves.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start + timedelta(minutes=10))
+    hass.states.async_set(ENTITY, "unknown")
+    await hass.async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=2, minutes=30))
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=5))
+    registry = Registry(hass)
+    await registry.async_load()
+    compiler = Compiler(hass, registry)
+    await compiler.async_compile(cfg(), start.timestamp())
+
+    assert DURATION_NO_DATA not in registry.statistic_ids_for(ENTITY)
+    assert await read_sums(hass, DURATION_ON, start, start + timedelta(hours=5)) == [
+        1.0,
+        2.0,
+    ]
+
+
+async def test_the_incremental_first_run_is_trimmed(recorder, freezer):
+    """The watermark-less path is how a helper actually gets its first run."""
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start + timedelta(minutes=17))
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    freezer.move_to(start + timedelta(hours=1, minutes=30))
+    hass.states.async_set(ENTITY, "off")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=3))
+    registry = Registry(hass)
+    await registry.async_load()
+    compiler = Compiler(hass, registry)
+    await compiler.async_compile_incremental(cfg())
+
+    assert DURATION_NO_DATA not in registry.statistic_ids_for(ENTITY)
+    # Hours 1 and 2, and they still tile the clock exactly.
+    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=3))
+    off = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=3))
+    assert on == [0.5, 0.5]
+    assert off == [0.5, 1.5]
+
+
+async def test_nothing_is_compiled_until_a_whole_hour_is_known(recorder, freezer):
+    """A helper created mid-hour waits for the next one rather than inventing.
+
+    Hour 0 has completed, so there is an hour to compile - but it is only
+    known from 00:20, and the first hour known end to end has not finished
+    yet. Compiling hour 0 anyway is what used to manufacture the opening
+    no_data.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start + timedelta(minutes=20))
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=1, minutes=30))
+    registry = Registry(hass)
+    await registry.async_load()
+    compiler = Compiler(hass, registry)
+
+    assert await compiler.async_compile_incremental(cfg()) == 0
+    assert registry.statistic_ids_for(ENTITY) == []

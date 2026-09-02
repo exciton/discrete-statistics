@@ -59,8 +59,10 @@ START_MARGIN = 0.5
 # moves with the watermark on every run, the idempotent upsert would
 # overwrite already-correct duration rows downward, permanently. Widening
 # until a recordable state appears preserves carry-forward, and still leaves
-# the two legitimate no_data cases (an entity's pre-history, and a gap whose
-# rows were purged) falling through to no_data.
+# the legitimate no_data case - a gap whose rows were purged - falling
+# through to no_data. An entity's own pre-history is the other one, but it
+# only survives a recompute that reaches back past an established series;
+# on a first compile the opening no_data is trimmed instead.
 WIDENING_LOOKBACKS = (HOUR, 24 * HOUR, 30 * 24 * HOUR)
 
 
@@ -107,10 +109,10 @@ class Compiler:
         chunk_start = window_start
         while chunk_start < window_end:
             chunk_end = min(chunk_start + CHUNK_HOURS * HOUR, window_end)
-            base_sums = await self._async_compile_chunk(
+            base_sums, hours = await self._async_compile_chunk(
                 cfg, chunk_start, chunk_end, base_sums
             )
-            compiled += int((chunk_end - chunk_start) / HOUR)
+            compiled += hours
             chunk_start = chunk_end
 
         # async_add_external_statistics only enqueues. Drain before returning
@@ -149,8 +151,13 @@ class Compiler:
         window_start: float,
         window_end: float,
         base_sums: dict[str, float],
-    ) -> dict[str, float]:
-        """Compile one chunk, returning the sums to carry into the next."""
+    ) -> tuple[dict[str, float], int]:
+        """Compile one chunk.
+
+        Returns the sums to carry into the next chunk and the number of
+        hours actually compiled, which is fewer than the chunk holds when
+        the leading no_data is trimmed.
+        """
         rows = await self._async_history(cfg, window_start, window_end)
         carried, transitions = canonicalise(cfg, rows, window_start)
 
@@ -170,7 +177,34 @@ class Compiler:
                 if carried is not None:
                     break
 
-        if carried is None:
+        trimmed = False
+        if carried is None and not self._registry.statistic_ids_for(cfg.entity_id):
+            # Nothing has ever been compiled for this entity, so there is no
+            # earlier series that a leading no_data would complete. All it
+            # could record is the sliver between the top of the first hour
+            # and the entity's first recordable state - and by the density
+            # invariant that sliver would earn the entity a no_data statistic
+            # that is then written, densely, forever. Start at the first
+            # whole hour whose state we actually know instead.
+            #
+            # Deliberately conditional on the registry being empty. Trimming
+            # hours once statistics exist would leave a hole, and the next
+            # run would find no base in the hour before its window and
+            # restart every cumulative sum at zero.
+            if not transitions:
+                return base_sums, 0
+            first_known = transitions[0][0]
+            window_start = hour_start(first_known)
+            if window_start < first_known:
+                window_start += HOUR
+            if window_start >= window_end:
+                return base_sums, 0
+            # Re-fold the same rows against the later boundary: the first
+            # transition now falls before it and becomes the carried state.
+            carried, transitions = canonicalise(cfg, rows, window_start)
+            trimmed = True
+
+        if carried is None and not trimmed:
             _LOGGER.warning(
                 "No recoverable state for %s at %s; attributing the span to no_data",
                 cfg.entity_id,
@@ -206,7 +240,7 @@ class Compiler:
             async_add_external_statistics(self._hass, metadata, statistic_rows)
             next_sums[statistic_id] = statistic_rows[-1]["sum"]
 
-        return next_sums
+        return next_sums, int((window_end - window_start) / HOUR)
 
     async def _async_watermark(self, entity_id: str) -> float | None:
         """Return the newest compiled hour for an entity, or None.
