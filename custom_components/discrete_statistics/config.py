@@ -60,17 +60,23 @@ class EntityConfig:
         usually the most important state there is, and only the config knows
         that.
 
-        The reserved band is checked on the RESULT, not the input: a raw
-        `No Data` reaches the compiler's own ID only if recorded under its
-        own name, and testing the input would forbid mapping it away.
+        NO_DATA may be reached only on purpose. A device that happens to
+        report the string `no_data` must not slip into the compiler's own
+        band, because that would make "the device said this" and "we could
+        not tell" the same reading; but an operator who writes `no_data` as a
+        target is asking for exactly that, and is allowed it. The test is who
+        asked, not what the value is.
         """
-        if raw_state not in self.states and not is_recordable_state(raw_state):
+        chosen = raw_state in self.states
+        if not chosen and not is_recordable_state(raw_state):
+            # The operator picked the substitute, so this counts as chosen.
             raw_state = self.unrepresentable
+            chosen = True
 
         canonical = self._resolve(raw_state)
         if canonical is None:
             return None
-        if state_token(canonical) == _NO_DATA_TOKEN:
+        if not chosen and state_token(canonical) == _NO_DATA_TOKEN:
             return None
         if not is_recordable_state(canonical):
             # Named explicitly - `"": record` - but still not an ID.
@@ -107,9 +113,14 @@ class EntityConfig:
 
 
 def _usable_state_name(value: str) -> str:
-    """Reject a name that cannot itself become a statistic."""
+    """Reject a name that cannot itself become a statistic.
+
+    NO_DATA is allowed: naming it is how an operator says "I cannot
+    interpret this state, chart it as a gap". What stays forbidden is a
+    device reaching the band on its own, which `resolve` enforces.
+    """
     if state_token(value) == _NO_DATA_TOKEN:
-        raise vol.Invalid(f"{NO_DATA!r} is reserved and cannot be used here")
+        return value
     if not is_recordable_state(value):
         raise vol.Invalid(
             f"{value!r} does not produce a usable statistic ID"

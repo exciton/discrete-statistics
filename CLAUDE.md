@@ -176,10 +176,22 @@ rebuilt from the ID — the ID holds only the token — so a rename would
 otherwise never reach a state the entity has not been in for months, and
 neither would a change to `mean_type` or the units.
 
-**`no_data` is reserved.** It is what the compiler attributes a span to when it
-cannot determine a real state — before an entity's first known state, or across
-a gap whose source rows were purged. It has a duration statistic but no count:
-nothing ever transitions *into* it, so a count would be structurally zero.
+**`no_data` is reserved, but it can be chosen.** It is what the compiler
+attributes a span to when it cannot determine a real state — before an entity's
+first known state, or across a gap whose source rows were purged. A config may
+also name it, as `unrepresentable: no_data` or as a `states` target, which is
+how an operator says "I cannot interpret this, chart it as a gap".
+
+What stays forbidden is a device reaching the band *by itself*: a raw state
+that happens to be called `no_data` resolves to nothing instead, or the band
+would stop distinguishing "the device said this" from "we could not tell".
+`resolve` enforces that with the `chosen` flag — the test is who asked, not
+what the value is.
+
+Either way it has a duration statistic and no count. Transitions into it do
+exist once a config routes states there, so the absence is now a deliberate
+choice rather than a structural certainty: it is a band for spans we cannot
+describe, and counting them would measure our own ignorance.
 
 **A state that cannot form a statistic ID is substituted, before anything else
 looks at it.** `resolve` swaps in `cfg.unrepresentable` (default `unknown`) and

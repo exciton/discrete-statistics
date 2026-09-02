@@ -117,22 +117,6 @@ def test_source_state_no_data_is_ignored_at_runtime():
     assert cfg.resolve("no_data") is None
 
 
-def test_no_data_is_allowed_as_a_states_key_but_not_recorded_as_itself():
-    """A key is a raw source state and never becomes a statistic ID.
-
-    Recording it under its own name would collide with the compiler's
-    reserved band, so `record` still resolves to nothing - but the key
-    itself is accepted, which is what makes mapping it away possible.
-    """
-    cfg = parse([{"entity_id": "sensor.x", "states": {"no_data": "record"}}])[0]
-    assert cfg.resolve("no_data") is None
-
-
-def test_no_data_rejected_as_a_map_target():
-    with pytest.raises(vol.Invalid, match="no_data"):
-        parse([{"entity_id": "sensor.x", "states": {"weird": "no_data"}}])
-
-
 def test_invalid_default_rejected():
     with pytest.raises(vol.Invalid):
         parse([{"entity_id": "sensor.x", "default": "nonsense"}])
@@ -276,11 +260,6 @@ def test_an_unmapped_state_tokenising_to_no_data_is_still_ignored():
     assert cfg.resolve("nodata") is None
 
 
-def test_a_map_target_tokenising_to_no_data_is_rejected():
-    with pytest.raises(vol.Invalid, match="no_data"):
-        parse([{"entity_id": "sensor.x", "states": {"weird": "No Data"}}])
-
-
 def test_an_empty_state_is_treated_as_unknown():
     """The recorder stores NULL when an entity is removed or reloaded.
 
@@ -380,7 +359,7 @@ def test_the_unrepresentable_default_is_unchanged_behaviour():
 
 
 def test_an_unusable_unrepresentable_value_is_rejected():
-    for bad in ("", "!!!", "no_data"):
+    for bad in ("", "!!!"):
         with pytest.raises(vol.Invalid):
             parse([{"entity_id": "sensor.x", "unrepresentable": bad}])
 
@@ -395,3 +374,34 @@ def test_an_explicitly_recorded_blank_falls_back_rather_than_crashing():
         }]
     )[0]
     assert cfg.resolve("") == "unknown"
+
+
+def test_no_data_may_be_chosen_deliberately():
+    """The band means "we cannot say", which is what unrepresentable IS.
+
+    Allowed because the operator asked for it, not because the value is
+    special. Blank really does mean "broken" on some sensors.
+    """
+    cfg = parse([{"entity_id": "sensor.x", "unrepresentable": "no_data"}])[0]
+    assert cfg.resolve("") == "no_data"
+    assert cfg.resolve("!!!") == "no_data"
+
+
+def test_no_data_may_be_a_map_target():
+    """Same instruction by a different route."""
+    cfg = parse([{"entity_id": "sensor.x", "states": {"garbage": "no_data"}}])[0]
+    assert cfg.resolve("garbage") == "no_data"
+
+
+def test_a_device_still_cannot_reach_the_band_on_its_own():
+    """The rule is about who asked, not what the value is."""
+    cfg = parse([{"entity_id": "sensor.x", "default": "record"}])[0]
+    assert cfg.resolve("no_data") is None
+    assert cfg.resolve("No Data") is None
+    assert cfg.resolve("nodata") is None
+
+
+def test_an_explicit_record_of_a_no_data_named_state_is_honoured():
+    """`states` naming it IS the operator asking."""
+    cfg = parse([{"entity_id": "sensor.x", "states": {"no_data": "record"}}])[0]
+    assert cfg.resolve("no_data") == "no_data"

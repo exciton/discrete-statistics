@@ -1011,3 +1011,46 @@ async def test_a_reloaded_entity_is_recorded_as_unknown_under_record(
             unknown[hour] - (unknown[hour - 1] if hour else 0.0)
         )
         assert spent == pytest.approx(1.0), hour
+
+
+async def test_a_state_mapped_to_no_data_charts_as_a_gap(recorder, freezer):
+    """Deliberate no_data has to survive the whole pipeline, not just resolve.
+
+    It is the one canonical state with no count metric, so the payload
+    builder has a special case for it - and the durations must still tile
+    the clock exactly.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    as_gap = EntityConfig(
+        entity_id=ENTITY,
+        name="Grid Status",
+        default="record",
+        states={},
+        unrepresentable="no_data",
+    )
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    freezer.move_to(start + timedelta(hours=1))
+    hass.states.async_set(ENTITY, "")
+    await hass.async_block_till_done()
+    freezer.move_to(start + timedelta(hours=3))
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=4))
+    await Compiler(hass).async_compile(as_gap, start.timestamp())
+
+    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=4))
+    gap = await read_sums(hass, DURATION_NO_DATA, start, start + timedelta(hours=4))
+    assert on == [1.0, 1.0, 1.0, 2.0]
+    assert gap == [0.0, 1.0, 2.0, 2.0]
+    for hour in range(4):
+        spent = (on[hour] - (on[hour - 1] if hour else 0.0)) + (
+            gap[hour] - (gap[hour - 1] if hour else 0.0)
+        )
+        assert spent == pytest.approx(1.0), hour
+    # Still duration-only, even though something transitioned into it.
+    assert COUNT_NO_DATA not in await existing(hass)

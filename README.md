@@ -69,6 +69,11 @@ is substituted *before* `default` is applied, so the stock `unknown` behaves
 exactly like a real `unknown` — ignored by `record_known`, recorded by
 `record`.
 
+`no_data` is a legal answer for both `unrepresentable:` and a `states:` target
+— that is how you say "I cannot interpret this state, chart it as a gap". A
+device cannot reach that band on its own, though: a sensor that literally
+reports the string `no_data` is ignored unless your config names it.
+
 A blank state often carries real meaning, so an entry in `states:` beats the
 substitution. A text sensor that reports `""` for "no error" wants:
 
@@ -169,9 +174,9 @@ purged — it attributes the time to `no_data`. Durations therefore always
 sum to 24h per day, and gaps are visible in the chart rather than silently
 filled in.
 
-`no_data` has a `_duration` statistic only. Nothing transitions *into* it —
-it is what is left when no state can be carried in — so there is no
-`nodata_count`.
+`no_data` has a `_duration` statistic only, whether the compiler chose it or
+your config did: it measures time nobody can account for, and counting those
+spans would tell you nothing.
 
 A state that cannot be recorded at all is treated as `unknown` rather than as
 a gap: an empty one, which Home Assistant produces when an entity is removed
