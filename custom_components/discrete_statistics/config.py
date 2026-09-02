@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from types import MappingProxyType
 from typing import Any, Iterable, Mapping
 
 import voluptuous as vol
@@ -39,27 +38,15 @@ class EntityConfig:
     default: str
     states: Mapping[str, str] = field(default_factory=dict)
 
-    def __post_init__(self) -> None:
-        # Freeze the mapping so the dataclass is genuinely immutable and
-        # hashable, which lets configs be used as dict keys and set members.
-        object.__setattr__(self, "states", MappingProxyType(dict(self.states)))
-
-    def __hash__(self) -> int:
-        return hash(
-            (self.entity_id, self.name, self.default, tuple(sorted(self.states.items())))
-        )
-
     def resolve(self, raw_state: str) -> str | None:
         """Return the canonical state for a raw state, or None to ignore it.
 
         None means carry-forward: the previous canonical state continues and
         no transition is counted.
 
-        The reserved band is checked on the RESULT, not the input. A statistic
-        ID carries only the state's token, so a raw state of `No Data` would
-        reach the same ID as the compiler's own `no_data` - but only if it is
-        recorded under its own name. Mapping it somewhere else is a perfectly
-        good answer, and testing the input would take that escape hatch away.
+        The reserved band is checked on the RESULT, not the input: a raw
+        `No Data` reaches the compiler's own ID only if recorded under its
+        own name, and testing the input would forbid mapping it away.
         """
         canonical = self._resolve(raw_state)
         if canonical is not None and state_token(canonical) == _NO_DATA_TOKEN:
@@ -98,10 +85,9 @@ class EntityConfig:
 def _no_reserved_state(states: dict[str, str]) -> dict[str, str]:
     """Reject the reserved NO_DATA name as a map target.
 
-    Only a target becomes a canonical state, and only a canonical state
-    becomes part of a statistic ID. Keys are raw values read from the
-    recorder and are deliberately unrestricted - refusing them would make an
-    entity that genuinely reports `No Data` impossible to map anywhere.
+    Only a target becomes a canonical state, and only those reach an ID.
+    Keys are raw recorder values and stay unrestricted, or an entity that
+    genuinely reports `No Data` could not be mapped anywhere.
     """
     for value in states.values():
         if state_token(value) == _NO_DATA_TOKEN:

@@ -150,13 +150,6 @@ def test_name_is_carried_through():
     assert cfg.name == "Grid Status"
 
 
-def test_entity_config_is_hashable():
-    cfg = EntityConfig(
-        entity_id="sensor.x", name=None, default="record_known", states={}
-    )
-    assert isinstance(hash(cfg), int)
-
-
 def test_disposition_keyword_is_not_treated_as_a_map_target():
     [cfg] = parse(
         [

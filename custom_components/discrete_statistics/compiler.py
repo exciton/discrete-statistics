@@ -36,36 +36,23 @@ CHUNK_HOURS = 24 * 7
 
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
-# `state_changes_during_period` selects the start-time state with a strict
-# `last_updated_ts < start_time` and the changes with a strict
-# `last_updated_ts > start_time`, so a state recorded exactly on the window
-# boundary is returned by neither. Asking from a moment earlier makes it fall
-# into the changes half, where it becomes a transition contributing zero
-# seconds and one count; canonicalise() folds everything strictly before
-# window_start into the carried state, so the extra rows are harmless.
+# Both of `state_changes_during_period`'s queries compare strictly, so a
+# state landing exactly on window_start is returned by neither. Querying from
+# slightly earlier moves it into the changes half, where canonicalise folds
+# it into the carried state.
 #
-# The margin is a half second, not a whole one. window_start is always an
-# exact multiple of 3600.0, so subtracting 1.0 would land on another exact
-# integer second - a timestamp a state is just as likely to carry, which
-# would move the hole rather than close it. Anything finer than a
-# microsecond is no use either: the value goes through
-# datetime.fromtimestamp, whose resolution is microseconds, so a 1-ULP
-# offset at epoch scale (~2.4e-7 s) rounds straight back to window_start.
+# Half a second, not a whole one: window_start is always an exact multiple of
+# 3600.0, so 1.0 would land on another integer second and move the hole
+# rather than close it. Anything below a microsecond rounds straight back,
+# datetime.fromtimestamp being microsecond-resolution.
 START_MARGIN = 0.5
 
-# Lookbacks tried, in order, when the rows returned for a window contain a
-# state at window_start but every one of them resolves to nothing (an
-# ignored state, or an unlisted one under `default: ignore`).
+# Tried in order when every row at window_start resolves to nothing.
 # `include_start_time_state` returns exactly ONE row before the boundary, so
-# a single ignored row there hides the perfectly good state behind it. The
-# whole span would then be attributed to no_data — and because window_start
-# moves with the watermark on every run, the idempotent upsert would
-# overwrite already-correct duration rows downward, permanently. Widening
-# until a recordable state appears preserves carry-forward, and still leaves
-# the legitimate no_data case - a gap whose rows were purged - falling
-# through to no_data. An entity's own pre-history is the other one, but it
-# only survives a recompute that reaches back past an established series;
-# on a first compile the opening no_data is trimmed instead.
+# a single ignored row there hides the good state behind it - and since
+# window_start moves with the watermark, the idempotent upsert would then
+# overwrite correct duration rows downward, permanently. A purged gap still
+# falls through to no_data, which is legitimate.
 WIDENING_LOOKBACKS = (HOUR, 24 * HOUR, 30 * 24 * HOUR)
 
 
@@ -82,11 +69,9 @@ class Compiler:
     async def _async_existing(self, entity_id: str) -> dict[str, str]:
         """Return {statistic_id: stored name} for one entity's statistics.
 
-        The recorder's own metadata is the record of which statistics an
-        entity has. There is no separate index to keep in step with it: an
-        ID carries its entity and metric in a fixed shape, so `belongs_to`
-        recovers the association, and a statistic the user has deleted is
-        simply absent here and stops being written.
+        The recorder's metadata is the only record of which statistics an
+        entity has - `belongs_to` recovers the association from the ID - so a
+        statistic the user deleted is absent here and stops being written.
         """
         metadata = await get_instance(self._hass).async_add_executor_job(
             ft.partial(get_metadata, self._hass, statistic_source=DOMAIN)
@@ -112,15 +97,12 @@ class Compiler:
                 return 0
         else:
             start = watermark - (TRAILING_HOURS - 1) * HOUR
-        # `existing` is deliberately NOT handed on: async_compile reads it
-        # again for itself. That looks like a wasted query - the filter
-        # bypasses the recorder's metadata cache, so it is a real one - but
-        # reusing this read makes the deletion tests flaky, one run in three.
-        # The read above happens before _async_watermark's round-trips; the
-        # one in async_compile happens after them, and only the later view
-        # reliably reflects a statistic deleted moments earlier. Reading
-        # density from a stale view omits statistics from the window and
-        # leaves them sparse, which is unrecoverable. Do not merge the two.
+        # `existing` is deliberately NOT handed on. It looks like a wasted
+        # query, but this read happens before _async_watermark's round-trips
+        # and only the later one in async_compile reliably reflects a
+        # statistic deleted moments earlier. Merging them makes the deletion
+        # tests flaky one run in three, and a stale view leaves statistics
+        # sparse, which cannot be repaired.
         return await self.async_compile(cfg, start)
 
     async def async_compile(
@@ -152,18 +134,11 @@ class Compiler:
                 compiled += hours
                 chunk_start = chunk_end
         finally:
-            # async_add_external_statistics only enqueues. Drain before
-            # returning so a subsequent compile reads a base, and a set of
-            # existing statistics, that include everything we just wrote.
-            #
-            # In `finally`, and this is load-bearing. A chunk that raises
-            # leaves the earlier chunks' writes on the queue, and the next
-            # compile derives density from a live read of `statistics_meta`
-            # - so it could see half of them, omit the rest from its window,
-            # and leave those statistics sparse. The next window after that
-            # finds no base in the preceding hour and restarts them at zero,
-            # permanently. The registry this replaced could not tear that way
-            # because it was saved inside the loop, independent of the queue.
+            # async_add_external_statistics only enqueues, and density is now
+            # read live from statistics_meta. In `finally` because a chunk
+            # that raises leaves earlier chunks' writes queued: the next
+            # compile would then see half of them, leave the rest sparse, and
+            # the window after that would restart those at zero.
             await get_instance(self._hass).async_block_till_done()
 
         return compiled
@@ -199,75 +174,18 @@ class Compiler:
     ) -> tuple[dict[str, float], int, dict[str, str]]:
         """Compile one chunk.
 
-        Returns the sums to carry into the next chunk, the number of hours
-        actually compiled - fewer than the chunk holds when the leading
-        no_data is trimmed - and the entity's statistics including any this
-        chunk created, so the next chunk keeps them dense.
+        Returns the sums to carry into the next chunk, the hours actually
+        compiled, and the entity's statistics including any this chunk
+        created - which the recorder cannot report yet, its writes still
+        being queued, and which the next chunk needs to stay dense.
         """
         rows = await self._async_history(cfg, window_start, window_end)
-        carried, transitions = canonicalise(cfg, rows, window_start)
-
-        if carried is None and any(
-            row.last_changed_timestamp < window_start for row in rows
-        ):
-            # A state existed before window_start, it was merely ignored.
-            # Look further back for the last recordable one. Every extra row
-            # a wider query returns lies before window_start, so it can only
-            # change the carried state; the transitions inside the window are
-            # unaffected.
-            for lookback in WIDENING_LOOKBACKS:
-                wider = await self._async_history(
-                    cfg, window_start - lookback, window_end
-                )
-                carried, transitions = canonicalise(cfg, wider, window_start)
-                if carried is not None:
-                    break
-
-        trimmed = False
-        if carried is None and not existing:
-            # Nothing has ever been compiled for this entity, so there is no
-            # earlier series that a leading no_data would complete. Compiling
-            # the first hour anyway would earn the entity a no_data statistic
-            # for the sliver before its first known state - and by the density
-            # invariant that statistic is then written forever. Start at the
-            # first whole hour whose state we know instead.
-            #
-            # This drops the whole first partial hour, not merely the sliver:
-            # any transitions already recorded in it go too, and no later run
-            # reaches back for them. That is the price of the durations
-            # summing to wall-clock time - a part-known hour cannot do both.
-            #
-            # Deliberately conditional on the entity having no statistics.
-            # Trimming hours once statistics exist would leave a hole, and the
-            # next run would find no base in the hour before its window and
-            # restart every cumulative sum at zero.
-            if not transitions:
-                return base_sums, 0, existing
-            first_known = transitions[0][0]
-            window_start = hour_start(first_known)
-            if window_start < first_known:
-                window_start += HOUR
-            if window_start >= window_end:
-                return base_sums, 0, existing
-            # Re-fold the same rows against the later boundary: the first
-            # transition now falls before it and becomes the carried state.
-            carried, transitions = canonicalise(cfg, rows, window_start)
-            if transitions and transitions[0][0] == window_start:
-                # The first state landed exactly on the hour, so the trim was
-                # a no-op and canonicalise left it as a transition. Nothing
-                # transitioned INTO it - this is the entity's first known
-                # state - so carry it instead, or its birth would be counted
-                # as an event purely because it fell on a minute boundary.
-                carried = transitions[0][1]
-                transitions = transitions[1:]
-            trimmed = True
-
-        if carried is None and not trimmed:
-            _LOGGER.warning(
-                "No recoverable state for %s at %s; attributing the span to no_data",
-                cfg.entity_id,
-                _as_datetime(window_start).isoformat(),
-            )
+        opened = await self._async_open_window(
+            cfg, rows, window_start, window_end, existing
+        )
+        if opened is None:
+            return base_sums, 0, existing
+        window_start, carried, transitions = opened
 
         buckets = bucket(carried, transitions, window_start, window_end)
 
@@ -284,12 +202,76 @@ class Compiler:
         for statistic_id, (metadata, statistic_rows) in payloads.items():
             async_add_external_statistics(self._hass, metadata, statistic_rows)
             next_sums[statistic_id] = statistic_rows[-1]["sum"]
-            # A statistic created by this chunk is not in the recorder's
-            # metadata yet - the write is still queued - so carry it forward
-            # ourselves or the next chunk would drop it and break density.
             next_existing[statistic_id] = metadata["name"]
 
         return next_sums, int((window_end - window_start) / HOUR), next_existing
+
+    async def _async_open_window(
+        self,
+        cfg: EntityConfig,
+        rows: list,
+        window_start: float,
+        window_end: float,
+        existing: dict[str, str],
+    ) -> tuple[float, str | None, list[tuple[float, str]]] | None:
+        """Decide where the window opens and in what state.
+
+        Returns (window_start, carried, transitions), or None when there is
+        nothing to compile.
+        """
+        carried, transitions = canonicalise(cfg, rows, window_start)
+
+        if carried is None and any(
+            row.last_changed_timestamp < window_start for row in rows
+        ):
+            # A state existed before window_start, it was merely ignored.
+            # Look further back for the last recordable one. Every extra row
+            # a wider query returns lies before window_start, so it can only
+            # change the carried state.
+            for lookback in WIDENING_LOOKBACKS:
+                wider = await self._async_history(
+                    cfg, window_start - lookback, window_end
+                )
+                carried, transitions = canonicalise(cfg, wider, window_start)
+                if carried is not None:
+                    break
+
+        if carried is None and not existing:
+            # Nothing has ever been compiled for this entity, so a leading
+            # no_data would complete no earlier series - it would only earn
+            # the entity a no_data statistic to write densely forever. Open
+            # at the first whole hour whose state we know instead, paying the
+            # whole first partial hour: a part-known hour cannot both be
+            # recorded and total wall-clock time.
+            #
+            # Conditional on the entity having no statistics, and must stay
+            # so. Skipping hours once statistics exist leaves a hole, and the
+            # next run finds no base in the hour before its window and
+            # restarts every cumulative sum at zero.
+            if not transitions:
+                return None
+            first_known = transitions[0][0]
+            window_start = hour_start(first_known)
+            if window_start < first_known:
+                window_start += HOUR
+            if window_start >= window_end:
+                return None
+            carried, transitions = canonicalise(cfg, rows, window_start)
+            if transitions and transitions[0][0] == window_start:
+                # Nothing transitioned INTO an entity's first known state, so
+                # carry it rather than counting its birth as an event just
+                # because it fell on the hour.
+                carried = transitions[0][1]
+                transitions = transitions[1:]
+            return window_start, carried, transitions
+
+        if carried is None:
+            _LOGGER.warning(
+                "No recoverable state for %s at %s; attributing the span to no_data",
+                cfg.entity_id,
+                _as_datetime(window_start).isoformat(),
+            )
+        return window_start, carried, transitions
 
     async def _async_watermark(self, statistic_ids: Collection[str]) -> float | None:
         """Return the newest compiled hour for an entity, or None.

@@ -5,15 +5,13 @@ An ID is three parts joined by underscores:
     discrete_statistics:<entity slug>_<state token>_<metric>
 
 The state is slugified with *no* separator, so it is always exactly one
-token. That is what makes the ID readable from the right - the last token is
-the metric, the second-to-last is the state, and everything before is the
-entity. Without it `climate.kitchen` in state `heat_cool` and
-`climate.kitchen_heat` in state `cool` produce the same ID and write to the
-same series.
+token, and the ID reads back from the right. Without that,
+`climate.kitchen`/`heat_cool` and `climate.kitchen_heat`/`cool` produce the
+same ID and write to the same series.
 
-The state token is lossy on purpose: `heat_cool` and `heatcool` collapse
-together and are recorded as one statistic, which behaves like a free state
-mapping. The readable state survives in the metadata name.
+The token is lossy on purpose - `heat_cool` and `heatcool` become one
+statistic, which behaves like a free state mapping - and the readable state
+survives in the metadata name.
 """
 
 from __future__ import annotations
@@ -41,10 +39,9 @@ class InvalidStatisticIdError(ValueError):
 def state_token(state: str) -> str:
     """Return the single-token form of a state, as it appears in an ID.
 
-    Two states with the same token are the same statistic. Callers that
-    build payloads must fold their buckets by this, not by the raw state,
-    or one state's seconds would overwrite the other's instead of adding
-    to them - and the durations would stop summing to wall-clock time.
+    Two states with the same token are the same statistic, so callers must
+    fold their buckets by this rather than by the raw state - otherwise one
+    state's seconds overwrite the other's instead of adding.
     """
     return slugify(state, separator="")
 
@@ -74,10 +71,8 @@ def build(entity_id: str, state: str, metric: str) -> str:
 def parse(statistic_id: str) -> tuple[str, str, str] | None:
     """Return (entity_slug, state_token, metric), or None if it is not ours.
 
-    Reads from the right, which is only unambiguous because the state is a
-    single token. A None result means the ID was not built by `build` -
-    it has been renamed by hand in Settings > System > Tools > Statistics,
-    or it predates this scheme.
+    Unambiguous only because the state is a single token. None means the ID
+    was not built by `build`: renamed by hand, or from an older scheme.
     """
     domain, _, object_id = statistic_id.partition(":")
     if domain != DOMAIN or object_id.count("_") < 2:
@@ -91,11 +86,9 @@ def parse(statistic_id: str) -> tuple[str, str, str] | None:
 def belongs_to(statistic_id: str, entity_id: str) -> bool:
     """True when this ID was built for this entity.
 
-    Exact at the state/metric boundary, which is what the single-token state
-    buys. Not at the domain/object_id one: `sensor.a_b` and `sensor_a.b`
-    slugify identically, so both would claim the same IDs. That needs a
-    domain containing an underscore paired with an object_id that completes
-    it, and it collided under the previous scheme too.
+    Exact at the state boundary. Not at the domain/object_id one:
+    `sensor.a_b` and `sensor_a.b` slugify alike and would claim each other's
+    IDs, as they did under the previous scheme too.
     """
     if (parts := parse(statistic_id)) is None:
         return False
