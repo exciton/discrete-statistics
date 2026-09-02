@@ -323,3 +323,75 @@ def test_an_ignored_state_stays_ignored():
     """Ignoring means carry-forward."""
     cfg = parse([{"entity_id": "sensor.x", "states": {"blip": "ignore"}}])[0]
     assert cfg.resolve("blip") is None
+
+
+def test_an_explicit_mapping_beats_the_unrepresentable_substitution():
+    """Blank is the most important state a text error sensor has.
+
+    An error sensor reports "" for "no error", so it must be mappable. The
+    substitution is a fallback for states nobody has named, not an override
+    of the config.
+    """
+    cfg = parse([{"entity_id": "sensor.x", "states": {"": "ok"}}])[0]
+    assert cfg.resolve("") == "ok"
+
+
+def test_the_unrepresentable_option_catches_what_is_not_named():
+    cfg = parse([{"entity_id": "sensor.x", "unrepresentable": "ok"}])[0]
+    assert cfg.resolve("") == "ok"
+    assert cfg.resolve("!!!") == "ok"
+    # A real unknown is untouched by it.
+    assert cfg.resolve("unknown") is None
+
+
+def test_the_two_compose_with_the_explicit_entry_first():
+    cfg = parse(
+        [{
+            "entity_id": "sensor.x",
+            "unrepresentable": "weird",
+            "states": {"": "ok"},
+        }]
+    )[0]
+    assert cfg.resolve("") == "ok"
+    assert cfg.resolve("!!!") == "weird"
+
+
+def test_the_substitution_still_runs_through_the_default():
+    """Not a direct answer, or it would override `default` silently.
+
+    This is what keeps `unrepresentable: unknown` a genuine no-op: it must
+    still be ignored by record_known exactly as a real unknown would be.
+    """
+    known = parse([{"entity_id": "sensor.x", "default": "record_known"}])[0]
+    assert known.resolve("") is None
+    recorded = parse([{"entity_id": "sensor.x", "default": "record"}])[0]
+    assert recorded.resolve("") == "unknown"
+
+    # And a substitute that is not an ignored state is recorded either way.
+    both = parse(
+        [{"entity_id": "sensor.x", "unrepresentable": "ok"}]
+    )[0]
+    assert both.resolve("") == "ok"
+
+
+def test_the_unrepresentable_default_is_unchanged_behaviour():
+    cfg = parse([{"entity_id": "sensor.x"}])[0]
+    assert cfg.unrepresentable == "unknown"
+
+
+def test_an_unusable_unrepresentable_value_is_rejected():
+    for bad in ("", "!!!", "no_data"):
+        with pytest.raises(vol.Invalid):
+            parse([{"entity_id": "sensor.x", "unrepresentable": bad}])
+
+
+def test_an_explicitly_recorded_blank_falls_back_rather_than_crashing():
+    """`"": record` names it but it still cannot become an ID."""
+    cfg = parse(
+        [{
+            "entity_id": "sensor.x",
+            "default": "record",
+            "states": {"": "record"},
+        }]
+    )[0]
+    assert cfg.resolve("") == "unknown"

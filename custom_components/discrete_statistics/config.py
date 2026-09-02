@@ -25,6 +25,7 @@ _NO_DATA_TOKEN = state_token(NO_DATA)
 
 CONF_DEFAULT = "default"
 CONF_STATES = "states"
+CONF_UNREPRESENTABLE = "unrepresentable"
 
 DEFAULTS = (DEFAULT_RECORD, DEFAULT_RECORD_KNOWN, DEFAULT_IGNORE)
 
@@ -37,6 +38,11 @@ class EntityConfig:
     name: str | None
     default: str
     states: Mapping[str, str] = field(default_factory=dict)
+    # What a state that cannot become a statistic ID is recorded as. The
+    # substitution happens before the default is applied, so this composes
+    # with it rather than overriding it: the stock `unknown` is ignored by
+    # `record_known` exactly as a real `unknown` would be.
+    unrepresentable: str = STATE_UNKNOWN
 
     def resolve(self, raw_state: str) -> str | None:
         """Return the canonical state for a raw state, or None to ignore it.
@@ -44,26 +50,31 @@ class EntityConfig:
         None means carry-forward: the previous canonical state continues and
         no transition is counted.
 
+        A state that cannot be represented in an ID - an empty one, which the
+        recorder stores as NULL when an entity is removed or reloaded - is
+        substituted before anything else looks at it, so it inherits a real
+        state's disposition rather than needing a rule of its own.
+
+        An explicit entry in `states` wins over that substitution. Blank can
+        carry real meaning: for a text sensor reporting an error, it is
+        usually the most important state there is, and only the config knows
+        that.
+
         The reserved band is checked on the RESULT, not the input: a raw
         `No Data` reaches the compiler's own ID only if recorded under its
         own name, and testing the input would forbid mapping it away.
-
-        A state that cannot be represented in an ID at all - an empty one,
-        which the recorder stores as NULL when an entity is removed or
-        reloaded - is converted to `unknown` BEFORE any of that. It is not an
-        absence of data, which is what no_data means; it is a state we cannot
-        name, which is what `unknown` already means. Converting first rather
-        than special-casing after means it inherits whatever disposition
-        `unknown` has - ignored under record_known, recorded under record, or
-        whatever the states map says.
         """
-        if not is_recordable_state(raw_state):
-            raw_state = STATE_UNKNOWN
+        if raw_state not in self.states and not is_recordable_state(raw_state):
+            raw_state = self.unrepresentable
+
         canonical = self._resolve(raw_state)
         if canonical is None:
             return None
         if state_token(canonical) == _NO_DATA_TOKEN:
             return None
+        if not is_recordable_state(canonical):
+            # Named explicitly - `"": record` - but still not an ID.
+            canonical = self._resolve(self.unrepresentable)
         return canonical
 
     def _resolve(self, raw_state: str) -> str | None:
@@ -95,6 +106,17 @@ class EntityConfig:
         return None  # DEFAULT_IGNORE
 
 
+def _usable_state_name(value: str) -> str:
+    """Reject a name that cannot itself become a statistic."""
+    if state_token(value) == _NO_DATA_TOKEN:
+        raise vol.Invalid(f"{NO_DATA!r} is reserved and cannot be used here")
+    if not is_recordable_state(value):
+        raise vol.Invalid(
+            f"{value!r} does not produce a usable statistic ID"
+        )
+    return value
+
+
 def _usable_map_targets(states: dict[str, str]) -> dict[str, str]:
     """Reject map targets that cannot become a statistic.
 
@@ -103,17 +125,8 @@ def _usable_map_targets(states: dict[str, str]) -> dict[str, str]:
     genuinely reports `No Data` could not be mapped anywhere.
     """
     for value in states.values():
-        if value in (DISPOSITION_RECORD, DISPOSITION_IGNORE):
-            continue
-        if state_token(value) == _NO_DATA_TOKEN:
-            raise vol.Invalid(
-                f"{NO_DATA!r} is reserved and cannot be used as a map target"
-            )
-        if not is_recordable_state(value):
-            raise vol.Invalid(
-                f"{value!r} cannot be used as a map target: it does not "
-                f"produce a usable statistic ID"
-            )
+        if value not in (DISPOSITION_RECORD, DISPOSITION_IGNORE):
+            _usable_state_name(value)
     return states
 
 
@@ -140,6 +153,9 @@ ENTITY_SCHEMA = vol.Schema(
         vol.Required(CONF_ENTITY_ID): cv.entity_id,
         vol.Optional(CONF_NAME): vol.Any(str, None),
         vol.Optional(CONF_DEFAULT, default=DEFAULT_RECORD_KNOWN): vol.In(DEFAULTS),
+        vol.Optional(CONF_UNREPRESENTABLE, default=STATE_UNKNOWN): vol.All(
+            cv.string, _usable_state_name
+        ),
         vol.Optional(CONF_STATES, default=dict): vol.All(
             {cv.string: cv.string}, _usable_map_targets
         ),
@@ -153,6 +169,7 @@ def _to_entity_config(raw: dict[str, Any]) -> EntityConfig:
         name=raw.get(CONF_NAME),
         default=raw[CONF_DEFAULT],
         states=raw[CONF_STATES],
+        unrepresentable=raw[CONF_UNREPRESENTABLE],
     )
 
 
@@ -188,4 +205,7 @@ def entity_config_from_entry(
         entity_id=data[CONF_ENTITY_ID],
         name=options.get(CONF_NAME) or None,
         default=options.get(CONF_DEFAULT, DEFAULT_RECORD_KNOWN),
+        # Not in the options flow yet; reading it here keeps the two config
+        # sources symmetric so adding the field is only a form change.
+        unrepresentable=options.get(CONF_UNREPRESENTABLE) or STATE_UNKNOWN,
     )

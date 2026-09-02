@@ -48,6 +48,7 @@ change.
 | `name` | the entity's ID | used in statistic display names |
 | `default` | `record_known` | disposition for states not listed |
 | `states` | `{}` | per-state overrides |
+| `unrepresentable` | `unknown` | what a blank or unusable state is recorded as |
 
 `default` accepts:
 
@@ -60,6 +61,29 @@ Each entry in `states:` is one of:
 - `ignore` — carry the previous state forward
 - `record` — record it, overriding `default`
 - another state name — map onto that state
+
+Some states cannot be recorded under their own name: a blank one, which Home
+Assistant produces when an entity is removed or reloaded, and the rare state
+made only of punctuation. `unrepresentable:` says what to record those as. It
+is substituted *before* `default` is applied, so the stock `unknown` behaves
+exactly like a real `unknown` — ignored by `record_known`, recorded by
+`record`.
+
+A blank state often carries real meaning, so an entry in `states:` beats the
+substitution. A text sensor that reports `""` for "no error" wants:
+
+```yaml
+discrete_statistics:
+  - entity_id: sensor.pump_error
+    unrepresentable: ok      # or, equivalently here:
+    states:
+      "": ok
+      unavailable: offline
+```
+
+Without one of those, "no error" would be treated as `unknown` and — under
+the default `record_known` — carried forward, crediting the time to whichever
+error was last seen.
 
 ```yaml
 discrete_statistics:

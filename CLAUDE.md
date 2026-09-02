@@ -181,9 +181,14 @@ cannot determine a real state — before an entity's first known state, or acros
 a gap whose source rows were purged. It has a duration statistic but no count:
 nothing ever transitions *into* it, so a count would be structurally zero.
 
-**A state that cannot form a statistic ID becomes `unknown`, before anything
-else looks at it.** `resolve` converts it up front, so it inherits whatever
-disposition `unknown` has. The recorder stores NULL when an entity is removed
+**A state that cannot form a statistic ID is substituted, before anything else
+looks at it.** `resolve` swaps in `cfg.unrepresentable` (default `unknown`) and
+then resolves normally, so it inherits a real state's disposition rather than
+needing a rule of its own. Substitute-then-resolve, not a direct answer: a
+direct answer would bypass `default` and make the stock `unknown` record where
+it used to be ignored. An explicit `states` entry for the raw value wins over
+the substitution — blank is the most meaningful state a text error sensor has,
+and only the config knows that. The recorder stores NULL when an entity is removed
 or reloaded, and the history API hands that back as `""` — which tokenises to
 nothing and would leave a double underscore. It is not an absence of data,
 which is what `no_data` means; it is a state we cannot name. Letting it reach
