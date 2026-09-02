@@ -506,3 +506,63 @@ async def test_compiling_across_a_chunk_boundary(recorder, freezer, monkeypatch)
     off_duration = await read_sums(hass, DURATION_OFF, start, end)
     # off runs 0:30-1:45, 2:15-3:45 and 4:30-5:30.
     assert off_duration[-1] == pytest.approx((4500 + 5400 + 3600) / 3600)
+
+
+async def read_day(hass, statistic_id, start, end):
+    """Return the day-period rollup rows for a statistic."""
+    await get_instance(hass).async_block_till_done()
+    result = await get_instance(hass).async_add_executor_job(
+        statistics_during_period,
+        hass,
+        start,
+        end,
+        {statistic_id},
+        "day",
+        None,
+        {"mean", "min", "max", "sum"},
+    )
+    return result.get(statistic_id, [])
+
+
+async def test_hourly_values_roll_up_into_a_daily_mean_min_and_max(recorder, freezer):
+    """The point of writing mean/min/max: second-order statistics for free.
+
+    The recorder reduces the hourly rows itself, so a statistics-graph card
+    asking for `mean` over a day answers "average hours on per hour" and
+    `max` answers "the busiest hour" - neither of which the cumulative sum
+    can express.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=2))
+    hass.states.async_set(ENTITY, "off")
+    await hass.async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=3, minutes=30))
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=4))
+    registry = Registry(hass)
+    await registry.async_load()
+    compiler = Compiler(hass, registry)
+    await compiler.async_compile(cfg(), start.timestamp())
+
+    # Hourly "on" durations are 1.0, 1.0, 0.0, 0.5.
+    hourly = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=4))
+    assert hourly == [1.0, 2.0, 2.0, 2.5]
+
+    rows = await read_day(
+        hass, DURATION_ON, start - timedelta(days=1), start + timedelta(days=2)
+    )
+    assert len(rows) == 1
+    assert rows[0]["mean"] == pytest.approx(2.5 / 4)
+    assert rows[0]["min"] == 0.0
+    assert rows[0]["max"] == 1.0
+    # The sum is untouched by the reduction: it stays the cumulative total.
+    assert rows[0]["sum"] == pytest.approx(2.5)

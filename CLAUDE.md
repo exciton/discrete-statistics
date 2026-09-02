@@ -101,6 +101,12 @@ statistic with no row in the hour before the next window, so its cumulative
 base reads as zero and the series restarts — the sum goes down, and the loss
 is permanent because the next run bases on the deflated rows.
 
+Density is also what makes the `mean` correct. Every row carries the hour's
+own value as its `mean`, `min` and `max` so the recorder's `_reduce_statistics`
+can roll the hours up into an average hourly duration or count. It skips rows
+whose mean is `None`, so a sparse hour would not read as a quiet one — it
+would drop out of the average entirely and inflate it.
+
 **The watermark is the max across all of an entity's statistic IDs.** Reading a
 single representative ID is wrong: density is only guaranteed from a state's
 first appearance, so any one ID can lag arbitrarily.
@@ -182,6 +188,16 @@ Verified against 2026.8.3. Each of these was got wrong once.
   offset at epoch scale is below `datetime`'s microsecond resolution and rounds
   straight back.
 - `StatisticsRow["start"]` is a `float` timestamp, not a `datetime`.
+- A statistic may carry a sum *and* a mean. `mean_type` and `has_sum` are
+  independent fields and nothing in the import path rejects the combination,
+  so one statistic serves both `stat_types: change` and `stat_types: mean`.
+  `has_mean` is deprecated but still a real column, and
+  `StatisticsMeta.from_meta` passes the metadata dict through verbatim — keep
+  it consistent with `mean_type` rather than leaving it stale.
+- Changing metadata is picked up: `StatisticsMetaManager._update_metadata`
+  compares `mean_type` and rewrites the row, so an existing statistic gains a
+  mean on the next compile. Its already-written rows keep a `NULL` mean until
+  they are recompiled.
 - The recorder's upsert on `(metadata_id, start_ts)` is what makes recompilation
   idempotent. It holds only when recomputation starts from a bucket whose base
   sum is known, which is why the base is read from the bucket *preceding* the

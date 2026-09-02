@@ -20,8 +20,12 @@ def metadata_for(
     """Return StatisticMetaData for one statistic."""
     display = cfg.name or cfg.entity_id
     return {
-        "has_mean": False,
-        "mean_type": StatisticMeanType.NONE,
+        # Both a sum and a mean. The sum is the cumulative total charts read
+        # through `stat_types: change`; the mean, min and max are the hourly
+        # value itself, which is what lets the recorder's day/week/month
+        # rollup answer "average hours on per hour" and "busiest hour".
+        "has_mean": True,
+        "mean_type": StatisticMeanType.ARITHMETIC,
         "has_sum": True,
         "name": f"{display}: {state} ({_METRIC_LABEL[metric]})",
         "source": DOMAIN,
@@ -82,11 +86,28 @@ def build_payloads(
             running = base_sums.get(statistic_id, 0.0)
             rows: list[dict[str, Any]] = []
             for hour in hours:
-                running += buckets.get((state, hour), (0.0, 0))[index] * scale
+                value = buckets.get((state, hour), (0.0, 0))[index] * scale
+                running += value
                 rows.append(
                     {
                         "start": datetime.fromtimestamp(hour, tz=timezone.utc),
                         "sum": running,
+                        # An hour holds exactly one value, so its mean, min
+                        # and max are all that value. They exist so the
+                        # recorder can reduce the hours to a day, week or
+                        # month: mean of the hourly means is the average
+                        # hourly on-time, min and max are the quietest and
+                        # busiest hours. `_reduce_statistics` reads the min
+                        # and max columns rather than deriving them, so
+                        # storing all three is not redundancy.
+                        #
+                        # The density invariant is what makes the mean
+                        # correct: an hour in which nothing happened still
+                        # gets a row of 0.0, so the average is over every
+                        # hour in the period rather than only the active ones.
+                        "mean": value,
+                        "min": value,
+                        "max": value,
                     }
                 )
             payloads[statistic_id] = (

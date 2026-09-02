@@ -124,6 +124,14 @@ per-bucket values. Durations are in **hours**, so an hourly bucket in a single
 state reads as `1.0` and a full day sums to `24`. Statistics for a state appear the first time that state
 is observed — no configuration change is needed when a new state shows up.
 
+Each statistic also carries the hour's own value as its `mean`, `min` and
+`max`. Over a longer period Home Assistant reduces the hours itself, so those
+stat types answer questions the cumulative sum cannot: `mean` over a day is
+the **average hourly** duration or count, `max` is the busiest hour and `min`
+the quietest. Every hour has a row — including the ones in which nothing
+happened — so the average is over the whole period rather than only its
+active hours.
+
 ### The `no_data` state
 
 When the component cannot attribute a span to a real state — before an
@@ -184,6 +192,21 @@ entities:
   - discrete_statistics:sensor_heat_pump_hvac_action_idle_duration
 ```
 
+Average hourly run time per day, and the busiest hour of each day:
+
+```yaml
+type: statistics-graph
+title: Heat pump hourly run time
+chart_type: line
+period: day
+days_to_show: 30
+stat_types:
+  - mean
+  - max
+entities:
+  - discrete_statistics:sensor_heat_pump_hvac_action_heating_duration
+```
+
 A state that appears later accumulates immediately but must be added to the
 card's `entities` list to be drawn.
 
@@ -210,6 +233,11 @@ data:
   entity_id: binary_sensor.grid_status
   start: "2026-01-01T00:00:00Z"
 ```
+
+Hours compiled before `mean`, `min` and `max` were added carry only a sum.
+Home Assistant leaves a missing mean out of its rollup rather than counting it
+as zero, so a day made partly of such hours would report a misleadingly high
+average. A recompute over the range fills them in.
 
 ### Recompute never deletes
 

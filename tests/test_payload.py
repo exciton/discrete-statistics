@@ -2,6 +2,8 @@
 
 from datetime import datetime, timezone
 
+from homeassistant.components.recorder.models import StatisticMeanType
+
 from custom_components.discrete_statistics.config import EntityConfig
 from custom_components.discrete_statistics.const import HOUR, NO_DATA
 from custom_components.discrete_statistics.payload import build_payloads
@@ -38,7 +40,13 @@ def test_single_hour_single_state():
     assert metadata["unit_of_measurement"] == "h"
     assert metadata["unit_class"] == "duration"
     assert rows == [
-        {"start": datetime.fromtimestamp(T0, tz=timezone.utc), "sum": 1.0}
+        {
+            "start": datetime.fromtimestamp(T0, tz=timezone.utc),
+            "sum": 1.0,
+            "mean": 1.0,
+            "min": 1.0,
+            "max": 1.0,
+        }
     ]
 
 
@@ -136,3 +144,60 @@ def test_no_data_count_is_not_emitted_even_when_already_known():
     )
     assert DURATION_NO_DATA in payloads
     assert COUNT_NO_DATA not in payloads
+
+
+def test_metadata_declares_an_arithmetic_mean_alongside_the_sum():
+    """A statistic carries both, and the two answer different questions."""
+    payloads = build_payloads(cfg(), {("on", T0): (HOUR, 0)}, T0, T0 + HOUR, {})
+    metadata, _, _, _ = payloads[DURATION_ON]
+    assert metadata["has_sum"] is True
+    assert metadata["has_mean"] is True
+    assert metadata["mean_type"] == StatisticMeanType.ARITHMETIC
+
+
+def test_mean_min_and_max_are_the_hourly_value_not_the_running_sum():
+    """The sum accumulates; mean/min/max describe the hour on its own.
+
+    Writing the running sum into `mean` would make a day's average climb
+    forever instead of reporting the average hour.
+    """
+    buckets = {
+        ("on", T0): (HOUR, 1),
+        ("on", T0 + HOUR): (HOUR / 2, 3),
+        ("on", T0 + 2 * HOUR): (HOUR, 1),
+    }
+    payloads = build_payloads(cfg(), buckets, T0, T0 + 3 * HOUR, {})
+
+    _, duration_rows, _, _ = payloads[DURATION_ON]
+    assert [row["sum"] for row in duration_rows] == [1.0, 1.5, 2.5]
+    assert [row["mean"] for row in duration_rows] == [1.0, 0.5, 1.0]
+    assert [row["min"] for row in duration_rows] == [1.0, 0.5, 1.0]
+    assert [row["max"] for row in duration_rows] == [1.0, 0.5, 1.0]
+
+    _, count_rows, _, _ = payloads[COUNT_ON]
+    assert [row["sum"] for row in count_rows] == [1, 4, 5]
+    assert [row["mean"] for row in count_rows] == [1, 3, 1]
+
+
+def test_a_quiet_hour_gets_a_zero_mean_not_a_missing_one():
+    """Density is what makes the average an average over every hour.
+
+    `_reduce_statistics` skips rows whose mean is None, so an omitted hour
+    would silently raise a day's average by leaving out the quiet hours.
+    """
+    buckets = {("on", T0): (HOUR, 1), ("off", T0 + HOUR): (HOUR, 1)}
+    payloads = build_payloads(
+        cfg(), buckets, T0, T0 + 2 * HOUR, {}, frozenset({"on", "off"})
+    )
+    _, on_rows, _, _ = payloads[DURATION_ON]
+    assert [row["mean"] for row in on_rows] == [1.0, 0.0]
+
+
+def test_base_sums_do_not_leak_into_the_mean():
+    """A carried-over base belongs to the sum alone."""
+    payloads = build_payloads(
+        cfg(), {("on", T0): (HOUR, 0)}, T0, T0 + HOUR, {DURATION_ON: 500.0}
+    )
+    _, rows, _, _ = payloads[DURATION_ON]
+    assert rows[0]["sum"] == 501.0
+    assert rows[0]["mean"] == 1.0
