@@ -48,7 +48,7 @@ change.
 | `name` | the entity's ID | used in statistic display names |
 | `default` | `record_known` | disposition for states not listed |
 | `states` | `{}` | per-state overrides |
-| `unrepresentable` | `unknown` | what a blank or unusable state is recorded as |
+| `blank` | `unknown` | what a state with no letters or digits is recorded as |
 
 `default` accepts:
 
@@ -62,14 +62,14 @@ Each entry in `states:` is one of:
 - `record` — record it, overriding `default`
 - another state name — map onto that state
 
-Some states cannot be recorded under their own name: a blank one, which Home
-Assistant produces when an entity is removed or reloaded, and the rare state
-made only of punctuation. `unrepresentable:` says what to record those as. It
-is substituted *before* `default` is applied, so the stock `unknown` behaves
+Some states have no name to record under: an empty one, which Home Assistant
+produces when an entity is removed or reloaded, and the rarer state made only
+of whitespace or punctuation. `blank:` says what to record those as. It is
+substituted *before* `default` is applied, so the stock `unknown` behaves
 exactly like a real `unknown` — ignored by `record_known`, recorded by
 `record`.
 
-`no_data` is a legal answer for both `unrepresentable:` and a `states:` target
+`no_data` is a legal answer for both `blank:` and a `states:` target
 — that is how you say "I cannot interpret this state, chart it as a gap". A
 device cannot reach that band on its own, though: a sensor that literally
 reports the string `no_data` is ignored unless your config names it.
@@ -80,7 +80,7 @@ substitution. A text sensor that reports `""` for "no error" wants:
 ```yaml
 discrete_statistics:
   - entity_id: sensor.pump_error
-    unrepresentable: ok      # or, equivalently here:
+    blank: ok                # or, equivalently here:
     states:
       "": ok
       unavailable: offline

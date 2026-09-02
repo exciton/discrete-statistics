@@ -9,7 +9,7 @@ import voluptuous as vol
 from homeassistant.const import CONF_ENTITY_ID, CONF_NAME, STATE_UNKNOWN
 from homeassistant.helpers import config_validation as cv
 
-from .statistic_ids import is_recordable_state, state_token
+from .statistic_ids import is_blank, state_token
 from .const import (
     DEFAULT_IGNORE,
     DEFAULT_RECORD,
@@ -25,7 +25,7 @@ _NO_DATA_TOKEN = state_token(NO_DATA)
 
 CONF_DEFAULT = "default"
 CONF_STATES = "states"
-CONF_UNREPRESENTABLE = "unrepresentable"
+CONF_BLANK = "blank"
 
 DEFAULTS = (DEFAULT_RECORD, DEFAULT_RECORD_KNOWN, DEFAULT_IGNORE)
 
@@ -38,11 +38,11 @@ class EntityConfig:
     name: str | None
     default: str
     states: Mapping[str, str] = field(default_factory=dict)
-    # What a state that cannot become a statistic ID is recorded as. The
-    # substitution happens before the default is applied, so this composes
-    # with it rather than overriding it: the stock `unknown` is ignored by
-    # `record_known` exactly as a real `unknown` would be.
-    unrepresentable: str = STATE_UNKNOWN
+    # What a state with no name of its own is recorded as - blank,
+    # whitespace, or punctuation alone. Substituted before the default is
+    # applied, so it composes rather than overrides: the stock `unknown` is
+    # ignored by `record_known` exactly as a real `unknown` would be.
+    blank: str = STATE_UNKNOWN
 
     def resolve(self, raw_state: str) -> str | None:
         """Return the canonical state for a raw state, or None to ignore it.
@@ -50,10 +50,10 @@ class EntityConfig:
         None means carry-forward: the previous canonical state continues and
         no transition is counted.
 
-        A state that cannot be represented in an ID - an empty one, which the
-        recorder stores as NULL when an entity is removed or reloaded - is
-        substituted before anything else looks at it, so it inherits a real
-        state's disposition rather than needing a rule of its own.
+        A blank state - no letters or digits, which is what the recorder
+        stores as NULL when an entity is removed or reloaded - is substituted
+        before anything else looks at it, so it inherits a real state's
+        disposition rather than needing a rule of its own.
 
         An explicit entry in `states` wins over that substitution. Blank can
         carry real meaning: for a text sensor reporting an error, it is
@@ -68,9 +68,9 @@ class EntityConfig:
         asked, not what the value is.
         """
         chosen = raw_state in self.states
-        if not chosen and not is_recordable_state(raw_state):
+        if not chosen and is_blank(raw_state):
             # The operator picked the substitute, so this counts as chosen.
-            raw_state = self.unrepresentable
+            raw_state = self.blank
             chosen = True
 
         canonical = self._resolve(raw_state)
@@ -78,9 +78,9 @@ class EntityConfig:
             return None
         if not chosen and state_token(canonical) == _NO_DATA_TOKEN:
             return None
-        if not is_recordable_state(canonical):
+        if is_blank(canonical):
             # Named explicitly - `"": record` - but still not an ID.
-            canonical = self._resolve(self.unrepresentable)
+            canonical = self._resolve(self.blank)
         return canonical
 
     def _resolve(self, raw_state: str) -> str | None:
@@ -121,7 +121,7 @@ def _usable_state_name(value: str) -> str:
     """
     if state_token(value) == _NO_DATA_TOKEN:
         return value
-    if not is_recordable_state(value):
+    if is_blank(value):
         raise vol.Invalid(
             f"{value!r} does not produce a usable statistic ID"
         )
@@ -164,7 +164,7 @@ ENTITY_SCHEMA = vol.Schema(
         vol.Required(CONF_ENTITY_ID): cv.entity_id,
         vol.Optional(CONF_NAME): vol.Any(str, None),
         vol.Optional(CONF_DEFAULT, default=DEFAULT_RECORD_KNOWN): vol.In(DEFAULTS),
-        vol.Optional(CONF_UNREPRESENTABLE, default=STATE_UNKNOWN): vol.All(
+        vol.Optional(CONF_BLANK, default=STATE_UNKNOWN): vol.All(
             cv.string, _usable_state_name
         ),
         vol.Optional(CONF_STATES, default=dict): vol.All(
@@ -180,7 +180,7 @@ def _to_entity_config(raw: dict[str, Any]) -> EntityConfig:
         name=raw.get(CONF_NAME),
         default=raw[CONF_DEFAULT],
         states=raw[CONF_STATES],
-        unrepresentable=raw[CONF_UNREPRESENTABLE],
+        blank=raw[CONF_BLANK],
     )
 
 
@@ -218,5 +218,5 @@ def entity_config_from_entry(
         default=options.get(CONF_DEFAULT, DEFAULT_RECORD_KNOWN),
         # Not in the options flow yet; reading it here keeps the two config
         # sources symmetric so adding the field is only a form change.
-        unrepresentable=options.get(CONF_UNREPRESENTABLE) or STATE_UNKNOWN,
+        blank=options.get(CONF_BLANK) or STATE_UNKNOWN,
     )

@@ -9,7 +9,7 @@ from custom_components.discrete_statistics.statistic_ids import (
     InvalidStatisticIdError,
     belongs_to,
     build,
-    is_recordable_state,
+    is_blank,
     parse,
     state_token,
 )
@@ -138,16 +138,18 @@ def test_states_differing_only_by_separators_share_a_token():
     assert state_token("Heat Cool") == "heatcool"
 
 
-def test_is_recordable_state():
-    assert is_recordable_state("on")
-    assert is_recordable_state("unknown")
-    assert is_recordable_state("heat_cool")
-    assert not is_recordable_state("")
-    assert not is_recordable_state("!!!")
-    assert not is_recordable_state("-")
+def test_is_blank_is_exactly_the_states_with_no_letters_or_digits():
+    assert not is_blank("on")
+    assert not is_blank("unknown")
+    assert not is_blank("heat_cool")
+    assert not is_blank("3")
+    assert is_blank("")
+    assert is_blank("   ")
+    assert is_blank("!!!")
+    assert is_blank("-")
 
 
-def test_build_refuses_what_is_not_recordable():
+def test_build_refuses_a_blank_state():
     for state in ("", "!!!", "-"):
         with pytest.raises(InvalidStatisticIdError):
             build("sensor.x", state, METRIC_DURATION)

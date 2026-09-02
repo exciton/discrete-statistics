@@ -304,7 +304,7 @@ def test_an_ignored_state_stays_ignored():
     assert cfg.resolve("blip") is None
 
 
-def test_an_explicit_mapping_beats_the_unrepresentable_substitution():
+def test_an_explicit_mapping_beats_the_blank_substitution():
     """Blank is the most important state a text error sensor has.
 
     An error sensor reports "" for "no error", so it must be mappable. The
@@ -315,8 +315,8 @@ def test_an_explicit_mapping_beats_the_unrepresentable_substitution():
     assert cfg.resolve("") == "ok"
 
 
-def test_the_unrepresentable_option_catches_what_is_not_named():
-    cfg = parse([{"entity_id": "sensor.x", "unrepresentable": "ok"}])[0]
+def test_the_blank_option_catches_what_has_no_name():
+    cfg = parse([{"entity_id": "sensor.x", "blank": "ok"}])[0]
     assert cfg.resolve("") == "ok"
     assert cfg.resolve("!!!") == "ok"
     # A real unknown is untouched by it.
@@ -327,7 +327,7 @@ def test_the_two_compose_with_the_explicit_entry_first():
     cfg = parse(
         [{
             "entity_id": "sensor.x",
-            "unrepresentable": "weird",
+            "blank": "weird",
             "states": {"": "ok"},
         }]
     )[0]
@@ -338,7 +338,7 @@ def test_the_two_compose_with_the_explicit_entry_first():
 def test_the_substitution_still_runs_through_the_default():
     """Not a direct answer, or it would override `default` silently.
 
-    This is what keeps `unrepresentable: unknown` a genuine no-op: it must
+    This is what keeps `blank: unknown` a genuine no-op: it must
     still be ignored by record_known exactly as a real unknown would be.
     """
     known = parse([{"entity_id": "sensor.x", "default": "record_known"}])[0]
@@ -348,20 +348,20 @@ def test_the_substitution_still_runs_through_the_default():
 
     # And a substitute that is not an ignored state is recorded either way.
     both = parse(
-        [{"entity_id": "sensor.x", "unrepresentable": "ok"}]
+        [{"entity_id": "sensor.x", "blank": "ok"}]
     )[0]
     assert both.resolve("") == "ok"
 
 
-def test_the_unrepresentable_default_is_unchanged_behaviour():
+def test_the_blank_default_is_unchanged_behaviour():
     cfg = parse([{"entity_id": "sensor.x"}])[0]
-    assert cfg.unrepresentable == "unknown"
+    assert cfg.blank == "unknown"
 
 
-def test_an_unusable_unrepresentable_value_is_rejected():
+def test_an_unusable_blank_value_is_rejected():
     for bad in ("", "!!!"):
         with pytest.raises(vol.Invalid):
-            parse([{"entity_id": "sensor.x", "unrepresentable": bad}])
+            parse([{"entity_id": "sensor.x", "blank": bad}])
 
 
 def test_an_explicitly_recorded_blank_falls_back_rather_than_crashing():
@@ -377,12 +377,12 @@ def test_an_explicitly_recorded_blank_falls_back_rather_than_crashing():
 
 
 def test_no_data_may_be_chosen_deliberately():
-    """The band means "we cannot say", which is what unrepresentable IS.
+    """The band means "we cannot say", which is what a blank state IS.
 
     Allowed because the operator asked for it, not because the value is
     special. Blank really does mean "broken" on some sensors.
     """
-    cfg = parse([{"entity_id": "sensor.x", "unrepresentable": "no_data"}])[0]
+    cfg = parse([{"entity_id": "sensor.x", "blank": "no_data"}])[0]
     assert cfg.resolve("") == "no_data"
     assert cfg.resolve("!!!") == "no_data"
 

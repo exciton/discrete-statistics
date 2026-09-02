@@ -1027,7 +1027,7 @@ async def test_a_state_mapped_to_no_data_charts_as_a_gap(recorder, freezer):
         name="Grid Status",
         default="record",
         states={},
-        unrepresentable="no_data",
+        blank="no_data",
     )
     freezer.move_to(start)
     hass.states.async_set(ENTITY, "on")

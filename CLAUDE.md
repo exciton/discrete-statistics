@@ -179,7 +179,7 @@ neither would a change to `mean_type` or the units.
 **`no_data` is reserved, but it can be chosen.** It is what the compiler
 attributes a span to when it cannot determine a real state — before an entity's
 first known state, or across a gap whose source rows were purged. A config may
-also name it, as `unrepresentable: no_data` or as a `states` target, which is
+also name it, as `blank: no_data` or as a `states` target, which is
 how an operator says "I cannot interpret this, chart it as a gap".
 
 What stays forbidden is a device reaching the band *by itself*: a raw state
@@ -193,9 +193,10 @@ exist once a config routes states there, so the absence is now a deliberate
 choice rather than a structural certainty: it is a band for spans we cannot
 describe, and counting them would measure our own ignorance.
 
-**A state that cannot form a statistic ID is substituted, before anything else
-looks at it.** `resolve` swaps in `cfg.unrepresentable` (default `unknown`) and
-then resolves normally, so it inherits a real state's disposition rather than
+**A blank state is substituted, before anything else looks at it.** A blank
+state is one with no letters or digits — `state_token` keeps nothing else — so
+it has no name a statistic could carry. `resolve` swaps in `cfg.blank`
+(default `unknown`) and then resolves normally, so it inherits a real state's disposition rather than
 needing a rule of its own. Substitute-then-resolve, not a direct answer: a
 direct answer would bypass `default` and make the stock `unknown` record where
 it used to be ignored. An explicit `states` entry for the raw value wins over

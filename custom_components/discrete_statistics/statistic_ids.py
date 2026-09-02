@@ -46,29 +46,33 @@ def state_token(state: str) -> str:
     return slugify(state, separator="")
 
 
-def is_recordable_state(state: str) -> bool:
-    """False when a state cannot be represented in a statistic ID.
+def is_blank(state: str) -> bool:
+    """True when a state has no name to put in a statistic ID.
 
-    Two ways that happens. An empty state - what the recorder stores as NULL
-    when an entity is removed or reloaded, and what the history API hands
-    back as "" - tokenises to nothing and would leave a double underscore. And anything unsluggable tokenises to the literal "unknown",
-    which would silently merge with a genuine `unknown`.
+    `state_token` keeps only letters and digits, so this is exactly the set
+    with none of either: empty - what the recorder stores as NULL when an
+    entity is removed or reloaded, and the history API hands back as "" - or
+    whitespace, or punctuation alone.
 
-    Callers convert these to `unknown` before resolving, so they inherit
-    whatever disposition `unknown` has rather than needing a case of their own.
+    It also catches the rare state that slugifies onto the literal "unknown"
+    without being it. That is a collision rather than a blank, but it wants
+    the same treatment: there is no name here a statistic could carry.
+
+    Callers substitute `cfg.blank` for these before resolving, so they
+    inherit a real state's disposition rather than needing a case of their own.
     """
     token = state_token(state)
     if not token:
-        return False
-    return token != "unknown" or state.strip().lower() == "unknown"
+        return True
+    return token == "unknown" and state.strip().lower() != "unknown"
 
 
 def build(entity_id: str, state: str, metric: str) -> str:
     """Return the external statistic ID for an entity/state/metric triple."""
-    if not is_recordable_state(state):
+    if is_blank(state):
         raise InvalidStatisticIdError(
-            f"State {state!r} cannot be represented in a statistic ID; "
-            f"callers should resolve it to no_data instead"
+            f"State {state!r} has no name to build an ID from; callers "
+            f"should substitute cfg.blank before reaching here"
         )
 
     token = state_token(state)
