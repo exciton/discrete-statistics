@@ -1,10 +1,14 @@
 """Tests for the compiler against a real recorder."""
 
+import functools as ft
 from datetime import datetime, timedelta, timezone
 
 import pytest
 from homeassistant.components.recorder import get_instance
-from homeassistant.components.recorder.statistics import statistics_during_period
+from homeassistant.components.recorder.statistics import (
+    get_metadata,
+    statistics_during_period,
+)
 from homeassistant.setup import async_setup_component
 
 from homeassistant.components.recorder.statistics import async_add_external_statistics
@@ -14,15 +18,15 @@ from custom_components.discrete_statistics.compiler import TRAILING_HOURS, Compi
 from custom_components.discrete_statistics.config import EntityConfig
 from custom_components.discrete_statistics.const import HOUR, METRIC_COUNT, METRIC_DURATION
 from custom_components.discrete_statistics.payload import metadata_for
-from custom_components.discrete_statistics.registry import Registry
+from custom_components.discrete_statistics.statistic_ids import belongs_to, parse
 
 ENTITY = "binary_sensor.grid_status"
 DURATION_OFF = "discrete_statistics:binary_sensor_grid_status_off_duration"
 COUNT_OFF = "discrete_statistics:binary_sensor_grid_status_off_count"
 DURATION_ON = "discrete_statistics:binary_sensor_grid_status_on_duration"
 COUNT_ON = "discrete_statistics:binary_sensor_grid_status_on_count"
-DURATION_NO_DATA = "discrete_statistics:binary_sensor_grid_status_no_data_duration"
-COUNT_NO_DATA = "discrete_statistics:binary_sensor_grid_status_no_data_count"
+DURATION_NO_DATA = "discrete_statistics:binary_sensor_grid_status_nodata_duration"
+COUNT_NO_DATA = "discrete_statistics:binary_sensor_grid_status_nodata_count"
 
 
 def cfg():
@@ -50,6 +54,24 @@ async def recorder(recorder_mock, hass):
     return hass
 
 
+
+async def existing(hass, entity_id=ENTITY):
+    """The statistic IDs the recorder holds for an entity - the new registry."""
+    await get_instance(hass).async_block_till_done()
+    metadata = await get_instance(hass).async_add_executor_job(
+        ft.partial(get_metadata, hass, statistic_source="discrete_statistics")
+    )
+    return sorted(sid for sid in metadata if belongs_to(sid, entity_id))
+
+
+async def stored_name(hass, statistic_id):
+    await get_instance(hass).async_block_till_done()
+    metadata = await get_instance(hass).async_add_executor_job(
+        ft.partial(get_metadata, hass, statistic_ids={statistic_id})
+    )
+    return metadata[statistic_id][1]["name"]
+
+
 async def read_sums(hass, statistic_id, start, end):
     """Return the cumulative sums recorded for a statistic."""
     # async_add_external_statistics only queues the write, so drain the
@@ -70,9 +92,7 @@ async def read_sums(hass, statistic_id, start, end):
 
 async def test_compiles_nothing_without_history(recorder):
     hass = recorder
-    registry = Registry(hass)
-    await registry.async_load()
-    compiler = Compiler(hass, registry)
+    compiler = Compiler(hass)
     assert await compiler.async_compile_incremental(cfg()) == 0
 
 
@@ -85,13 +105,11 @@ async def test_registers_statistic_ids_it_writes(recorder, freezer):
     await get_instance(hass).async_block_till_done()
 
     freezer.move_to(start + timedelta(hours=3))
-    registry = Registry(hass)
-    await registry.async_load()
-    compiler = Compiler(hass, registry)
+    compiler = Compiler(hass)
     await compiler.async_compile(cfg(), start.timestamp())
 
-    assert DURATION_ON in registry.statistic_ids_for(ENTITY)
-    assert registry.describe(DURATION_ON) == (ENTITY, "on", "duration")
+    assert DURATION_ON in await existing(hass)
+    assert await stored_name(hass, DURATION_ON) == "Grid Status: on (duration)"
 
 
 async def test_records_an_outage_duration_and_count(recorder, freezer):
@@ -111,9 +129,7 @@ async def test_records_an_outage_duration_and_count(recorder, freezer):
     await get_instance(hass).async_block_till_done()
 
     freezer.move_to(start + timedelta(hours=2))
-    registry = Registry(hass)
-    await registry.async_load()
-    compiler = Compiler(hass, registry)
+    compiler = Compiler(hass)
     await compiler.async_compile(cfg(), start.timestamp())
 
     sums = await read_sums(
@@ -138,9 +154,7 @@ async def test_compiling_twice_is_idempotent(recorder, freezer):
     await get_instance(hass).async_block_till_done()
 
     freezer.move_to(start + timedelta(hours=2))
-    registry = Registry(hass)
-    await registry.async_load()
-    compiler = Compiler(hass, registry)
+    compiler = Compiler(hass)
 
     await compiler.async_compile(cfg(), start.timestamp())
     first = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=2))
@@ -167,9 +181,7 @@ async def test_cadence_invariance(recorder, freezer):
         await hass.async_block_till_done()
     await get_instance(hass).async_block_till_done()
 
-    registry = Registry(hass)
-    await registry.async_load()
-    compiler = Compiler(hass, registry)
+    compiler = Compiler(hass)
 
     freezer.move_to(start + timedelta(hours=5))
     await compiler.async_compile(cfg(), start.timestamp())
@@ -219,9 +231,7 @@ async def test_a_state_absent_from_a_window_keeps_its_cumulative_base(
     await get_instance(hass).async_block_till_done()
 
     freezer.move_to(start + timedelta(hours=6))
-    registry = Registry(hass)
-    await registry.async_load()
-    compiler = Compiler(hass, registry)
+    compiler = Compiler(hass)
 
     for window in range(3):
         window_start = start + timedelta(hours=2 * window)
@@ -265,9 +275,7 @@ async def test_back_to_back_compiles_see_the_previous_write(recorder, freezer):
     await get_instance(hass).async_block_till_done()
 
     freezer.move_to(start + timedelta(hours=6))
-    registry = Registry(hass)
-    await registry.async_load()
-    compiler = Compiler(hass, registry)
+    compiler = Compiler(hass)
 
     for window in range(3):
         window_start = start + timedelta(hours=2 * window)
@@ -288,22 +296,15 @@ async def test_watermark_is_the_newest_hour_across_statistics(recorder):
     """The watermark must not follow the alphabetically first statistic."""
     hass = recorder
     start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
-    registry = Registry(hass)
-    await registry.async_load()
-    # COUNT_OFF sorts before DURATION_ON, and is the one left behind.
-    await registry.async_register(
-        ENTITY,
-        {COUNT_OFF: ("off", METRIC_COUNT), DURATION_ON: ("on", METRIC_DURATION)},
-    )
-    assert registry.statistic_ids_for(ENTITY)[0] == COUNT_OFF
 
+    # COUNT_OFF sorts before DURATION_ON, and is the one left behind.
     for statistic_id, state, metric, hours in (
         (COUNT_OFF, "off", METRIC_COUNT, 2),
         (DURATION_ON, "on", METRIC_DURATION, 4),
     ):
         async_add_external_statistics(
             hass,
-            metadata_for(cfg(), state, metric, statistic_id),
+            metadata_for(cfg(), metric, statistic_id, f"x: {state} ({metric})"),
             [
                 {"start": start + timedelta(hours=hour), "sum": float(hour)}
                 for hour in range(hours)
@@ -311,8 +312,10 @@ async def test_watermark_is_the_newest_hour_across_statistics(recorder):
         )
     await get_instance(hass).async_block_till_done()
 
-    compiler = Compiler(hass, registry)
-    watermark = await compiler._async_watermark(ENTITY)
+    compiler = Compiler(hass)
+    ids = await existing(hass)
+    assert ids[0] == COUNT_OFF
+    watermark = await compiler._async_watermark({sid: "" for sid in ids})
 
     assert watermark == (start + timedelta(hours=3)).timestamp()
 
@@ -333,13 +336,11 @@ async def test_recompiling_back_past_known_history_is_no_data(recorder, freezer)
     await get_instance(hass).async_block_till_done()
 
     freezer.move_to(start + timedelta(hours=4))
-    registry = Registry(hass)
-    await registry.async_load()
-    compiler = Compiler(hass, registry)
+    compiler = Compiler(hass)
 
     # First compile: establishes the series, and emits no no_data at all.
     await compiler.async_compile(cfg(), start.timestamp())
-    assert DURATION_NO_DATA not in registry.statistic_ids_for(ENTITY)
+    assert DURATION_NO_DATA not in await existing(hass)
 
     # Second compile, reaching back before the first known state.
     await compiler.async_compile(cfg(), start.timestamp())
@@ -372,9 +373,7 @@ async def test_an_ignored_state_at_the_window_start_does_not_destroy_durations(
     await get_instance(hass).async_block_till_done()
 
     freezer.move_to(start + timedelta(hours=4))
-    registry = Registry(hass)
-    await registry.async_load()
-    compiler = Compiler(hass, registry)
+    compiler = Compiler(hass)
 
     await compiler.async_compile(cfg(), start.timestamp())
     full = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=4))
@@ -413,9 +412,7 @@ async def test_a_boundary_transition_is_counted_once_from_either_window(
     await get_instance(hass).async_block_till_done()
 
     freezer.move_to(start + timedelta(hours=4))
-    registry = Registry(hass)
-    await registry.async_load()
-    compiler = Compiler(hass, registry)
+    compiler = Compiler(hass)
 
     await compiler.async_compile(cfg(), start.timestamp())
     from_earlier = await read_sums(
@@ -448,9 +445,7 @@ async def test_no_data_has_no_count_statistic(recorder, freezer):
     await get_instance(hass).async_block_till_done()
 
     freezer.move_to(start + timedelta(hours=4))
-    registry = Registry(hass)
-    await registry.async_load()
-    compiler = Compiler(hass, registry)
+    compiler = Compiler(hass)
     # Twice: the first compile establishes the series, and only then does a
     # start before the entity's history describe a gap rather than the
     # trimmed opening sliver.
@@ -463,8 +458,8 @@ async def test_no_data_has_no_count_statistic(recorder, freezer):
     )
     assert seconds[-1] == pytest.approx(2.0)
 
-    assert COUNT_NO_DATA not in registry.statistic_ids_for(ENTITY)
-    assert COUNT_ON in registry.statistic_ids_for(ENTITY)
+    assert COUNT_NO_DATA not in await existing(hass)
+    assert COUNT_ON in await existing(hass)
     assert (
         await read_sums(hass, COUNT_NO_DATA, start, start + timedelta(hours=4))
         == []
@@ -495,16 +490,14 @@ async def test_compiling_across_a_chunk_boundary(recorder, freezer, monkeypatch)
     await get_instance(hass).async_block_till_done()
 
     freezer.move_to(start + timedelta(hours=6))
-    registry = Registry(hass)
-    await registry.async_load()
-    compiler = Compiler(hass, registry)
+    compiler = Compiler(hass)
     assert await compiler.async_compile(cfg(), start.timestamp()) == 6
 
     end = start + timedelta(hours=6)
     duration_ids = [
         statistic_id
-        for statistic_id in registry.statistic_ids_for(ENTITY)
-        if registry.describe(statistic_id)[2] == METRIC_DURATION
+        for statistic_id in await existing(hass)
+        if parse(statistic_id)[2] == METRIC_DURATION
     ]
     assert len(duration_ids) >= 2, duration_ids
 
@@ -564,9 +557,7 @@ async def test_hourly_values_roll_up_into_a_daily_mean_min_and_max(recorder, fre
     await get_instance(hass).async_block_till_done()
 
     freezer.move_to(start + timedelta(hours=4))
-    registry = Registry(hass)
-    await registry.async_load()
-    compiler = Compiler(hass, registry)
+    compiler = Compiler(hass)
     await compiler.async_compile(cfg(), start.timestamp())
 
     # Hourly "on" durations are 1.0, 1.0, 0.0, 0.5.
@@ -599,13 +590,11 @@ async def test_a_new_entity_does_not_open_with_no_data(recorder, freezer):
     await get_instance(hass).async_block_till_done()
 
     freezer.move_to(start + timedelta(hours=5))
-    registry = Registry(hass)
-    await registry.async_load()
-    compiler = Compiler(hass, registry)
+    compiler = Compiler(hass)
     hours = await compiler.async_compile(cfg(), start.timestamp())
 
-    assert DURATION_NO_DATA not in registry.statistic_ids_for(ENTITY)
-    assert COUNT_NO_DATA not in registry.statistic_ids_for(ENTITY)
+    assert DURATION_NO_DATA not in await existing(hass)
+    assert COUNT_NO_DATA not in await existing(hass)
     # Hours 3 and 4 only: the partial hour 2 is dropped along with hours 0-1.
     assert hours == 2
     assert await read_sums(hass, DURATION_ON, start, start + timedelta(hours=5)) == [
@@ -624,12 +613,10 @@ async def test_a_first_state_on_the_hour_loses_nothing(recorder, freezer):
     await get_instance(hass).async_block_till_done()
 
     freezer.move_to(start + timedelta(hours=5))
-    registry = Registry(hass)
-    await registry.async_load()
-    compiler = Compiler(hass, registry)
+    compiler = Compiler(hass)
     await compiler.async_compile(cfg(), start.timestamp())
 
-    assert DURATION_NO_DATA not in registry.statistic_ids_for(ENTITY)
+    assert DURATION_NO_DATA not in await existing(hass)
     assert await read_sums(hass, DURATION_ON, start, start + timedelta(hours=5)) == [
         1.0,
         2.0,
@@ -655,12 +642,10 @@ async def test_an_unknown_opening_state_is_trimmed_too(recorder, freezer):
     await get_instance(hass).async_block_till_done()
 
     freezer.move_to(start + timedelta(hours=5))
-    registry = Registry(hass)
-    await registry.async_load()
-    compiler = Compiler(hass, registry)
+    compiler = Compiler(hass)
     await compiler.async_compile(cfg(), start.timestamp())
 
-    assert DURATION_NO_DATA not in registry.statistic_ids_for(ENTITY)
+    assert DURATION_NO_DATA not in await existing(hass)
     assert await read_sums(hass, DURATION_ON, start, start + timedelta(hours=5)) == [
         1.0,
         2.0,
@@ -680,12 +665,10 @@ async def test_the_incremental_first_run_is_trimmed(recorder, freezer):
     await get_instance(hass).async_block_till_done()
 
     freezer.move_to(start + timedelta(hours=3))
-    registry = Registry(hass)
-    await registry.async_load()
-    compiler = Compiler(hass, registry)
+    compiler = Compiler(hass)
     await compiler.async_compile_incremental(cfg())
 
-    assert DURATION_NO_DATA not in registry.statistic_ids_for(ENTITY)
+    assert DURATION_NO_DATA not in await existing(hass)
     # Hours 1 and 2, and they still tile the clock exactly.
     on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=3))
     off = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=3))
@@ -709,12 +692,10 @@ async def test_nothing_is_compiled_until_a_whole_hour_is_known(recorder, freezer
     await get_instance(hass).async_block_till_done()
 
     freezer.move_to(start + timedelta(hours=1, minutes=30))
-    registry = Registry(hass)
-    await registry.async_load()
-    compiler = Compiler(hass, registry)
+    compiler = Compiler(hass)
 
     assert await compiler.async_compile_incremental(cfg()) == 0
-    assert registry.statistic_ids_for(ENTITY) == []
+    assert await existing(hass) == []
 
 
 async def _seed_two_states(hass, freezer, start):
@@ -736,100 +717,126 @@ async def _delete(hass, statistic_ids):
 async def test_a_deleted_statistic_is_forgotten_not_recreated(recorder, freezer):
     """Settings -> System -> Tools -> Statistics is the whole interface.
 
-    Without this the registry still names the statistic, so it stays in
-    known_states and the very next compile writes it back - densely, and
-    forever.
+    Deleting removes the statistics_meta row, so the statistic is simply
+    absent from the entity's set on the next compile and stops being
+    written.
     """
     hass = recorder
     start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
     await _seed_two_states(hass, freezer, start)
 
     freezer.move_to(start + timedelta(hours=4))
-    registry = Registry(hass)
-    await registry.async_load()
-    compiler = Compiler(hass, registry)
+    compiler = Compiler(hass)
     await compiler.async_compile(cfg(), start.timestamp())
-    assert DURATION_ON in registry.statistic_ids_for(ENTITY)
+    assert DURATION_ON in await existing(hass)
 
-    # "on" never occurs again, so only the registry could resurrect it.
+    # "on" never occurs again, so only a stale index could resurrect it.
     await _delete(hass, [DURATION_ON, COUNT_ON])
 
     freezer.move_to(start + timedelta(hours=6))
     await compiler.async_compile_incremental(cfg())
 
-    assert DURATION_ON not in registry.statistic_ids_for(ENTITY)
-    assert COUNT_ON not in registry.statistic_ids_for(ENTITY)
+    assert DURATION_ON not in await existing(hass)
+    assert COUNT_ON not in await existing(hass)
     assert await read_sums(hass, DURATION_ON, start, start + timedelta(hours=6)) == []
     # The surviving state carries on undisturbed, still dense and monotonic.
     off = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=6))
     assert off == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
 
 
-async def test_the_forgotten_statistic_stays_forgotten_across_a_reload(
+async def test_a_deleted_statistic_stays_deleted_for_a_fresh_compiler(
     recorder, freezer
 ):
-    """The removal is persisted, not just dropped from memory."""
+    """Nothing is cached: a new Compiler sees the same deletion."""
     hass = recorder
     start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
     await _seed_two_states(hass, freezer, start)
 
     freezer.move_to(start + timedelta(hours=4))
-    registry = Registry(hass)
-    await registry.async_load()
-    compiler = Compiler(hass, registry)
-    await compiler.async_compile(cfg(), start.timestamp())
+    await Compiler(hass).async_compile(cfg(), start.timestamp())
 
     await _delete(hass, [DURATION_ON, COUNT_ON])
     freezer.move_to(start + timedelta(hours=6))
-    await compiler.async_compile_incremental(cfg())
+    await Compiler(hass).async_compile_incremental(cfg())
 
-    reloaded = Registry(hass)
-    await reloaded.async_load()
-    assert DURATION_ON not in reloaded.statistic_ids_for(ENTITY)
+    assert DURATION_ON not in await existing(hass)
 
 
-async def test_a_state_returns_while_any_of_its_statistics_survives(recorder, freezer):
-    """Density is per state, so half a state cannot be deleted.
+async def test_deleting_one_metric_sticks_until_its_state_recurs(recorder, freezer):
+    """Deletion is per statistic now, not per state.
 
-    Deleting the duration but not the count leaves "on" a known state, and
-    the density invariant then requires a duration row for it in every hour.
-    Both of a state's statistics have to go for the state to go.
+    Removing the duration but keeping the count used to be undone on the
+    very next compile, because density was keyed by state and the surviving
+    count kept "on" alive. It now sticks - until "on" actually happens
+    again, at which point an observed state is recorded in full.
     """
     hass = recorder
     start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
     await _seed_two_states(hass, freezer, start)
 
     freezer.move_to(start + timedelta(hours=4))
-    registry = Registry(hass)
-    await registry.async_load()
-    compiler = Compiler(hass, registry)
+    compiler = Compiler(hass)
     await compiler.async_compile(cfg(), start.timestamp())
 
     await _delete(hass, [DURATION_ON])
 
+    # "on" does not occur in the trailing window, so it stays gone.
     freezer.move_to(start + timedelta(hours=6))
     await compiler.async_compile_incremental(cfg())
+    assert DURATION_ON not in await existing(hass)
+    assert COUNT_ON in await existing(hass)
 
-    assert DURATION_ON in registry.statistic_ids_for(ENTITY)
-    # Rebuilt from the trailing window only, so its history does not return.
-    assert await read_sums(hass, DURATION_ON, start, start + timedelta(hours=6)) != []
+    # It happens again, and both of its metrics come back.
+    freezer.move_to(start + timedelta(hours=6, minutes=30))
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=8))
+    await compiler.async_compile_incremental(cfg())
+    assert DURATION_ON in await existing(hass)
 
 
 async def test_nothing_is_forgotten_while_its_statistic_exists(recorder, freezer):
-    """The reaping must not fire on a healthy entity."""
+    """A healthy entity must keep every statistic it has."""
     hass = recorder
     start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
     await _seed_two_states(hass, freezer, start)
 
     freezer.move_to(start + timedelta(hours=4))
-    registry = Registry(hass)
-    await registry.async_load()
-    compiler = Compiler(hass, registry)
+    compiler = Compiler(hass)
     await compiler.async_compile(cfg(), start.timestamp())
-    before = registry.statistic_ids_for(ENTITY)
+    before = await existing(hass)
     assert before
 
     freezer.move_to(start + timedelta(hours=6))
     await compiler.async_compile_incremental(cfg())
 
-    assert registry.statistic_ids_for(ENTITY) == before
+    assert await existing(hass) == before
+
+
+async def test_renaming_a_helper_relabels_a_state_it_has_not_seen(recorder, freezer):
+    """The whole reason build_payloads takes the stored names.
+
+    `on` occurs only in the first hour, so a later compile never rebuilds
+    its metadata from a bucket. Without the display swap its chart label
+    would keep the old name until the state next occurred.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    await _seed_two_states(hass, freezer, start)
+
+    freezer.move_to(start + timedelta(hours=4))
+    compiler = Compiler(hass)
+    await compiler.async_compile(cfg(), start.timestamp())
+    assert await stored_name(hass, DURATION_ON) == "Grid Status: on (duration)"
+
+    renamed = EntityConfig(
+        entity_id=ENTITY, name="Mains Power", default="record_known", states={}
+    )
+    freezer.move_to(start + timedelta(hours=6))
+    await compiler.async_compile_incremental(renamed)
+
+    assert await stored_name(hass, DURATION_ON) == "Mains Power: on (duration)"
+    # And the state half is untouched, not replaced by its token.
+    assert await stored_name(hass, DURATION_OFF) == "Mains Power: off (duration)"

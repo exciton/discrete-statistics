@@ -20,9 +20,9 @@ from homeassistant.util import dt as dt_util
 from .bucketer import bucket, hour_start
 from .canonicalise import canonicalise
 from .config import EntityConfig
-from .const import HOUR
+from .const import DOMAIN, HOUR
 from .payload import build_payloads
-from .registry import Registry
+from .statistic_ids import belongs_to
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -75,13 +75,31 @@ def _as_datetime(timestamp: float) -> datetime:
 class Compiler:
     """Compile one entity's history into statistics."""
 
-    def __init__(self, hass: HomeAssistant, registry: Registry) -> None:
+    def __init__(self, hass: HomeAssistant) -> None:
         self._hass = hass
-        self._registry = registry
+
+    async def _async_existing(self, entity_id: str) -> dict[str, str]:
+        """Return {statistic_id: stored name} for one entity's statistics.
+
+        The recorder's own metadata is the record of which statistics an
+        entity has. There is no separate index to keep in step with it: an
+        ID carries its entity and metric in a fixed shape, so `belongs_to`
+        recovers the association, and a statistic the user has deleted is
+        simply absent here and stops being written.
+        """
+        metadata = await get_instance(self._hass).async_add_executor_job(
+            ft.partial(get_metadata, self._hass, statistic_source=DOMAIN)
+        )
+        return {
+            statistic_id: (meta["name"] or "")
+            for statistic_id, (_, meta) in metadata.items()
+            if belongs_to(statistic_id, entity_id)
+        }
 
     async def async_compile_incremental(self, cfg: EntityConfig) -> int:
         """Compile from the watermark, recomputing the trailing window."""
-        watermark = await self._async_watermark(cfg.entity_id)
+        existing = await self._async_existing(cfg.entity_id)
+        watermark = await self._async_watermark(existing)
         if watermark is None:
             start = await self._async_earliest_state_ts(cfg.entity_id)
             if start is None:
@@ -105,15 +123,15 @@ class Compiler:
         if window_end <= window_start:
             return 0
 
-        await self._async_forget_deleted(cfg.entity_id)
-        base_sums = await self._async_base_sums(cfg.entity_id, window_start)
+        existing = await self._async_existing(cfg.entity_id)
+        base_sums = await self._async_base_sums(existing, window_start)
 
         compiled = 0
         chunk_start = window_start
         while chunk_start < window_end:
             chunk_end = min(chunk_start + CHUNK_HOURS * HOUR, window_end)
-            base_sums, hours = await self._async_compile_chunk(
-                cfg, chunk_start, chunk_end, base_sums
+            base_sums, hours, existing = await self._async_compile_chunk(
+                cfg, chunk_start, chunk_end, base_sums, existing
             )
             compiled += hours
             chunk_start = chunk_end
@@ -154,12 +172,14 @@ class Compiler:
         window_start: float,
         window_end: float,
         base_sums: dict[str, float],
-    ) -> tuple[dict[str, float], int]:
+        existing: dict[str, str],
+    ) -> tuple[dict[str, float], int, dict[str, str]]:
         """Compile one chunk.
 
-        Returns the sums to carry into the next chunk and the number of
-        hours actually compiled, which is fewer than the chunk holds when
-        the leading no_data is trimmed.
+        Returns the sums to carry into the next chunk, the number of hours
+        actually compiled - fewer than the chunk holds when the leading
+        no_data is trimmed - and the entity's statistics including any this
+        chunk created, so the next chunk keeps them dense.
         """
         rows = await self._async_history(cfg, window_start, window_end)
         carried, transitions = canonicalise(cfg, rows, window_start)
@@ -181,7 +201,7 @@ class Compiler:
                     break
 
         trimmed = False
-        if carried is None and not self._registry.statistic_ids_for(cfg.entity_id):
+        if carried is None and not existing:
             # Nothing has ever been compiled for this entity, so there is no
             # earlier series that a leading no_data would complete. All it
             # could record is the sliver between the top of the first hour
@@ -190,18 +210,19 @@ class Compiler:
             # that is then written, densely, forever. Start at the first
             # whole hour whose state we actually know instead.
             #
-            # Deliberately conditional on the registry being empty. Trimming
+            # Deliberately conditional on the entity having no statistics.
+            # Trimming
             # hours once statistics exist would leave a hole, and the next
             # run would find no base in the hour before its window and
             # restart every cumulative sum at zero.
             if not transitions:
-                return base_sums, 0
+                return base_sums, 0, existing
             first_known = transitions[0][0]
             window_start = hour_start(first_known)
             if window_start < first_known:
                 window_start += HOUR
             if window_start >= window_end:
-                return base_sums, 0
+                return base_sums, 0, existing
             # Re-fold the same rows against the later boundary: the first
             # transition now falls before it and becomes the carried state.
             carried, transitions = canonicalise(cfg, rows, window_start)
@@ -216,68 +237,33 @@ class Compiler:
 
         buckets = bucket(carried, transitions, window_start, window_end)
 
-        # Every statistic already registered for this entity must get a row
-        # in every hour, even when this window saw nothing of its state.
-        # Otherwise the next window finds no row in the hour before it,
-        # restarts that statistic's cumulative sum from zero and loses the
-        # running total.
-        known_states = {
-            parts[1]
-            for statistic_id in self._registry.statistic_ids_for(cfg.entity_id)
-            if (parts := self._registry.describe(statistic_id)) is not None
-        }
+        # Every statistic this entity already has must get a row in every
+        # hour, even when this window saw nothing of its state. Otherwise the
+        # next window finds no row in the hour before it, restarts that
+        # statistic's cumulative sum from zero and loses the running total.
         payloads = build_payloads(
-            cfg, buckets, window_start, window_end, base_sums, frozenset(known_states)
-        )
-
-        await self._registry.async_register(
-            cfg.entity_id,
-            {
-                statistic_id: (state, metric)
-                for statistic_id, (_, _, state, metric) in payloads.items()
-            },
+            cfg, buckets, window_start, window_end, base_sums, existing
         )
 
         next_sums = dict(base_sums)
-        for statistic_id, (metadata, statistic_rows, _, _) in payloads.items():
+        next_existing = dict(existing)
+        for statistic_id, (metadata, statistic_rows) in payloads.items():
             async_add_external_statistics(self._hass, metadata, statistic_rows)
             next_sums[statistic_id] = statistic_rows[-1]["sum"]
+            # A statistic created by this chunk is not in the recorder's
+            # metadata yet - the write is still queued - so carry it forward
+            # ourselves or the next chunk would drop it and break density.
+            next_existing[statistic_id] = metadata["name"]
 
-        return next_sums, int((window_end - window_start) / HOUR)
+        return next_sums, int((window_end - window_start) / HOUR), next_existing
 
-    async def _async_forget_deleted(self, entity_id: str) -> None:
-        """Drop registry entries whose statistic the user has deleted.
-
-        Deleting a statistic is done in Settings -> System -> Tools ->
-        Statistics, which removes its `statistics_meta` row. The registry
-        would otherwise still name it, so it would stay in `known_states`
-        and be recreated - densely - by the next compile. Absent metadata is
-        a sound signal here precisely because this integration never deletes
-        anything itself.
-
-        Deliberately once per compile rather than per chunk: a statistic
-        cannot be deleted midway through one, and the writes we make are
-        still queued at that point.
-        """
-        if not (known := set(self._registry.statistic_ids_for(entity_id))):
-            return
-        metadata = await get_instance(self._hass).async_add_executor_job(
-            ft.partial(get_metadata, self._hass, statistic_ids=known)
-        )
-        if deleted := known - set(metadata):
-            _LOGGER.info(
-                "Forgetting %s: deleted from the recorder", ", ".join(sorted(deleted))
-            )
-            await self._registry.async_forget(deleted)
-
-    async def _async_watermark(self, entity_id: str) -> float | None:
+    async def _async_watermark(self, statistic_ids: dict[str, str]) -> float | None:
         """Return the newest compiled hour for an entity, or None.
 
-        Takes the max across every registered statistic: density is
-        guaranteed only for statistics known at the time a window was
+        Takes the max across every one of the entity's statistics: density
+        is guaranteed only for statistics that existed when a window was
         compiled, so any single ID can lag the others.
         """
-        statistic_ids = self._registry.statistic_ids_for(entity_id)
         if not statistic_ids:
             return None
         newest: float | None = None
@@ -297,10 +283,9 @@ class Compiler:
         return newest
 
     async def _async_base_sums(
-        self, entity_id: str, window_start: float
+        self, statistic_ids: dict[str, str], window_start: float
     ) -> dict[str, float]:
         """Return cumulative sums for the hour immediately before the window."""
-        statistic_ids = self._registry.statistic_ids_for(entity_id)
         if not statistic_ids:
             return {}
         result = await get_instance(self._hass).async_add_executor_job(

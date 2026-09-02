@@ -10,6 +10,7 @@ import voluptuous as vol
 from homeassistant.const import CONF_ENTITY_ID, CONF_NAME
 from homeassistant.helpers import config_validation as cv
 
+from .statistic_ids import state_token
 from .const import (
     DEFAULT_IGNORE,
     DEFAULT_RECORD,
@@ -20,6 +21,8 @@ from .const import (
     NO_DATA,
     UNKNOWN_STATES,
 )
+
+_NO_DATA_TOKEN = state_token(NO_DATA)
 
 CONF_DEFAULT = "default"
 CONF_STATES = "states"
@@ -54,7 +57,9 @@ class EntityConfig:
         """
         # NO_DATA is reserved for the compiler. A source entity reporting it
         # is ignored rather than allowed to merge with the reserved band.
-        if raw_state == NO_DATA:
+        # Compared as tokens because that is the granularity a statistic ID
+        # has: a state named "nodata" reaches the same ID as "no_data".
+        if state_token(raw_state) == _NO_DATA_TOKEN:
             return None
 
         if (disposition := self.states.get(raw_state)) is not None:
@@ -87,11 +92,11 @@ class EntityConfig:
 def _no_reserved_state(states: dict[str, str]) -> dict[str, str]:
     """Reject the reserved NO_DATA name as a key or a map target."""
     for key, value in states.items():
-        if key == NO_DATA:
+        if state_token(key) == _NO_DATA_TOKEN:
             raise vol.Invalid(
                 f"{NO_DATA!r} is reserved and cannot be used as a state key"
             )
-        if value == NO_DATA:
+        if state_token(value) == _NO_DATA_TOKEN:
             raise vol.Invalid(
                 f"{NO_DATA!r} is reserved and cannot be used as a map target"
             )

@@ -47,10 +47,9 @@ A pure pipeline with a single I/O boundary. Dependencies point one way:
 
 ```
 const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds, count)}
-       ├─ statistic_ids     pure: build an external statistic ID
+       ├─ statistic_ids     pure: build, parse and match an external statistic ID
        ├─ config ── canonicalise   pure: recorder rows -> canonical transitions
        │        └─ config_flow    HA UI: entity -> EntityConfig, as a helper
-       ├─ registry          .storage: statistic_id -> (entity, state, metric)
        └─ payload           pure: buckets -> cumulative StatisticData rows
                 │
             compiler        the only module that touches the recorder
@@ -58,12 +57,11 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
             __init__        setup, hourly schedule, recompute service
 ```
 
-Everything except `compiler` and `registry` is pure and testable without a
-`hass` instance. Keep it that way: if a change needs recorder access in a lower
+Everything except `compiler` is pure and testable without a `hass` instance. Keep it that way: if a change needs recorder access in a lower
 module, the design is drifting.
 
-`Compiler` is a class built from `(hass, registry)`; the entry points are its
-methods, not module-level functions.
+`Compiler` is a class built from `(hass,)`; the entry points are its methods,
+not module-level functions.
 `Compiler.async_compile(cfg, start, end=None)` compiles `[start, end)` and is
 the single implementation behind live compilation, catch-up after downtime, and
 backfill. They differ only in the start timestamp. Preserve that — it is what
@@ -78,8 +76,8 @@ and the compiling in `async_compile`.
 Configuration arrives from two sources. `hass.data[DOMAIN]["yaml_configs"]`
 is static; `["entry_configs"]` holds one `EntityConfig` per config entry;
 `["all_configs"]()` joins them, YAML first, and is what the hourly run and
-the `recompute` service iterate. The registry, compiler, lock and hourly
-timer stay singletons built in `async_setup` — a per-entry timer would let
+the `recompute` service iterate. The compiler, lock and hourly timer stay
+singletons built in `async_setup` — a per-entry timer would let
 two entities compile concurrently and defeat the lock.
 
 ## Invariants
@@ -95,8 +93,8 @@ best end-to-end check, and it catches both over- and under-attribution.
 derive per-bucket values. A sum that decreases is always a bug.
 
 **Rows are dense over every *known* statistic, not merely the states seen in
-the window.** `payload.build_payloads` takes `known_states`, which `compiler`
-sources from the registry. Emitting only the window's own states leaves a
+the window.** `payload.build_payloads` takes `existing`, which `compiler`
+sources from the recorder's own `statistics_meta`. Emitting only the window's own states leaves a
 statistic with no row in the hour before the next window, so its cumulative
 base reads as zero and the series restarts — the sum goes down, and the loss
 is permanent because the next run bases on the deflated rows.
@@ -149,19 +147,30 @@ overlap or hole, so a transition exactly on a boundary is counted exactly once
 regardless of which window compiles it. Changing either comparison alone
 silently loses or double-counts boundary events.
 
-**Statistic IDs are write-only.** `VALID_STATISTIC_ID` forbids double
-underscores and allows only `[a-z0-9_]`, so no separator is reserved and IDs
-cannot be parsed back unambiguously. `registry` is the only reverse mapping. That
-makes the registry load-bearing rather than a cache: `async_setup` calls
-`_async_registry_lost`, and if the registry is empty while the recorder still
-holds `discrete_statistics:` metadata, it sets `hass.data[DOMAIN]["halted"]`
-and every compile path refuses. Without that, an empty registry silently
-restarts each cumulative series at zero and the upsert rewrites the surviving
-rows downward. The check is deliberately at setup, not on the compile path:
-the recorder is a hard dependency whose own setup ends with
-`await instance.async_db_ready`, so the database is migrated and queryable by
-then — and an untracked executor await on the hourly path makes the run
-untestable, because `async_block_till_done` returns straight through it.
+**A statistic ID's state is exactly one token, and that is what makes it
+readable.** `build` slugifies the state with *no* separator, so an ID is
+`<entity slug>_<state token>_<metric>` and `parse` reads it back from the
+right: last token the metric, second-to-last the state, everything before the
+entity. Without that, `climate.kitchen` in state `heat_cool` and
+`climate.kitchen_heat` in state `cool` produce the *same* ID and interleave
+two entities' data in one series — `VALID_STATISTIC_ID` allows only
+`[a-z0-9_]` and forbids `__`, so no separator can be reserved to tell them
+apart. There is no stored index: `belongs_to` plus the recorder's
+`statistics_meta` is the whole association, which means a statistic and its
+description can never drift apart.
+
+**Two states with the same token are one statistic, and must be added.**
+`payload._fold` groups buckets by `state_token` before building rows.
+`heat_cool` and `heatcool` merge, deliberately — it behaves like a free state
+map. Keying payloads by raw state instead would let the second state's rows
+*replace* the first's, and the hour would stop totalling wall-clock time.
+
+**A statistic not seen in a window is still relabelled.** `build_payloads`
+receives each existing statistic's stored name and swaps the display half via
+`payload.rename`, splitting on the *last* `": "`. The state half cannot be
+rebuilt from the ID — the ID holds only the token — so a rename would
+otherwise never reach a state the entity has not been in for months, and
+neither would a change to `mean_type` or the units.
 
 **`no_data` is reserved.** It is what the compiler attributes a span to when it
 cannot determine a real state — before an entity's first known state, or across
@@ -173,8 +182,8 @@ on the hour, so compiling from the hour containing it would give every helper
 a `no_data` statistic recording the minutes before it — and by the density
 invariant that statistic is then written forever. `_async_compile_chunk`
 advances `window_start` to the first whole hour that begins in a recordable
-state instead. The trim is conditional on the registry holding nothing for the
-entity, and must stay that way: once statistics exist, skipping hours leaves a
+state instead. The trim is conditional on the entity having no statistics at
+all, and must stay that way: once statistics exist, skipping hours leaves a
 hole, and the next run finds no base in the hour before its window and restarts
 every cumulative sum at zero.
 
@@ -182,14 +191,11 @@ every cumulative sum at zero.
 buckets it has source data for and leaves everything else alone, so a rebuild
 can never discard statistics whose source states have already been purged.
 Deleting a statistic is the user's decision, made in Settings → System → Tools
-→ Statistics — and it sticks: `_async_forget_deleted` drops registry entries
-whose `statistics_meta` row is gone, so the deleted statistic leaves
-`known_states` instead of being written back densely on the next compile.
-Absent metadata is a sound signal for exactly the reason above: nothing here
-deletes anything, so the user is the only one who could have. Reaping is per
-statistic ID while density is per state, so deleting one metric of a state
-leaves the state known and the deleted metric returns — both of a state's
-statistics have to go for the state to go.
+→ Statistics — and it sticks, because nothing else records that the statistic
+existed. It is absent from `statistics_meta` on the next compile, so it is
+absent from `existing` and is never written again. A state that *recurs* is
+recorded in full, both metrics of it; only the metrics of states that do not
+occur stay deleted.
 
 **An entity is configured once, from one source.** Two configurations
 resolve the same raw states through different disposition tables and write
