@@ -941,3 +941,48 @@ async def test_an_entitys_first_state_is_not_counted_as_a_transition(
 
     counts = await read_sums(hass, COUNT_ON, start, start + timedelta(hours=5))
     assert counts == [0, 0, 0]
+
+
+async def test_a_removed_entity_becomes_no_data_rather_than_failing(
+    recorder, freezer
+):
+    """The live failure: group.family, state='', every hour forever.
+
+    Home Assistant records an empty state when an entity is removed. It
+    cannot go in a statistic ID, and letting build() raise aborted the whole
+    entity's compile - permanently, since the watermark never advanced past
+    it. The span is attributed to no_data instead, which keeps the durations
+    tiling the clock and shows the gap on a chart.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=1))
+    hass.states.async_set(ENTITY, "")  # the entity is removed
+    await hass.async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=3))
+    hass.states.async_set(ENTITY, "on")  # and comes back
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=4))
+    compiler = Compiler(hass)
+    assert await compiler.async_compile(cfg(), start.timestamp()) == 4
+
+    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=4))
+    gap = await read_sums(hass, DURATION_NO_DATA, start, start + timedelta(hours=4))
+    assert on == [1.0, 1.0, 1.0, 2.0]
+    assert gap == [0.0, 1.0, 2.0, 2.0]
+    # Every hour still totals exactly one hour of wall clock.
+    for hour in range(4):
+        spent = (on[hour] - (on[hour - 1] if hour else 0.0)) + (
+            gap[hour] - (gap[hour - 1] if hour else 0.0)
+        )
+        assert spent == pytest.approx(1.0), hour
+    # no_data keeps its duration-only shape even though something did
+    # transition into it.
+    assert COUNT_NO_DATA not in await existing(hass)

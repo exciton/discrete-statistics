@@ -46,18 +46,32 @@ def state_token(state: str) -> str:
     return slugify(state, separator="")
 
 
+def is_recordable_state(state: str) -> bool:
+    """False when a state cannot be represented in a statistic ID.
+
+    Two ways that happens. An empty state - what the recorder stores when an
+    entity is removed - tokenises to nothing and would leave a double
+    underscore. And anything unsluggable tokenises to the literal "unknown",
+    which would silently merge with a genuine `unknown`.
+
+    Callers resolve these to no_data rather than dropping them, so the span
+    shows up on a chart instead of being absorbed into whatever came before.
+    """
+    token = state_token(state)
+    if not token:
+        return False
+    return token != "unknown" or state.strip().lower() == "unknown"
+
+
 def build(entity_id: str, state: str, metric: str) -> str:
     """Return the external statistic ID for an entity/state/metric triple."""
-    # Detect states that tokenise to "unknown", which would collide with a
-    # genuine "unknown" state. slugify returns the literal string "unknown"
-    # for inputs that don't contain any sluggable characters.
-    token = state_token(state)
-    if token == "unknown" and state.strip().lower() != "unknown":
+    if not is_recordable_state(state):
         raise InvalidStatisticIdError(
-            f"State {state!r} does not slugify to anything distinguishable "
-            f"(would collide with the 'unknown' state's statistic ID)"
+            f"State {state!r} cannot be represented in a statistic ID; "
+            f"callers should resolve it to no_data instead"
         )
 
+    token = state_token(state)
     object_id = f"{slugify(entity_id, separator='_')}_{token}_{metric}"
     statistic_id = f"{DOMAIN}:{object_id}"
     if not VALID_STATISTIC_ID.match(statistic_id):

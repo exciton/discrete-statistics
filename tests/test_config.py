@@ -279,3 +279,32 @@ def test_an_unmapped_state_tokenising_to_no_data_is_still_ignored():
 def test_a_map_target_tokenising_to_no_data_is_rejected():
     with pytest.raises(vol.Invalid, match="no_data"):
         parse([{"entity_id": "sensor.x", "states": {"weird": "No Data"}}])
+
+
+def test_an_empty_state_becomes_no_data():
+    """The recorder stores an empty state when an entity is removed.
+
+    It cannot be put in a statistic ID, and carrying the previous state
+    across it would claim the entity was still in it. no_data is the honest
+    answer and is visible on a chart.
+    """
+    for default in ("record", "record_known"):
+        cfg = parse([{"entity_id": "sensor.x", "default": default}])[0]
+        assert cfg.resolve("") == "no_data", default
+
+
+def test_an_unsluggable_state_becomes_no_data():
+    """It would otherwise collide with a genuine `unknown`."""
+    cfg = parse([{"entity_id": "sensor.x", "default": "record"}])[0]
+    assert cfg.resolve("!!!") == "no_data"
+    assert cfg.resolve("-") == "no_data"
+    # A real `unknown` is untouched, and still ignored by record_known.
+    assert cfg.resolve("unknown") == "unknown"
+    known = parse([{"entity_id": "sensor.x", "default": "record_known"}])[0]
+    assert known.resolve("unknown") is None
+
+
+def test_an_ignored_state_stays_ignored_rather_than_becoming_no_data():
+    """Ignoring means carry-forward; only the unrepresentable becomes a gap."""
+    cfg = parse([{"entity_id": "sensor.x", "states": {"blip": "ignore"}}])[0]
+    assert cfg.resolve("blip") is None

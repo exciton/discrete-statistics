@@ -9,7 +9,7 @@ import voluptuous as vol
 from homeassistant.const import CONF_ENTITY_ID, CONF_NAME
 from homeassistant.helpers import config_validation as cv
 
-from .statistic_ids import state_token
+from .statistic_ids import is_recordable_state, state_token
 from .const import (
     DEFAULT_IGNORE,
     DEFAULT_RECORD,
@@ -47,10 +47,20 @@ class EntityConfig:
         The reserved band is checked on the RESULT, not the input: a raw
         `No Data` reaches the compiler's own ID only if recorded under its
         own name, and testing the input would forbid mapping it away.
+
+        A state that cannot be represented in an ID at all - an empty one,
+        which is what the recorder stores when an entity is removed - becomes
+        NO_DATA. Carrying the previous state forward would claim the entity
+        was still in it; no_data says plainly that we cannot tell, and shows
+        as a band on the chart.
         """
         canonical = self._resolve(raw_state)
-        if canonical is not None and state_token(canonical) == _NO_DATA_TOKEN:
+        if canonical is None:
             return None
+        if state_token(canonical) == _NO_DATA_TOKEN:
+            return None
+        if not is_recordable_state(canonical):
+            return NO_DATA
         return canonical
 
     def _resolve(self, raw_state: str) -> str | None:

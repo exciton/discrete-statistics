@@ -145,9 +145,13 @@ purged — it attributes the time to `no_data`. Durations therefore always
 sum to 24h per day, and gaps are visible in the chart rather than silently
 filled in.
 
-`no_data` has a `_duration` statistic only. Nothing transitions *into* it —
-it is what is left when no state can be carried in — so there is no
-`nodata_count`.
+`no_data` also covers a state that cannot be recorded at all: an empty one,
+which Home Assistant stores when an entity is removed, or one made only of
+punctuation. Those spans show as a gap rather than being folded into whatever
+came before.
+
+`no_data` has a `_duration` statistic only — it describes spans we cannot
+account for, not something the device did, so there is no `nodata_count`.
 
 A statistic is never *opened* with `no_data`, though. An entity's first state
 rarely lands exactly on the hour, and recording the few minutes before it would

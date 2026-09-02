@@ -9,6 +9,7 @@ from custom_components.discrete_statistics.statistic_ids import (
     InvalidStatisticIdError,
     belongs_to,
     build,
+    is_recordable_state,
     parse,
     state_token,
 )
@@ -135,3 +136,18 @@ def test_states_differing_only_by_separators_share_a_token():
     """Deliberate: they merge into one statistic, like a free state map."""
     assert state_token("heat_cool") == state_token("heatcool") == "heatcool"
     assert state_token("Heat Cool") == "heatcool"
+
+
+def test_is_recordable_state():
+    assert is_recordable_state("on")
+    assert is_recordable_state("unknown")
+    assert is_recordable_state("heat_cool")
+    assert not is_recordable_state("")
+    assert not is_recordable_state("!!!")
+    assert not is_recordable_state("-")
+
+
+def test_build_refuses_what_is_not_recordable():
+    for state in ("", "!!!", "-"):
+        with pytest.raises(InvalidStatisticIdError):
+            build("sensor.x", state, METRIC_DURATION)

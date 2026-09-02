@@ -176,10 +176,13 @@ rebuilt from the ID — the ID holds only the token — so a rename would
 otherwise never reach a state the entity has not been in for months, and
 neither would a change to `mean_type` or the units.
 
-**`no_data` is reserved.** It is what the compiler attributes a span to when it
-cannot determine a real state — before an entity's first known state, or across
-a gap whose source rows were purged. It has a duration statistic but no count:
-nothing ever transitions *into* it, so a count would be structurally zero.
+**`no_data` is reserved.** It is what the compiler attributes a span to when
+it cannot determine a real state — before an entity's first known state,
+across a gap whose source rows were purged, or for a state that cannot be put
+in a statistic ID at all. That last one does mean a transition *into* no_data
+exists, but it still has a duration statistic and no count: it is a band for
+spans we cannot describe, not a state the device was in, so a count would
+measure our own ignorance.
 
 **A series never opens with `no_data`.** An entity's first state rarely lands
 on the hour, so compiling from the hour containing it would give every helper
