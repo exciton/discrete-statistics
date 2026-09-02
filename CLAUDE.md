@@ -151,7 +151,17 @@ silently loses or double-counts boundary events.
 
 **Statistic IDs are write-only.** `VALID_STATISTIC_ID` forbids double
 underscores and allows only `[a-z0-9_]`, so no separator is reserved and IDs
-cannot be parsed back unambiguously. `registry` is the only reverse mapping.
+cannot be parsed back unambiguously. `registry` is the only reverse mapping. That
+makes the registry load-bearing rather than a cache: `async_setup` calls
+`_async_registry_lost`, and if the registry is empty while the recorder still
+holds `discrete_statistics:` metadata, it sets `hass.data[DOMAIN]["halted"]`
+and every compile path refuses. Without that, an empty registry silently
+restarts each cumulative series at zero and the upsert rewrites the surviving
+rows downward. The check is deliberately at setup, not on the compile path:
+the recorder is a hard dependency whose own setup ends with
+`await instance.async_db_ready`, so the database is migrated and queryable by
+then — and an untracked executor await on the hourly path makes the run
+untestable, because `async_block_till_done` returns straight through it.
 
 **`no_data` is reserved.** It is what the compiler attributes a span to when it
 cannot determine a real state — before an entity's first known state, or across

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import functools as ft
 import logging
 from typing import Any
 
 import voluptuous as vol
 from homeassistant.components import persistent_notification
 from homeassistant.components.recorder import get_instance
+from homeassistant.components.recorder.statistics import get_metadata
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     CONF_ENTITY_ID,
@@ -46,6 +48,8 @@ __all__ = [
 
 SERVICE_RECOMPUTE = "recompute"
 
+REGISTRY_LOST_ISSUE = "registry_lost"
+
 RECOMPUTE_SCHEMA = vol.Schema(
     {
         vol.Optional("entity_id"): cv.entity_id,
@@ -62,6 +66,14 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     await registry.async_load()
     compiler = Compiler(hass, registry)
 
+    # Resolved once, here, rather than lazily on the first compile. The
+    # recorder is a hard dependency and its own setup ends with
+    # `await instance.async_db_ready`, so the database is migrated and
+    # queryable by the time this runs - and doing it here keeps a database
+    # round-trip off the hourly path, where an await that Home Assistant does
+    # not track would also make the run untestable.
+    halted = await _async_registry_lost(hass, registry)
+
     # Serialises compilation. The compiler reads a statistic's cumulative base
     # back from the recorder, so two overlapping compiles of the same entity
     # could both read the same stale base before either writes, and the second
@@ -76,6 +88,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         "registry": registry,
         "compiler": compiler,
         "lock": lock,
+        # True when the registry was lost but its statistics were not, so
+        # nothing may compile until a human intervenes and restarts.
+        "halted": halted,
     }
     hass.data[DOMAIN] = data
 
@@ -93,6 +108,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     data["all_configs"] = _all_configs
 
     async def _async_compile_all(_now: Any = None) -> None:
+        if data["halted"]:
+            return
         backlog = get_instance(hass).backlog
         if backlog > BACKLOG_THRESHOLD:
             _LOGGER.debug(
@@ -131,6 +148,14 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _async_on_started)
 
     async def _async_recompute(call: ServiceCall) -> None:
+        # Raised rather than logged: someone invoked this by hand and would
+        # otherwise watch it report success while writing nothing.
+        if data["halted"]:
+            raise ServiceValidationError(
+                "The statistic registry is empty but discrete_statistics "
+                "statistics still exist. Recomputing now would overwrite them "
+                "from zero. See the repair issue for how to recover."
+            )
         entity_id = call.data.get("entity_id")
         if entity_id is None:
             targets = list(data["all_configs"]())
@@ -172,6 +197,56 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
+async def _async_registry_lost(hass: HomeAssistant, registry: Registry) -> bool:
+    """True when the registry is gone but the statistics it described are not.
+
+    The registry is the only reverse mapping from a statistic ID back to
+    (entity, state, metric); the IDs themselves are write-only by design.
+    Lose it while the statistics survive - restoring a database backup
+    without the matching `.storage` file is the way in - and every path that
+    reads it degrades silently at once: `_async_base_sums` finds no IDs so
+    each cumulative series restarts at zero, `known_states` empties so
+    density collapses to whatever the window happens to see, and the
+    leading-no_data trim moves the series' start. The recorder's upsert then
+    rewrites the existing rows downward, permanently, destroying exactly the
+    history this integration exists to keep.
+
+    So refuse to compile rather than try to cope. Recovery needs a human -
+    restore the file, or accept the loss and delete the statistics - and
+    therefore a restart, which is when this runs again.
+    """
+    async_delete_issue(hass, DOMAIN, REGISTRY_LOST_ISSUE)
+    if not registry.is_empty():
+        return False
+
+    metadata = await get_instance(hass).async_add_executor_job(
+        ft.partial(get_metadata, hass, statistic_source=DOMAIN)
+    )
+    if not (orphaned := sorted(metadata)):
+        return False
+
+    _LOGGER.error(
+        "Refusing to compile: the statistic registry is empty but the recorder "
+        "still holds %s discrete_statistics statistics (%s). Compiling would "
+        "restart every cumulative series at zero and overwrite the existing "
+        "rows. Restore .storage/discrete_statistics.registry from the same "
+        "backup as the database, or delete these statistics in Settings > "
+        "System > Tools > Statistics to start afresh, then restart",
+        len(orphaned),
+        ", ".join(orphaned[:3]),
+    )
+    async_create_issue(
+        hass,
+        DOMAIN,
+        REGISTRY_LOST_ISSUE,
+        is_fixable=False,
+        severity=IssueSeverity.ERROR,
+        translation_key="registry_lost",
+        translation_placeholders={"count": str(len(orphaned))},
+    )
+    return True
+
+
 def _clash_issue_id(entry: ConfigEntry) -> str:
     return f"yaml_clash_{entry.entry_id}"
 
@@ -201,6 +276,21 @@ async def _async_compile_and_notify(
     """
     data = hass.data[DOMAIN]
     compiler: Compiler = data["compiler"]
+
+    if data["halted"]:
+        # A new helper on a system whose registry was lost: say so here as
+        # well as in the repair issue, because this path was reached by
+        # someone pressing Submit and waiting for an answer.
+        persistent_notification.async_create(
+            hass,
+            f"Not compiling {_describe(cfg)}: the statistic registry is empty "
+            "but discrete_statistics statistics still exist. See Settings > "
+            "System > Repairs.",
+            title="Discrete Statistics",
+            notification_id=f"{DOMAIN}_{entry.entry_id}",
+        )
+        return
+
     try:
         # The same lock the hourly run uses; a full recompute can hold it
         # for minutes and the hourly run simply awaits it. Never acquired

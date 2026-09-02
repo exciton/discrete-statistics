@@ -30,6 +30,10 @@ class Registry:
     async def _async_save(self) -> None:
         await self._store.async_save({"statistics": self._statistics})
 
+    def is_empty(self) -> bool:
+        """True when nothing is registered for any entity."""
+        return not self._statistics
+
     def statistic_ids_for(self, entity_id: str) -> list[str]:
         """Return the known statistic IDs for an entity, sorted."""
         return sorted(

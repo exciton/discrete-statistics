@@ -48,6 +48,10 @@
     "yaml_clash": {
       "title": "Duplicate configuration for {entity_id}",
       "description": "{entity_id} is configured both in configuration.yaml and as a helper. The YAML configuration is being used and the helper has been disabled, because two configurations write conflicting values to the same statistics. Remove one of them."
+    },
+    "registry_lost": {
+      "title": "Statistic registry lost",
+      "description": "The registry that maps this integration's statistic IDs back to their entity and state is empty, but the recorder still holds {count} discrete_statistics statistics. Compiling would restart every cumulative series at zero and overwrite the existing rows, so it has been stopped.\n\nThis usually means a database backup was restored without the matching `.storage` file. Restore `.storage/discrete_statistics.registry` from the same backup as the database, or - if you are willing to lose the recorded history - delete these statistics in Settings > System > Tools > Statistics. Then restart Home Assistant."
     }
   }
 }

@@ -265,6 +265,18 @@ statistics — its `_duration` and its `_count` — if you want the state gone
 entirely; deleting only one leaves the state tracked and the other comes back. Deletion should be a decision you make, not a side effect of a routine
 rebuild.
 
+### If the registry is lost
+
+A small file, `.storage/discrete_statistics.registry`, is the only record of
+which statistic belongs to which entity and state — the statistic IDs
+themselves cannot be read backwards. Restore a database backup without it and
+the integration would have no way to continue the existing series, so it stops
+and raises a repair issue rather than overwriting them from zero.
+
+To recover, restore that file from the same backup as the database, then
+restart. If you would rather start again, delete the statistics in
+**Settings → System → Tools → Statistics** and restart.
+
 ## How it works
 
 Every hour at `:03`, the component reads recorder history for each
