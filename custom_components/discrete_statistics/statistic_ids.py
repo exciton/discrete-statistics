@@ -6,8 +6,8 @@ An ID is three parts joined by underscores:
 
 The state is slugified with *no* separator, so it is always exactly one
 token, and the ID reads back from the right. Without that,
-`climate.kitchen`/`heat_cool` and `climate.kitchen_heat`/`cool` produce the
-same ID and write to the same series.
+`climate.zone`/`heat_cool` and `climate.zone_heat`/`cool` produce the same
+ID and write to the same series.
 
 The token is lossy on purpose - `heat_cool` and `heatcool` become one
 statistic, which behaves like a free state mapping - and the readable state

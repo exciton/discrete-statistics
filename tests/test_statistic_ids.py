@@ -75,8 +75,8 @@ def test_genuine_unknown_state_is_accepted():
 def test_the_state_is_always_one_token():
     """Underscores are stripped from the state, never from the entity."""
     assert (
-        build("climate.kitchen", "heat_cool", METRIC_COUNT)
-        == "discrete_statistics:climate_kitchen_heatcool_count"
+        build("climate.zone", "heat_cool", METRIC_COUNT)
+        == "discrete_statistics:climate_zone_heatcool_count"
     )
     assert (
         build("binary_sensor.grid_status", "no_data", METRIC_DURATION)
@@ -90,21 +90,21 @@ def test_nesting_entities_no_longer_collide():
     Under a multi-token state these two produce the identical ID and write
     to the same series, silently interleaving two entities' data.
     """
-    a = build("climate.kitchen", "heat_cool", METRIC_COUNT)
-    b = build("climate.kitchen_heat", "cool", METRIC_COUNT)
+    a = build("climate.zone", "heat_cool", METRIC_COUNT)
+    b = build("climate.zone_heat", "cool", METRIC_COUNT)
     assert a != b
-    assert a == "discrete_statistics:climate_kitchen_heatcool_count"
-    assert b == "discrete_statistics:climate_kitchen_heat_cool_count"
+    assert a == "discrete_statistics:climate_zone_heatcool_count"
+    assert b == "discrete_statistics:climate_zone_heat_cool_count"
 
 
 def test_parse_reads_back_from_the_right():
-    assert parse("discrete_statistics:climate_kitchen_heatcool_count") == (
-        "climate_kitchen",
+    assert parse("discrete_statistics:climate_zone_heatcool_count") == (
+        "climate_zone",
         "heatcool",
         "count",
     )
-    assert parse("discrete_statistics:climate_kitchen_heat_cool_count") == (
-        "climate_kitchen_heat",
+    assert parse("discrete_statistics:climate_zone_heat_cool_count") == (
+        "climate_zone_heat",
         "cool",
         "count",
     )
@@ -112,9 +112,9 @@ def test_parse_reads_back_from_the_right():
 
 def test_parse_rejects_ids_that_are_not_ours():
     assert parse("sensor.living_room_temperature") is None
-    assert parse("other_domain:climate_kitchen_heat_count") is None
+    assert parse("other_domain:climate_zone_heat_count") is None
     # A metric that is not one of ours: renamed by hand, or from elsewhere.
-    assert parse("discrete_statistics:climate_kitchen_heat_seconds") is None
+    assert parse("discrete_statistics:climate_zone_heat_seconds") is None
     assert parse("discrete_statistics:tooshort") is None
 
 
@@ -124,12 +124,12 @@ def test_a_state_named_like_a_metric_still_parses():
 
 
 def test_belongs_to_distinguishes_nesting_entities():
-    a = build("climate.kitchen", "heat_cool", METRIC_COUNT)
-    b = build("climate.kitchen_heat", "cool", METRIC_COUNT)
-    assert belongs_to(a, "climate.kitchen")
-    assert not belongs_to(a, "climate.kitchen_heat")
-    assert belongs_to(b, "climate.kitchen_heat")
-    assert not belongs_to(b, "climate.kitchen")
+    a = build("climate.zone", "heat_cool", METRIC_COUNT)
+    b = build("climate.zone_heat", "cool", METRIC_COUNT)
+    assert belongs_to(a, "climate.zone")
+    assert not belongs_to(a, "climate.zone_heat")
+    assert belongs_to(b, "climate.zone_heat")
+    assert not belongs_to(b, "climate.zone")
 
 
 def test_states_differing_only_by_separators_share_a_token():

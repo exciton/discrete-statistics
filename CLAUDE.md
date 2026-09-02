@@ -155,8 +155,8 @@ silently loses or double-counts boundary events.
 readable.** `build` slugifies the state with *no* separator, so an ID is
 `<entity slug>_<state token>_<metric>` and `parse` reads it back from the
 right: last token the metric, second-to-last the state, everything before the
-entity. Without that, `climate.kitchen` in state `heat_cool` and
-`climate.kitchen_heat` in state `cool` produce the *same* ID and interleave
+entity. Without that, `climate.zone` in state `heat_cool` and
+`climate.zone_heat` in state `cool` produce the *same* ID and interleave
 two entities' data in one series — `VALID_STATISTIC_ID` allows only
 `[a-z0-9_]` and forbids `__`, so no separator can be reserved to tell them
 apart. There is no stored index: `belongs_to` plus the recorder's

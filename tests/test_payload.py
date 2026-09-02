@@ -272,7 +272,7 @@ def test_a_rename_survives_a_colon_in_the_old_display_name():
         T0,
         T0 + HOUR,
         {},
-        {DURATION_ON: "Shed: Grid Status: on (duration)"},
+        {DURATION_ON: "Outbuilding: Grid Status: on (duration)"},
     )
     metadata, _ = payloads[DURATION_ON]
     assert metadata["name"] == "Grid: on (duration)"

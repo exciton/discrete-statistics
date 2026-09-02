@@ -945,9 +945,7 @@ async def test_an_entitys_first_state_is_not_counted_as_a_transition(
 
 
 async def test_a_reloaded_entity_does_not_kill_the_compile(recorder, freezer):
-    """The live failure: group.family, state NULL, every hour forever.
-
-    A reload writes an empty state and restores the real one moments later.
+    """A reload writes an empty state and restores the real one moments later.
     It cannot go in a statistic ID, and letting build() raise aborted the
     entity's whole compile - permanently, because the watermark never got
     past the chunk containing it. It is treated as `unknown` now, so under
