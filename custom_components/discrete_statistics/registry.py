@@ -44,6 +44,19 @@ class Registry:
             return None
         return parts["entity_id"], parts["state"], parts["metric"]
 
+    async def async_forget(self, statistic_ids: set[str]) -> None:
+        """Drop statistic IDs from the registry. Idempotent.
+
+        Only for statistics that no longer exist in the recorder. Forgetting
+        one that does exist would drop it from `known_states` and end its
+        density, which the next compile reads as a missing cumulative base.
+        """
+        if not (present := statistic_ids & self._statistics.keys()):
+            return
+        for statistic_id in present:
+            del self._statistics[statistic_id]
+        await self._async_save()
+
     async def async_register(
         self, entity_id: str, entries: dict[str, tuple[str, str]]
     ) -> None:

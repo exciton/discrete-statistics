@@ -42,3 +42,31 @@ async def test_survives_a_reload(hass):
     reloaded = Registry(hass)
     await reloaded.async_load()
     assert reloaded.describe(DURATION_ON) == (ENTITY, "on", "duration")
+
+
+async def test_forget_drops_an_entry(hass):
+    registry = Registry(hass)
+    await registry.async_load()
+    await registry.async_register(
+        ENTITY, {DURATION_ON: ("on", "duration"), COUNT_ON: ("on", "count")}
+    )
+
+    await registry.async_forget({DURATION_ON})
+
+    assert registry.statistic_ids_for(ENTITY) == [COUNT_ON]
+    assert registry.describe(DURATION_ON) is None
+
+    reloaded = Registry(hass)
+    await reloaded.async_load()
+    assert reloaded.statistic_ids_for(ENTITY) == [COUNT_ON]
+
+
+async def test_forget_ignores_ids_it_does_not_hold(hass):
+    registry = Registry(hass)
+    await registry.async_load()
+    await registry.async_register(ENTITY, {DURATION_ON: ("on", "duration")})
+
+    await registry.async_forget({COUNT_ON})
+    await registry.async_forget(set())
+
+    assert registry.statistic_ids_for(ENTITY) == [DURATION_ON]

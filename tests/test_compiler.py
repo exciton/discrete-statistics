@@ -715,3 +715,121 @@ async def test_nothing_is_compiled_until_a_whole_hour_is_known(recorder, freezer
 
     assert await compiler.async_compile_incremental(cfg()) == 0
     assert registry.statistic_ids_for(ENTITY) == []
+
+
+async def _seed_two_states(hass, freezer, start):
+    """on for hour 0, off from hour 1 onward. No trim: the first state is on the hour."""
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    freezer.move_to(start + timedelta(hours=1))
+    hass.states.async_set(ENTITY, "off")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+
+async def _delete(hass, statistic_ids):
+    get_instance(hass).async_clear_statistics(list(statistic_ids))
+    await get_instance(hass).async_block_till_done()
+
+
+async def test_a_deleted_statistic_is_forgotten_not_recreated(recorder, freezer):
+    """Settings -> System -> Tools -> Statistics is the whole interface.
+
+    Without this the registry still names the statistic, so it stays in
+    known_states and the very next compile writes it back - densely, and
+    forever.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    await _seed_two_states(hass, freezer, start)
+
+    freezer.move_to(start + timedelta(hours=4))
+    registry = Registry(hass)
+    await registry.async_load()
+    compiler = Compiler(hass, registry)
+    await compiler.async_compile(cfg(), start.timestamp())
+    assert DURATION_ON in registry.statistic_ids_for(ENTITY)
+
+    # "on" never occurs again, so only the registry could resurrect it.
+    await _delete(hass, [DURATION_ON, COUNT_ON])
+
+    freezer.move_to(start + timedelta(hours=6))
+    await compiler.async_compile_incremental(cfg())
+
+    assert DURATION_ON not in registry.statistic_ids_for(ENTITY)
+    assert COUNT_ON not in registry.statistic_ids_for(ENTITY)
+    assert await read_sums(hass, DURATION_ON, start, start + timedelta(hours=6)) == []
+    # The surviving state carries on undisturbed, still dense and monotonic.
+    off = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=6))
+    assert off == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+
+
+async def test_the_forgotten_statistic_stays_forgotten_across_a_reload(
+    recorder, freezer
+):
+    """The removal is persisted, not just dropped from memory."""
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    await _seed_two_states(hass, freezer, start)
+
+    freezer.move_to(start + timedelta(hours=4))
+    registry = Registry(hass)
+    await registry.async_load()
+    compiler = Compiler(hass, registry)
+    await compiler.async_compile(cfg(), start.timestamp())
+
+    await _delete(hass, [DURATION_ON, COUNT_ON])
+    freezer.move_to(start + timedelta(hours=6))
+    await compiler.async_compile_incremental(cfg())
+
+    reloaded = Registry(hass)
+    await reloaded.async_load()
+    assert DURATION_ON not in reloaded.statistic_ids_for(ENTITY)
+
+
+async def test_a_state_returns_while_any_of_its_statistics_survives(recorder, freezer):
+    """Density is per state, so half a state cannot be deleted.
+
+    Deleting the duration but not the count leaves "on" a known state, and
+    the density invariant then requires a duration row for it in every hour.
+    Both of a state's statistics have to go for the state to go.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    await _seed_two_states(hass, freezer, start)
+
+    freezer.move_to(start + timedelta(hours=4))
+    registry = Registry(hass)
+    await registry.async_load()
+    compiler = Compiler(hass, registry)
+    await compiler.async_compile(cfg(), start.timestamp())
+
+    await _delete(hass, [DURATION_ON])
+
+    freezer.move_to(start + timedelta(hours=6))
+    await compiler.async_compile_incremental(cfg())
+
+    assert DURATION_ON in registry.statistic_ids_for(ENTITY)
+    # Rebuilt from the trailing window only, so its history does not return.
+    assert await read_sums(hass, DURATION_ON, start, start + timedelta(hours=6)) != []
+
+
+async def test_nothing_is_forgotten_while_its_statistic_exists(recorder, freezer):
+    """The reaping must not fire on a healthy entity."""
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    await _seed_two_states(hass, freezer, start)
+
+    freezer.move_to(start + timedelta(hours=4))
+    registry = Registry(hass)
+    await registry.async_load()
+    compiler = Compiler(hass, registry)
+    await compiler.async_compile(cfg(), start.timestamp())
+    before = registry.statistic_ids_for(ENTITY)
+    assert before
+
+    freezer.move_to(start + timedelta(hours=6))
+    await compiler.async_compile_incremental(cfg())
+
+    assert registry.statistic_ids_for(ENTITY) == before

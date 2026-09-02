@@ -172,7 +172,14 @@ every cumulative sum at zero.
 buckets it has source data for and leaves everything else alone, so a rebuild
 can never discard statistics whose source states have already been purged.
 Deleting a statistic is the user's decision, made in Settings → System → Tools
-→ Statistics.
+→ Statistics — and it sticks: `_async_forget_deleted` drops registry entries
+whose `statistics_meta` row is gone, so the deleted statistic leaves
+`known_states` instead of being written back densely on the next compile.
+Absent metadata is a sound signal for exactly the reason above: nothing here
+deletes anything, so the user is the only one who could have. Reaping is per
+statistic ID while density is per state, so deleting one metric of a state
+leaves the state known and the deleted metric returns — both of a state's
+statistics have to go for the state to go.
 
 **An entity is configured once, from one source.** Two configurations
 resolve the same raw states through different disposition tables and write

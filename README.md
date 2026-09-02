@@ -259,7 +259,10 @@ longer prove otherwise. Drop them from your charts if they are noise.
 
 To delete one properly, use Home Assistant's own tool at **Settings → System →
 Tools → Statistics**, which removes a single statistic with a confirmation
-step. Deletion should be a decision you make, not a side effect of a routine
+step. It stays deleted: the next compile notices it is gone and stops tracking
+that state, rather than starting it over. Delete *both* of a state's
+statistics — its `_duration` and its `_count` — if you want the state gone
+entirely; deleting only one leaves the state tracked and the other comes back. Deletion should be a decision you make, not a side effect of a routine
 rebuild.
 
 ## How it works

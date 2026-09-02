@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools as ft
 import logging
 from datetime import datetime, timezone
 
@@ -10,6 +11,7 @@ from homeassistant.components.recorder.history import state_changes_during_perio
 from homeassistant.components.recorder.statistics import (
     async_add_external_statistics,
     get_last_statistics,
+    get_metadata,
     statistics_during_period,
 )
 from homeassistant.core import HomeAssistant
@@ -103,6 +105,7 @@ class Compiler:
         if window_end <= window_start:
             return 0
 
+        await self._async_forget_deleted(cfg.entity_id)
         base_sums = await self._async_base_sums(cfg.entity_id, window_start)
 
         compiled = 0
@@ -241,6 +244,31 @@ class Compiler:
             next_sums[statistic_id] = statistic_rows[-1]["sum"]
 
         return next_sums, int((window_end - window_start) / HOUR)
+
+    async def _async_forget_deleted(self, entity_id: str) -> None:
+        """Drop registry entries whose statistic the user has deleted.
+
+        Deleting a statistic is done in Settings -> System -> Tools ->
+        Statistics, which removes its `statistics_meta` row. The registry
+        would otherwise still name it, so it would stay in `known_states`
+        and be recreated - densely - by the next compile. Absent metadata is
+        a sound signal here precisely because this integration never deletes
+        anything itself.
+
+        Deliberately once per compile rather than per chunk: a statistic
+        cannot be deleted midway through one, and the writes we make are
+        still queued at that point.
+        """
+        if not (known := set(self._registry.statistic_ids_for(entity_id))):
+            return
+        metadata = await get_instance(self._hass).async_add_executor_job(
+            ft.partial(get_metadata, self._hass, statistic_ids=known)
+        )
+        if deleted := known - set(metadata):
+            _LOGGER.info(
+                "Forgetting %s: deleted from the recorder", ", ".join(sorted(deleted))
+            )
+            await self._registry.async_forget(deleted)
 
     async def _async_watermark(self, entity_id: str) -> float | None:
         """Return the newest compiled hour for an entity, or None.
