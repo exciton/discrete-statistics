@@ -27,6 +27,7 @@ DURATION_ON = "discrete_statistics:binary_sensor_grid_status_on_duration"
 COUNT_ON = "discrete_statistics:binary_sensor_grid_status_on_count"
 DURATION_NO_DATA = "discrete_statistics:binary_sensor_grid_status_nodata_duration"
 COUNT_NO_DATA = "discrete_statistics:binary_sensor_grid_status_nodata_count"
+DURATION_UNKNOWN = "discrete_statistics:binary_sensor_grid_status_unknown_duration"
 
 
 def cfg():
@@ -943,17 +944,14 @@ async def test_an_entitys_first_state_is_not_counted_as_a_transition(
     assert counts == [0, 0, 0]
 
 
-async def test_a_removed_entity_becomes_no_data_rather_than_failing(
-    recorder, freezer
-):
-    """The live failure: group.family, state='', every hour forever.
+async def test_a_reloaded_entity_does_not_kill_the_compile(recorder, freezer):
+    """The live failure: group.family, state NULL, every hour forever.
 
-    Home Assistant records an empty state when an entity is removed or
-    reloaded - a group reload writes one and restores the state in the same
-    second. It cannot go in a statistic ID, and letting build() raise aborted the whole
-    entity's compile - permanently, since the watermark never advanced past
-    it. The span is attributed to no_data instead, which keeps the durations
-    tiling the clock and shows the gap on a chart.
+    A reload writes an empty state and restores the real one moments later.
+    It cannot go in a statistic ID, and letting build() raise aborted the
+    entity's whole compile - permanently, because the watermark never got
+    past the chunk containing it. It is treated as `unknown` now, so under
+    record_known it is ignored and the previous state simply continues.
     """
     hass = recorder
     start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
@@ -962,11 +960,11 @@ async def test_a_removed_entity_becomes_no_data_rather_than_failing(
     await hass.async_block_till_done()
 
     freezer.move_to(start + timedelta(hours=1))
-    hass.states.async_set(ENTITY, "")  # removed, or reloaded
+    hass.states.async_set(ENTITY, "")  # reloaded
     await hass.async_block_till_done()
 
     freezer.move_to(start + timedelta(hours=3))
-    hass.states.async_set(ENTITY, "on")  # and comes back
+    hass.states.async_set(ENTITY, "on")
     await hass.async_block_till_done()
     await get_instance(hass).async_block_till_done()
 
@@ -974,16 +972,44 @@ async def test_a_removed_entity_becomes_no_data_rather_than_failing(
     compiler = Compiler(hass)
     assert await compiler.async_compile(cfg(), start.timestamp()) == 4
 
+    # record_known ignores it, so "on" carries straight through.
     on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=4))
-    gap = await read_sums(hass, DURATION_NO_DATA, start, start + timedelta(hours=4))
+    assert on == [1.0, 2.0, 3.0, 4.0]
+    assert DURATION_NO_DATA not in await existing(hass)
+
+
+async def test_a_reloaded_entity_is_recorded_as_unknown_under_record(
+    recorder, freezer
+):
+    """Under `record` it lands in the unknown statistic, not in no_data."""
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    record_all = EntityConfig(
+        entity_id=ENTITY, name="Grid Status", default="record", states={}
+    )
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    freezer.move_to(start + timedelta(hours=1))
+    hass.states.async_set(ENTITY, "")
+    await hass.async_block_till_done()
+    freezer.move_to(start + timedelta(hours=3))
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=4))
+    await Compiler(hass).async_compile(record_all, start.timestamp())
+
+    unknown = await read_sums(
+        hass, DURATION_UNKNOWN, start, start + timedelta(hours=4)
+    )
+    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=4))
+    assert unknown == [0.0, 1.0, 2.0, 2.0]
     assert on == [1.0, 1.0, 1.0, 2.0]
-    assert gap == [0.0, 1.0, 2.0, 2.0]
-    # Every hour still totals exactly one hour of wall clock.
+    assert DURATION_NO_DATA not in await existing(hass)
     for hour in range(4):
         spent = (on[hour] - (on[hour - 1] if hour else 0.0)) + (
-            gap[hour] - (gap[hour - 1] if hour else 0.0)
+            unknown[hour] - (unknown[hour - 1] if hour else 0.0)
         )
         assert spent == pytest.approx(1.0), hour
-    # no_data keeps its duration-only shape even though something did
-    # transition into it.
-    assert COUNT_NO_DATA not in await existing(hass)

@@ -54,8 +54,8 @@ def is_recordable_state(state: str) -> bool:
     back as "" - tokenises to nothing and would leave a double underscore. And anything unsluggable tokenises to the literal "unknown",
     which would silently merge with a genuine `unknown`.
 
-    Callers resolve these to no_data rather than dropping them, so the span
-    shows up on a chart instead of being absorbed into whatever came before.
+    Callers convert these to `unknown` before resolving, so they inherit
+    whatever disposition `unknown` has rather than needing a case of their own.
     """
     token = state_token(state)
     if not token:

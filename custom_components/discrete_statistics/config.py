@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
 
 import voluptuous as vol
-from homeassistant.const import CONF_ENTITY_ID, CONF_NAME
+from homeassistant.const import CONF_ENTITY_ID, CONF_NAME, STATE_UNKNOWN
 from homeassistant.helpers import config_validation as cv
 
 from .statistic_ids import is_recordable_state, state_token
@@ -50,18 +50,20 @@ class EntityConfig:
 
         A state that cannot be represented in an ID at all - an empty one,
         which the recorder stores as NULL when an entity is removed or
-        reloaded - becomes NO_DATA. Carrying the previous state forward would
-        claim the entity was still in it; no_data says plainly that we cannot
-        tell, and shows as a band on the chart. A reload is instantaneous, so
-        it costs a span of very nearly zero.
+        reloaded - is converted to `unknown` BEFORE any of that. It is not an
+        absence of data, which is what no_data means; it is a state we cannot
+        name, which is what `unknown` already means. Converting first rather
+        than special-casing after means it inherits whatever disposition
+        `unknown` has - ignored under record_known, recorded under record, or
+        whatever the states map says.
         """
+        if not is_recordable_state(raw_state):
+            raw_state = STATE_UNKNOWN
         canonical = self._resolve(raw_state)
         if canonical is None:
             return None
         if state_token(canonical) == _NO_DATA_TOKEN:
             return None
-        if not is_recordable_state(canonical):
-            return NO_DATA
         return canonical
 
     def _resolve(self, raw_state: str) -> str | None:
@@ -93,17 +95,24 @@ class EntityConfig:
         return None  # DEFAULT_IGNORE
 
 
-def _no_reserved_state(states: dict[str, str]) -> dict[str, str]:
-    """Reject the reserved NO_DATA name as a map target.
+def _usable_map_targets(states: dict[str, str]) -> dict[str, str]:
+    """Reject map targets that cannot become a statistic.
 
     Only a target becomes a canonical state, and only those reach an ID.
     Keys are raw recorder values and stay unrestricted, or an entity that
     genuinely reports `No Data` could not be mapped anywhere.
     """
     for value in states.values():
+        if value in (DISPOSITION_RECORD, DISPOSITION_IGNORE):
+            continue
         if state_token(value) == _NO_DATA_TOKEN:
             raise vol.Invalid(
                 f"{NO_DATA!r} is reserved and cannot be used as a map target"
+            )
+        if not is_recordable_state(value):
+            raise vol.Invalid(
+                f"{value!r} cannot be used as a map target: it does not "
+                f"produce a usable statistic ID"
             )
     return states
 
@@ -132,7 +141,7 @@ ENTITY_SCHEMA = vol.Schema(
         vol.Optional(CONF_NAME): vol.Any(str, None),
         vol.Optional(CONF_DEFAULT, default=DEFAULT_RECORD_KNOWN): vol.In(DEFAULTS),
         vol.Optional(CONF_STATES, default=dict): vol.All(
-            {cv.string: cv.string}, _no_reserved_state
+            {cv.string: cv.string}, _usable_map_targets
         ),
     }
 )
