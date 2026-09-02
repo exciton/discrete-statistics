@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools as ft
 import logging
+from collections.abc import Collection
 from datetime import datetime, timezone
 
 from homeassistant.components.recorder import get_instance
@@ -290,7 +291,7 @@ class Compiler:
 
         return next_sums, int((window_end - window_start) / HOUR), next_existing
 
-    async def _async_watermark(self, statistic_ids: dict[str, str]) -> float | None:
+    async def _async_watermark(self, statistic_ids: Collection[str]) -> float | None:
         """Return the newest compiled hour for an entity, or None.
 
         Takes the max across every one of the entity's statistics: density
@@ -316,7 +317,7 @@ class Compiler:
         return newest
 
     async def _async_base_sums(
-        self, statistic_ids: dict[str, str], window_start: float
+        self, statistic_ids: Collection[str], window_start: float
     ) -> dict[str, float]:
         """Return cumulative sums for the hour immediately before the window."""
         if not statistic_ids:

@@ -87,7 +87,7 @@ class DiscreteStatisticsConfigFlow(ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
-    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+    def async_get_options_flow(_config_entry: ConfigEntry) -> OptionsFlow:
         """Return the options flow. entity_id is not editable here."""
         return DiscreteStatisticsOptionsFlow()
 

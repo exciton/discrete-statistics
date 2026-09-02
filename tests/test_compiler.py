@@ -304,7 +304,7 @@ async def test_watermark_is_the_newest_hour_across_statistics(recorder):
     ):
         async_add_external_statistics(
             hass,
-            metadata_for(cfg(), metric, statistic_id, f"x: {state} ({metric})"),
+            metadata_for(metric, statistic_id, f"x: {state} ({metric})"),
             [
                 {"start": start + timedelta(hours=hour), "sum": float(hour)}
                 for hour in range(hours)

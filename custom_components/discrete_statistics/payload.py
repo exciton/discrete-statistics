@@ -44,9 +44,7 @@ def rename(stored: str, display: str) -> str:
     return f"{display}: {tail}"
 
 
-def metadata_for(
-    cfg: EntityConfig, metric: str, statistic_id: str, name: str
-) -> dict[str, Any]:
+def metadata_for(metric: str, statistic_id: str, name: str) -> dict[str, Any]:
     """Return StatisticMetaData for one statistic."""
     return {
         # Both a sum and a mean. The sum is the cumulative total charts read
@@ -180,7 +178,7 @@ def build_payloads(
                 }
             )
         payloads[statistic_id] = (
-            metadata_for(cfg, metric, statistic_id, name),
+            metadata_for(metric, statistic_id, name),
             rows,
         )
 
