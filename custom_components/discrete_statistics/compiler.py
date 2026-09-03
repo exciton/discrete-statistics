@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import functools as ft
 import logging
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Collection, Mapping
 from datetime import datetime, timezone
+from typing import NamedTuple
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.history import state_changes_during_period
@@ -15,24 +16,14 @@ from homeassistant.components.recorder.statistics import (
     get_metadata,
     statistics_during_period,
 )
-from homeassistant.const import (
-    ATTR_DEVICE_CLASS,
-    STATE_UNAVAILABLE,
-    STATE_UNKNOWN,
-)
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.translation import (
-    async_get_translations,
-    async_translate_state,
-)
 from homeassistant.util import dt as dt_util
 
-from .bucketer import bucket, hour_start
+from .bucketer import bucket, first_whole_hour, hour_start
 from .canonicalise import canonicalise
 from .config import EntityConfig
-from .const import DOMAIN, HOUR, METRIC_DURATION, NO_DATA
-from .naming import display_name
+from .const import DOMAIN, HOUR, METRIC_DURATION
+from .naming import async_warm_state_translations, display_name, state_translator
 from .payload import build_payloads
 from .statistic_ids import belongs_to, parse, state_token
 
@@ -46,18 +37,6 @@ TRAILING_HOURS = 3
 CHUNK_HOURS = 24 * 7
 
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
-
-# States `async_translate_state` cannot render. It returns `unavailable` and
-# `unknown` untouched (translation.py:469) because the frontend renders those
-# from its own `state.default` strings, which the backend never sees; and
-# `no_data` is ours, so nothing has a translation for it. Without these a
-# legend reads `unavailable` and `no_data` beside a rendered `Closed`.
-# English only, and only for the states nothing else can name.
-_UNRENDERED_STATES = {
-    STATE_UNAVAILABLE: "Unavailable",
-    STATE_UNKNOWN: "Unknown",
-    NO_DATA: "No Data",
-}
 
 # Both of `state_changes_during_period`'s queries compare strictly, so a
 # state landing exactly on window_start is returned by neither. Querying from
@@ -95,66 +74,65 @@ def _as_datetime(timestamp: float) -> datetime:
     return datetime.fromtimestamp(timestamp, tz=timezone.utc)
 
 
+class _ChunkState(NamedTuple):
+    """What one chunk hands the next. Threaded, never re-read.
+
+    Every field is stale the moment it is queried again, because
+    `async_add_external_statistics` only enqueues: mid-compile the previous
+    chunk's rows and metadata are still in the recorder's write queue.
+
+    `sums` are the cumulative bases the next chunk's rows continue from.
+    Re-reading them would restart a series at zero and break monotonicity.
+
+    `existing` is every statistic the entity has, including any this chunk
+    created - which the recorder cannot report yet, and which the next chunk
+    needs in order to stay dense.
+
+    `carried` is the state in effect at the chunk's end, which the next
+    chunk opens in. It is also simply more accurate than any query: the
+    exact value is already to hand.
+    """
+
+    sums: dict[str, float]
+    existing: dict[str, str]
+    carried: str | None
+
+
+def _carried_from_statistics(
+    values: Mapping[str, float], names: Mapping[str, str]
+) -> str | None:
+    """The state a uniform previous hour was spent in, if there was one.
+
+    Our own rows already encode the carry-forward decision - an hour spent
+    `unavailable` under `record_known` was written as the state carried into
+    it, not as a gap - so they are the resolved timeline, which is exactly
+    what a lookback into raw history is trying to reconstruct. And density
+    guarantees a row for that hour however long the entity has been quiet,
+    so there is no distance limit.
+
+    Only when one duration statistic accounts for the hour. Several mean
+    transitions happened inside it, so the recorder has rows there and
+    `include_start_time_state` finds them: the two sources answer disjoint
+    questions.
+    """
+    held = [
+        (statistic_id, parts[1])
+        for statistic_id, value in values.items()
+        if value
+        and (parts := parse(statistic_id)) is not None
+        and parts[2] == METRIC_DURATION
+    ]
+    if len(held) != 1:
+        return None
+    statistic_id, token = held[0]
+    return _readable_state(names.get(statistic_id, ""), token)
+
+
 class Compiler:
     """Compile one entity's history into statistics."""
 
     def __init__(self, hass: HomeAssistant) -> None:
         self._hass = hass
-
-    def _state_translator(self, cfg: EntityConfig) -> Callable[[str], str]:
-        """Render canonical states the way Home Assistant renders them.
-
-        A `binary_sensor` with `device_class: door` reads Open/Closed
-        everywhere else in the UI, so a chart legend saying on/off looks
-        wrong. `async_translate_state` returns the raw state when there is no
-        translation, which covers our own `no_data` and any enum sensor
-        without one.
-
-        LIMITATION: `hass.config.language` is instance-wide, while the
-        frontend translates per viewing user. The name is one stored string
-        with no viewer in scope, so everyone sees the instance language.
-        """
-        entry = er.async_get(self._hass).async_get(cfg.entity_id)
-        domain = cfg.entity_id.partition(".")[0]
-        device_class = entry.device_class or entry.original_device_class if entry else None
-        if device_class is None and (
-            state := self._hass.states.get(cfg.entity_id)
-        ) is not None:
-            device_class = state.attributes.get(ATTR_DEVICE_CLASS)
-
-        def translate(state: str) -> str:
-            if (rendered := _UNRENDERED_STATES.get(state)) is not None:
-                return rendered
-            return async_translate_state(
-                self._hass,
-                state,
-                domain,
-                entry.platform if entry else None,
-                entry.translation_key if entry else None,
-                device_class,
-            )
-
-        return translate
-
-    async def _async_warm_translations(self, cfg: EntityConfig) -> None:
-        """Load what `_state_translator` reads from the cache.
-
-        `async_translate_state` is a callback over a cache and answers with
-        the raw state when it is cold - so without this the same statistic
-        could be named `Closed` on one compile and `closed` on the next,
-        rewriting its metadata each time.
-
-        Not covered by a test: setting a component up loads its translations,
-        so any test that makes a translation resolvable has already warmed
-        the cache. This is reasoning, not evidence.
-        """
-        language = self._hass.config.language
-        await async_get_translations(self._hass, language, "entity_component")
-        entry = er.async_get(self._hass).async_get(cfg.entity_id)
-        if entry is not None and entry.translation_key:
-            await async_get_translations(
-                self._hass, language, "entity", {entry.platform}
-            )
 
     async def _async_existing(self, entity_id: str) -> dict[str, str]:
         """Return {statistic_id: stored name} for one entity's statistics.
@@ -216,30 +194,30 @@ class Compiler:
         if window_end <= window_start:
             return 0
 
-        await self._async_warm_translations(cfg)
+        await async_warm_state_translations(self._hass, cfg.entity_id)
         existing = await self._async_existing(cfg.entity_id)
         base_sums, previous_hour = await self._async_previous_hour(
             existing, window_start
         )
         # Read once, for the hour this compile opens at. Every chunk after
-        # the first takes the state from the one before it: mid-compile the
-        # previous chunk's rows are still queued, so reading them again would
-        # see a stale hour - the same reason base_sums threads rather than
-        # being re-read.
-        carried_in = self._carried_from_statistics(previous_hour, existing)
+        # the first takes the state from the one before it, for the reason
+        # `_ChunkState` gives.
+        state = _ChunkState(
+            sums=base_sums,
+            existing=existing,
+            carried=_carried_from_statistics(previous_hour, existing),
+        )
 
         compiled = 0
         chunk_start = window_start
         try:
             while chunk_start < window_end:
                 chunk_end = min(chunk_start + CHUNK_HOURS * HOUR, window_end)
-                base_sums, hours, existing, carried_in = await self._async_compile_chunk(
+                state, hours = await self._async_compile_chunk(
                     cfg,
                     chunk_start,
                     chunk_end,
-                    base_sums,
-                    existing,
-                    carried_in,
+                    state,
                     first_chunk=chunk_start == window_start,
                     # Only the chunk that opens the history: a later one
                     # starts mid-series, where trimming would leave a hole.
@@ -281,21 +259,17 @@ class Compiler:
     async def _async_compile_chunk(
         self,
         cfg: EntityConfig,
-        window_start: float,
-        window_end: float,
-        base_sums: dict[str, float],
-        existing: dict[str, str],
-        carried_in: str | None,
-        first_chunk: bool = False,
-        opens_history: bool = False,
-    ) -> tuple[dict[str, float], int, dict[str, str], str | None]:
+        chunk_start: float,
+        chunk_end: float,
+        state: _ChunkState,
+        *,
+        first_chunk: bool,
+        opens_history: bool,
+    ) -> tuple[_ChunkState, int]:
         """Compile one chunk.
 
-        Returns the sums to carry into the next chunk, the hours actually
-        compiled, the entity's statistics including any this chunk created -
-        which the recorder cannot report yet, its writes still being queued,
-        and which the next chunk needs to stay dense - and the state in
-        effect at the chunk's end, which the next chunk opens in.
+        Returns what the next chunk starts from and the hours actually
+        compiled.
         """
         # An hour further back on the opening chunk.
         # `include_start_time_state` hands back exactly ONE row before the
@@ -304,22 +278,16 @@ class Compiler:
         # sees both and carries the good one forward. Later chunks need none
         # of this: they are handed the state the previous chunk ended in.
         rows = await self._async_history(
-            cfg, window_start - HOUR if first_chunk else window_start, window_end
+            cfg, chunk_start - HOUR if first_chunk else chunk_start, chunk_end
         )
-        opened = await self._async_open_window(
-            cfg,
-            rows,
-            window_start,
-            window_end,
-            existing,
-            carried_in,
-            opens_history,
+        opened = self._open_window(
+            cfg, rows, chunk_start, chunk_end, state, opens_history
         )
         if opened is None:
-            return base_sums, 0, existing, carried_in
+            return state, 0
         window_start, carried, transitions = opened
 
-        buckets = bucket(carried, transitions, window_start, window_end)
+        buckets = bucket(carried, transitions, window_start, chunk_end)
 
         # Every statistic this entity already has must get a row in every
         # hour, even when this window saw nothing of its state. Otherwise the
@@ -329,57 +297,29 @@ class Compiler:
             cfg,
             buckets,
             window_start,
-            window_end,
-            base_sums,
-            existing,
+            chunk_end,
+            state.sums,
+            state.existing,
             display=display_name(self._hass, cfg.entity_id, cfg.name),
-            translate=self._state_translator(cfg),
+            translate=state_translator(self._hass, cfg.entity_id),
         )
 
-        next_sums = dict(base_sums)
-        next_existing = dict(existing)
+        next_sums = dict(state.sums)
+        next_existing = dict(state.existing)
         for statistic_id, (metadata, statistic_rows) in payloads.items():
             async_add_external_statistics(self._hass, metadata, statistic_rows)
             next_sums[statistic_id] = statistic_rows[-1]["sum"]
             next_existing[statistic_id] = metadata["name"]
 
-        # What the next chunk opens in: the last state this one reached.
-        carried_out = transitions[-1][1] if transitions else carried
         return (
-            next_sums,
-            int((window_end - window_start) / HOUR),
-            next_existing,
-            carried_out,
+            _ChunkState(
+                sums=next_sums,
+                existing=next_existing,
+                # What the next chunk opens in: the last state this one reached.
+                carried=transitions[-1][1] if transitions else carried,
+            ),
+            int((chunk_end - window_start) / HOUR),
         )
-
-    def _carried_from_statistics(
-        self, values: Mapping[str, float], names: Mapping[str, str]
-    ) -> str | None:
-        """The state a uniform previous hour was spent in, if there was one.
-
-        Our own rows already encode the carry-forward decision - an hour
-        spent `unavailable` under `record_known` was written as the state
-        carried into it, not as a gap - so they are the resolved timeline,
-        which is exactly what a lookback into raw history is trying to
-        reconstruct. And density guarantees a row for that hour however long
-        the entity has been quiet, so there is no distance limit.
-
-        Only when one duration statistic accounts for the hour. Several mean
-        transitions happened inside it, so the recorder has rows there and
-        `include_start_time_state` finds them: the two sources answer
-        disjoint questions.
-        """
-        held = [
-            (statistic_id, parts[1])
-            for statistic_id, value in values.items()
-            if value
-            and (parts := parse(statistic_id)) is not None
-            and parts[2] == METRIC_DURATION
-        ]
-        if len(held) != 1:
-            return None
-        statistic_id, token = held[0]
-        return _readable_state(names.get(statistic_id, ""), token)
 
     def _carried_from_state_machine(
         self, cfg: EntityConfig, window_start: float
@@ -406,36 +346,38 @@ class Compiler:
             return None
         return cfg.resolve(state.state)
 
-    async def _async_open_window(
+    def _open_window(
         self,
         cfg: EntityConfig,
         rows: list,
         window_start: float,
         window_end: float,
-        existing: dict[str, str],
-        carried_in: str | None,
-        opens_history: bool = False,
+        state: _ChunkState,
+        opens_history: bool,
     ) -> tuple[float, str | None, list[tuple[float, str]]] | None:
         """Decide where the window opens and in what state.
 
         Returns (window_start, carried, transitions), or None when there is
-        nothing to compile.
+        nothing to compile. Deliberately synchronous: every source it
+        consults is already to hand, which is what makes the order below
+        safe to reason about.
         """
         carried, transitions = canonicalise(cfg, rows, window_start)
 
         if carried is None:
-            # Free, and authoritative when it applies, so before the queries.
+            # Proof rather than inference - `last_changed` demonstrates the
+            # state was already in effect - so it is tried before the carry.
             carried = self._carried_from_state_machine(cfg, window_start)
 
         if carried is None:
-            # Nothing recordable in the previous hour either. `carried_in` is
+            # Nothing recordable in the previous hour either. The carry is
             # the state at this window's start as the previous chunk left it,
             # or - on the opening chunk - as that hour's own statistics
             # record it: a whole hour with nothing to record means the entity
             # held one state throughout, which is exactly what they say.
-            carried = carried_in
+            carried = state.carried
 
-        if carried is None and (not existing or opens_history):
+        if carried is None and (not state.existing or opens_history):
             # Nothing has ever been compiled for this entity, so a leading
             # no_data would complete no earlier series - it would only earn
             # the entity a no_data statistic to write densely forever. Open
@@ -452,10 +394,7 @@ class Compiler:
             # before it and restart every cumulative sum at zero.
             if not transitions:
                 return None
-            first_known = transitions[0][0]
-            window_start = hour_start(first_known)
-            if window_start < first_known:
-                window_start += HOUR
+            window_start = first_whole_hour(transitions[0][0])
             if window_start >= window_end:
                 return None
             carried, transitions = canonicalise(cfg, rows, window_start)
@@ -566,6 +505,4 @@ class Compiler:
         state = self._hass.states.get(entity_id)
         if state is None:
             return None
-        began = state.last_changed.timestamp()
-        opening = hour_start(began)
-        return opening if opening == began else opening + HOUR
+        return first_whole_hour(state.last_changed.timestamp())

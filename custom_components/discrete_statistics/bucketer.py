@@ -19,6 +19,18 @@ def hour_start(timestamp: float) -> float:
     return math.floor(timestamp / HOUR) * HOUR
 
 
+def first_whole_hour(timestamp: float) -> float:
+    """Return the first hour boundary at or after timestamp.
+
+    The hour containing a timestamp starts before it, so an hour opened
+    there would be only partly known - and a part-known hour cannot both be
+    recorded and total wall-clock time. Both callers pay the partial hour
+    rather than misattribute it.
+    """
+    opening = hour_start(timestamp)
+    return opening if opening == timestamp else opening + HOUR
+
+
 def bucket(
     carried_state: str | None,
     transitions: list[tuple[float, str]],

@@ -51,7 +51,7 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
        ├─ config ── canonicalise   pure: recorder rows -> canonical transitions
        │   │    └─ config_flow    HA UI: entity -> EntityConfig, per entry
        │   └─ statistic_ids       for the reserved-token comparison
-       ├─ naming            HA: entity -> the name a person recognises
+       ├─ naming            HA: entity, state -> the names a person recognises
        └─ payload           pure: buckets -> cumulative StatisticData rows
                 │
             compiler        the only module that touches the recorder
@@ -63,15 +63,19 @@ Everything except `compiler`, `config_flow` and `naming` is pure and testable
 without a `hass` instance. Keep it that way: if a change needs recorder access in a
 lower module, the design is drifting.
 
-States in a statistic's name are rendered through `async_translate_state`, so
+States in a statistic's name are rendered by `naming.state_translator`,
+which wraps `async_translate_state`, so
 a door sensor reads `Open`/`Closed` as it does everywhere else. It answers with
 the raw state when no translation exists, which covers `no_data` and most enum
 sensors. `_UNRENDERED_STATES` covers the three it cannot name: `unavailable` and
 `unknown`, which it returns untouched (`translation.py:469`) because the
 frontend renders those from its own `state.default` strings that the backend
-never sees, and `no_data`, which is ours. English only. `_async_warm_translations` loads the cache first, because that
+never sees, and `no_data`, which is ours. English only.
+`naming.async_warm_state_translations` loads the cache first, because that
 function is a callback over one and a cold cache would rename every statistic
-back and forth. The language is `hass.config.language` — instance-wide, while
+back and forth. Both live in `naming` rather than `compiler`: they are the
+same question as `display_name` asked of a state, and they need `hass` but
+never the recorder. The language is `hass.config.language` — instance-wide, while
 the frontend translates per user — so the stored name is in one language for
 everyone. That is a known limitation of putting a rendered string in metadata,
 not something to fix here.
@@ -209,12 +213,14 @@ name did not have the shape assumed and the token stands. Trusting it would
 be worse than the token, because a wrong state builds a different ID and
 splits the series.
 
-**A long compile is chunked, and the base sum is threaded through it.**
+**A long compile is chunked, and `_ChunkState` is threaded through it.**
 `async_compile` walks the window in `CHUNK_HOURS` slices to bound memory during
-a backfill, and each slice returns the base sums the next one starts from.
-Re-reading the base per chunk instead would break monotonicity in exactly the
-way the density invariant describes, because the recorder writes are still
-queued.
+a backfill, and each slice returns the sums, the known statistics and the
+carried state that the next one starts from. Re-reading any of the three per
+chunk would break monotonicity, density or the carry in exactly the way those
+invariants describe, because the recorder writes are still queued. They
+travel as one named value so the early return — a chunk with nothing to
+compile — cannot pass them on in the wrong order.
 
 **A scheduled run is skipped, not queued, when the recorder is behind.**
 `__init__` compares `get_instance(hass).backlog` against `BACKLOG_THRESHOLD`
