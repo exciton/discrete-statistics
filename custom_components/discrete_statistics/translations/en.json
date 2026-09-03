@@ -38,7 +38,7 @@
           "blank": "Blank states"
         },
         "data_description": {
-          "name": "Shown on charts. Leave blank to follow the entity's own name, currently \\u201c{default_name}\\u201d.",
+          "name": "Shown on charts. Leave blank to follow the entity’s own name, currently “{default_name}”.",
           "default": "Time in an ignored state is credited to the previous recorded state - it never creates a gap, and it does not count as a transition. Changing this recompiles the entity's whole history.",
           "blank": "Some entities report a state with no letters or digits at all - empty, or punctuation. That has no name to record under, so this says what becomes of it. Type any state name to record it as that instead."
         },
