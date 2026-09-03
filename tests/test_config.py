@@ -412,3 +412,31 @@ def test_a_state_spelling_unknown_resolves_to_unknown():
     cfg = parse([{"entity_id": "sensor.x", "blank": "ok", "default": "record"}])[0]
     assert cfg.resolve("__unknown__") == "__unknown__"
     assert cfg.resolve("!!!") == "ok"
+
+
+def test_blank_can_be_ignored_outright():
+    """Without conflating blanks with genuine unknowns.
+
+    `blank: unknown` plus `states: {unknown: ignore}` would reach the same
+    result for blanks, but would silently ignore real unknowns too.
+    """
+    cfg = parse([{"entity_id": "sensor.x", "default": "record", "blank": "ignore"}])[0]
+    assert cfg.resolve("") is None
+    assert cfg.resolve("!!!") is None
+    assert cfg.resolve("🙂") is None
+    # A real unknown is untouched by it.
+    assert cfg.resolve("unknown") == "unknown"
+
+
+def test_blank_ignore_still_loses_to_an_explicit_mapping():
+    cfg = parse(
+        [{"entity_id": "sensor.x", "blank": "ignore", "states": {"": "ok"}}]
+    )[0]
+    assert cfg.resolve("") == "ok"
+    assert cfg.resolve("!!!") is None
+
+
+def test_record_is_not_a_valid_blank_setting():
+    """There is no name to record it under - that is the point of the option."""
+    with pytest.raises(vol.Invalid, match="no name to record"):
+        parse([{"entity_id": "sensor.x", "blank": "record"}])

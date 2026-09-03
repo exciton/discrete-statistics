@@ -199,8 +199,9 @@ carry. Judged on the input rather than the token: `slugify` answers the literal
 `"unknown"` for punctuation, whitespace and emoji alike, so a state that
 genuinely spells unknown once normalised — `__unknown__`, `Unknown!` — is a
 real name and merges with `unknown` exactly as `heat_cool` merges with
-`heatcool`. `resolve` swaps in `cfg.blank`
-(default `unknown`) and then resolves normally, so it inherits a real state's disposition rather than
+`heatcool`. `resolve` applies `cfg.blank`
+— `ignore` to carry forward, otherwise a name swapped in and then resolved
+normally, so it inherits a real state's disposition rather than
 needing a rule of its own. Substitute-then-resolve, not a direct answer: a
 direct answer would bypass `default` and make the stock `unknown` record where
 it used to be ignored. An explicit `states` entry for the raw value wins over

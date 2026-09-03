@@ -48,7 +48,7 @@ change.
 | `name` | the entity's ID | used in statistic display names |
 | `default` | `record_known` | disposition for states not listed |
 | `states` | `{}` | per-state overrides |
-| `blank` | `unknown` | what a state with no letters or digits is recorded as |
+| `blank` | `unknown` | what to do with a state that has no letters or digits |
 
 `default` accepts:
 
@@ -64,10 +64,16 @@ Each entry in `states:` is one of:
 
 Some states have no name to record under: an empty one, which Home Assistant
 produces when an entity is removed or reloaded, and the rarer state made only
-of whitespace or punctuation. `blank:` says what to record those as. It is
-substituted *before* `default` is applied, so the stock `unknown` behaves
-exactly like a real `unknown` — ignored by `record_known`, recorded by
-`record`.
+of whitespace or punctuation. `blank:` says what becomes of those. It takes
+either:
+
+- `ignore` — carry the previous state forward
+- a state name — substitute it
+
+A name is substituted *before* `default` is applied, so the stock `unknown`
+behaves exactly like a real `unknown` — ignored by `record_known`, recorded by
+`record`. `blank: ignore` is different from that: it ignores blanks only, and
+leaves genuine `unknown` states alone.
 
 `no_data` is a legal answer for both `blank:` and a `states:` target
 — that is how you say "I cannot interpret this state, chart it as a gap". A

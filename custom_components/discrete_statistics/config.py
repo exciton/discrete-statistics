@@ -38,10 +38,10 @@ class EntityConfig:
     name: str | None
     default: str
     states: Mapping[str, str] = field(default_factory=dict)
-    # What a state with no name of its own is recorded as - blank,
-    # whitespace, or punctuation alone. Substituted before the default is
-    # applied, so it composes rather than overrides: the stock `unknown` is
-    # ignored by `record_known` exactly as a real `unknown` would be.
+    # What a state with no name of its own becomes: `ignore` to carry the
+    # previous state forward, or a state name to be substituted before the
+    # default is applied - so the stock `unknown` is ignored by
+    # `record_known` exactly as a real `unknown` would be.
     blank: str = STATE_UNKNOWN
 
     def resolve(self, raw_state: str) -> str | None:
@@ -51,7 +51,8 @@ class EntityConfig:
         no transition is counted.
 
         A blank state - no letters or digits, which is what the recorder
-        stores as NULL when an entity is removed or reloaded - is substituted
+        stores as NULL when an entity is removed or reloaded - is handled by
+        `blank:`. That either ignores it outright, or substitutes a name
         before anything else looks at it, so it inherits a real state's
         disposition rather than needing a rule of its own.
 
@@ -69,6 +70,8 @@ class EntityConfig:
         """
         chosen = raw_state in self.states
         if not chosen and is_blank(raw_state):
+            if self.blank == DISPOSITION_IGNORE:
+                return None
             # The operator picked the substitute, so this counts as chosen.
             raw_state = self.blank
             chosen = True
@@ -110,6 +113,24 @@ class EntityConfig:
         if self.default == DEFAULT_RECORD_KNOWN:
             return None if raw_state in UNKNOWN_STATES else raw_state
         return None  # DEFAULT_IGNORE
+
+
+def _usable_blank(value: str) -> str:
+    """Validate the `blank:` setting.
+
+    `ignore` carries the previous state forward. Any other value is a state
+    name to substitute. `record` is refused rather than quietly treated as a
+    name: a blank state has nothing to record it under, which is the whole
+    reason this setting exists.
+    """
+    if value == DISPOSITION_IGNORE:
+        return value
+    if value == DISPOSITION_RECORD:
+        raise vol.Invalid(
+            f"{DISPOSITION_RECORD!r} is not a valid {CONF_BLANK!r} setting: "
+            f"a blank state has no name to record it under"
+        )
+    return _usable_state_name(value)
 
 
 def _usable_state_name(value: str) -> str:
@@ -165,7 +186,7 @@ ENTITY_SCHEMA = vol.Schema(
         vol.Optional(CONF_NAME): vol.Any(str, None),
         vol.Optional(CONF_DEFAULT, default=DEFAULT_RECORD_KNOWN): vol.In(DEFAULTS),
         vol.Optional(CONF_BLANK, default=STATE_UNKNOWN): vol.All(
-            cv.string, _usable_state_name
+            cv.string, _usable_blank
         ),
         vol.Optional(CONF_STATES, default=dict): vol.All(
             {cv.string: cv.string}, _usable_map_targets
