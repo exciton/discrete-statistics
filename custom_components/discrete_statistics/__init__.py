@@ -18,6 +18,7 @@ from homeassistant.const import (
 from homeassistant.core import CoreState, Event, HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.event import async_track_time_change
 from homeassistant.helpers.issue_registry import (
     IssueSeverity,
@@ -325,6 +326,23 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Stop compiling one entity. The shared machinery stays up."""
     hass.data[DOMAIN]["entry_configs"].pop(entry.entry_id, None)
     async_delete_issue(hass, DOMAIN, _clash_issue_id(entry))
+    return True
+
+
+async def async_remove_config_entry_device(
+    _hass: HomeAssistant, _entry: ConfigEntry, _device: dr.DeviceEntry
+) -> bool:
+    """Allow this entry's devices to be deleted from their page.
+
+    Nothing here creates a device any more, so this is for clearing one left
+    behind by a version that did. Such a device cannot be removed otherwise:
+    Home Assistant offers the delete action only to integrations defining
+    this - `supports_remove_device` is whether the attribute exists
+    (config_entries.py:4164) - and `device_registry.async_cleanup` keeps any
+    device a live config entry references, with or without entities.
+
+    Nothing is held against a device, so removal is always safe.
+    """
     return True
 
 
