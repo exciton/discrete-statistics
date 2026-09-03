@@ -5,7 +5,11 @@ from unittest.mock import patch
 import pytest
 import voluptuous as vol
 from homeassistant.config_entries import SOURCE_USER
-from homeassistant.const import CONF_ENTITY_ID, CONF_NAME
+from homeassistant.const import (
+    ATTR_UNIT_OF_MEASUREMENT,
+    CONF_ENTITY_ID,
+    CONF_NAME,
+)
 from homeassistant.core import CoreState
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.setup import async_setup_component
@@ -339,3 +343,116 @@ async def test_changing_blank_recompiles_the_whole_history(recorder):
 
     assert full.called
     assert entry.options[CONF_BLANK] == "ok"
+
+
+NUMERIC = "sensor.living_room_temperature"
+ENUM = "sensor.washing_machine_status"
+
+
+async def _submit(hass, entity_id):
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_USER}
+    )
+    return await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_ENTITY_ID: entity_id,
+            CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
+            CONF_BLANK: STATE_UNKNOWN,
+        },
+    )
+
+
+async def test_a_measuring_entity_is_refused(recorder, entity_registry):
+    """Each distinct reading would become its own pair of statistics.
+
+    It no longer fails loudly - a numeric state builds a perfectly valid ID -
+    so nothing else would stop it: hundreds of statistics, written densely,
+    forever, with 21.5 and 2.15 sharing one because the token keeps only
+    digits.
+    """
+    hass = recorder
+    assert await async_setup_component(hass, DOMAIN, {})
+    entity_registry.async_get_or_create(
+        "sensor", "demo", "temp-1",
+        suggested_object_id="living_room_temperature",
+        capabilities={"state_class": "measurement"},
+        unit_of_measurement="°C",
+    )
+
+    result = await _submit(hass, NUMERIC)
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {CONF_ENTITY_ID: "continuous_state"}
+
+
+async def test_a_unit_alone_is_enough_to_refuse(recorder, entity_registry):
+    hass = recorder
+    assert await async_setup_component(hass, DOMAIN, {})
+    entity_registry.async_get_or_create(
+        "sensor", "demo", "temp-2",
+        suggested_object_id="living_room_temperature",
+        unit_of_measurement="°C",
+    )
+
+    result = await _submit(hass, NUMERIC)
+    assert result["errors"] == {CONF_ENTITY_ID: "continuous_state"}
+
+
+async def test_an_enum_sensor_is_accepted(recorder, entity_registry):
+    """The false-positive guard, and the case a careless filter breaks.
+
+    An enum `sensor.*` has no unit and no state class, and is a primary use
+    case - a domain allowlist would have excluded it.
+    """
+    hass = recorder
+    assert await async_setup_component(hass, DOMAIN, {})
+    entity_registry.async_get_or_create(
+        "sensor", "demo", "enum-1",
+        suggested_object_id="washing_machine_status",
+        original_device_class="enum",
+        capabilities={"options": ["idle", "running", "done"]},
+    )
+
+    result = await _submit(hass, ENUM)
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+
+
+async def test_an_unregistered_measuring_entity_is_refused(recorder):
+    """A template sensor never registers, so only its live state shows it."""
+    hass = recorder
+    assert await async_setup_component(hass, DOMAIN, {})
+    hass.states.async_set(NUMERIC, "21.5", {ATTR_UNIT_OF_MEASUREMENT: "°C"})
+    await hass.async_block_till_done()
+
+    result = await _submit(hass, NUMERIC)
+    assert result["errors"] == {CONF_ENTITY_ID: "continuous_state"}
+
+
+async def test_a_measuring_entity_is_refused_while_unavailable(
+    recorder, entity_registry
+):
+    """Attributes are stripped then, so only the registry still shows it."""
+    hass = recorder
+    assert await async_setup_component(hass, DOMAIN, {})
+    entity_registry.async_get_or_create(
+        "sensor", "demo", "temp-3",
+        suggested_object_id="living_room_temperature",
+        capabilities={"state_class": "measurement"},
+        unit_of_measurement="°C",
+    )
+    hass.states.async_set(NUMERIC, "unavailable")
+    await hass.async_block_till_done()
+
+    result = await _submit(hass, NUMERIC)
+    assert result["errors"] == {CONF_ENTITY_ID: "continuous_state"}
+
+
+async def test_a_binary_sensor_is_still_accepted(recorder):
+    hass = recorder
+    assert await async_setup_component(hass, DOMAIN, {})
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+
+    result = await _submit(hass, ENTITY)
+    assert result["type"] is FlowResultType.CREATE_ENTRY

@@ -17,8 +17,13 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     OptionsFlow,
 )
-from homeassistant.const import CONF_ENTITY_ID, CONF_NAME
-from homeassistant.core import callback
+from homeassistant.const import (
+    ATTR_UNIT_OF_MEASUREMENT,
+    CONF_ENTITY_ID,
+    CONF_NAME,
+)
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 
 from .config import CONF_BLANK, CONF_DEFAULT, blank_error, is_configured
@@ -68,6 +73,38 @@ USER_SCHEMA = vol.Schema(
 ).extend(OPTIONS_SCHEMA.schema)
 
 
+# Not imported from homeassistant.components.sensor: that would make sensor a
+# manifest dependency for one string.
+ATTR_STATE_CLASS = "state_class"
+
+
+def _has_continuous_state(hass: HomeAssistant, entity_id: str) -> bool:
+    """True when the entity measures rather than reports a set of states.
+
+    `state_class` is the strongest signal - it is precisely what tells the
+    recorder to build its own long-term statistics - and a unit is the next
+    best: units are for numbers.
+
+    Both the registry and the live state are consulted. The registry keeps
+    working while an entity is unavailable, when attributes have been
+    stripped; the live state covers entities that never registered, such as
+    template sensors. Either saying yes is enough, and a false positive is
+    not a risk in practice, because a genuinely discrete entity has neither.
+    """
+    if (entry := er.async_get(hass).async_get(entity_id)) is not None:
+        if (entry.capabilities or {}).get(ATTR_STATE_CLASS):
+            return True
+        if entry.unit_of_measurement:
+            return True
+    if (state := hass.states.get(entity_id)) is not None:
+        attributes = state.attributes
+        if attributes.get(ATTR_STATE_CLASS) or attributes.get(
+            ATTR_UNIT_OF_MEASUREMENT
+        ):
+            return True
+    return False
+
+
 class DiscreteStatisticsConfigFlow(ConfigFlow, domain=DOMAIN):
     """Create one tracked entity."""
 
@@ -80,16 +117,24 @@ class DiscreteStatisticsConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is None:
             return self.async_show_form(step_id="user", data_schema=USER_SCHEMA)
 
+        entity_id = user_input[CONF_ENTITY_ID]
+
+        errors: dict[str, str] = {}
         if problem := blank_error(user_input[CONF_BLANK]):
+            errors[CONF_BLANK] = problem
+        if _has_continuous_state(self.hass, entity_id):
+            errors[CONF_ENTITY_ID] = "continuous_state"
+        if errors:
+            # A field error, not an abort: the dialog stays open so another
+            # entity can be picked without starting again.
             return self.async_show_form(
                 step_id="user",
                 data_schema=self.add_suggested_values_to_schema(
                     USER_SCHEMA, user_input
                 ),
-                errors={CONF_BLANK: problem},
+                errors=errors,
             )
 
-        entity_id = user_input[CONF_ENTITY_ID]
         # entity_id is identity: it builds every statistic ID, so it is the
         # unique id and is never editable afterwards.
         await self.async_set_unique_id(entity_id)

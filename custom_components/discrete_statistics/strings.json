@@ -24,7 +24,8 @@
     },
     "error": {
       "blank_record": "A blank state has no name to record it under. Choose Ignore, or type a state name to record it as.",
-      "blank_unusable": "That has no letters or digits either, so it cannot name a statistic. Choose Ignore, or type a state name."
+      "blank_unusable": "That has no letters or digits either, so it cannot name a statistic. Choose Ignore, or type a state name.",
+      "continuous_state": "That entity reports a continuous measurement. Discrete Statistics tracks entities with a fixed set of states, such as on/off or a list of modes."
     }
   },
   "options": {

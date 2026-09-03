@@ -145,6 +145,13 @@ raises a repair issue.
 Removing a helper stops compiling. It never deletes statistics — do that
 in Settings → System → Tools → Statistics.
 
+Entities that report a *measurement* are refused — anything with a
+`state_class` or a unit. Each distinct reading would otherwise become its own
+pair of statistics, written every hour forever. The check is on submit rather
+than in the picker, because "has no unit" cannot be expressed as a picker
+filter, and a domain allowlist would exclude enum `sensor.*` entities, which
+are a main use case.
+
 YAML configuration keeps working unchanged, and is still the only way to
 set per-state dispositions and the `ignore` default.
 
