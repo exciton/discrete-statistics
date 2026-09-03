@@ -82,11 +82,19 @@ leaking into a title looked like. The registry comes before the state because
 attributes are stripped while an entity is unavailable, and because it holds
 what the user asked for when the two disagree.
 
-The `button` platform exists as much for the Helpers list as for the button:
-a config entry with no entity of its own is drawn with a red exclamation.
-Its entity is attached to a `DeviceEntryType.SERVICE` device named after the
-entry, because `has_entity_name` without a device leaves every helper's
-button called just "Recompute" and fighting over `button.recompute`.
+The `button` platform exists as much for the Helpers list as for the button.
+`ha-config-helpers.ts:503-546` builds a row per *entity* belonging to a helper
+integration and falls back to a `mdiAlertCircle` row per config entry with
+none — so the entity is what stops every helper being flagged, and it is also
+what the row shows. Hence the naming: the entity is attached to a
+`DeviceEntryType.SERVICE` device named after the entry and is itself called
+"Statistics", so the row reads `<helper> Statistics`. Without the device,
+`has_entity_name` leaves every helper's button called just "Statistics",
+fighting over one entity ID.
+
+One entity, deliberately: the list builds a row per entity, so a status
+sensor alongside the button would give each helper two rows rather than a
+richer one. Anything informative has to replace the button, not join it.
 
 `Compiler` is a class built from `(hass,)`; the entry points are its methods,
 not module-level functions.

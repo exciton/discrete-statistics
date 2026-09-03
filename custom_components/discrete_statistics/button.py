@@ -35,12 +35,18 @@ class RecomputeButton(ButtonEntity):
     """Rebuild this entity's statistics from the recorder's history."""
 
     _attr_has_entity_name = True
-    _attr_translation_key = "recompute"
+    # Named for what the row in the Helpers list should read - the device
+    # supplies the helper's own name, so it composes to "<helper>
+    # Statistics". What pressing it does is carried by the icon and the
+    # dialog rather than the name.
+    _attr_translation_key = "statistics"
     _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, entry: ConfigEntry) -> None:
         """Bind the button to its config entry."""
         self._entry = entry
+        # Unchanged when the entity was renamed: it keys the registry entry,
+        # and a new one would orphan the old and lose any customisation.
         self._attr_unique_id = f"{entry.entry_id}_recompute"
         # A service device standing for the helper itself. Without one,
         # `has_entity_name` leaves the button called just "Recompute" -

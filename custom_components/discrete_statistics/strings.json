@@ -72,8 +72,8 @@
   },
   "entity": {
     "button": {
-      "recompute": {
-        "name": "Recompute"
+      "statistics": {
+        "name": "Statistics"
       }
     }
   }

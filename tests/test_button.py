@@ -20,7 +20,7 @@ from custom_components.discrete_statistics.config import CONF_BLANK, CONF_DEFAUL
 from custom_components.discrete_statistics.const import DEFAULT_RECORD_KNOWN, DOMAIN
 
 ENTITY = "binary_sensor.grid_status"
-BUTTON = "button.grid_status_recompute"
+BUTTON = "button.grid_status_statistics"
 
 
 @pytest.fixture(autouse=True)

@@ -145,9 +145,11 @@ raises a repair issue.
 Removing a helper stops compiling. It never deletes statistics — do that
 in Settings → System → Tools → Statistics.
 
-Each helper gets a **Recompute** button, which rebuilds that entity's whole
+Each helper gets a **Statistics** button, which rebuilds that entity's whole
 history from whatever the recorder still holds — the same thing the
-`recompute` service does, without writing a service call. YAML-configured
+`recompute` service does, without writing a service call. It is also the
+entity that gives the helper its row in Settings → Devices & Services →
+Helpers. YAML-configured
 entities have no config entry and so no button; use the service for those.
 
 Entities that report a *measurement* are refused — anything with a
