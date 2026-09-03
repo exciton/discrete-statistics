@@ -1318,3 +1318,33 @@ async def test_a_mid_history_chunk_never_trims_during_a_full_recompute(
     assert len(gap) == 4, gap
     # And the six hours are still fully accounted for between them.
     assert on[-1] + gap[-1] == pytest.approx(6.0)
+
+
+async def test_unknown_and_unavailable_are_capitalised(recorder, freezer):
+    """Home Assistant renders these two from the frontend's own strings.
+
+    `async_translate_state` returns them untouched, so without help a legend
+    reads `unavailable` beside a properly rendered `Closed`.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    record_all = EntityConfig(
+        entity_id=ENTITY, name="Grid Status", default="record", states={}
+    )
+    for offset, state in (
+        (timedelta(0), "on"),
+        (timedelta(hours=1), "unavailable"),
+        (timedelta(hours=2), "unknown"),
+    ):
+        freezer.move_to(start + offset)
+        hass.states.async_set(ENTITY, state)
+        await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=4))
+    await Compiler(hass).async_compile(record_all, start.timestamp())
+
+    assert await stored_name(
+        hass, "discrete_statistics:binary_sensor_grid_status_unavailable_duration"
+    ) == "Grid Status: Unavailable (h)"
+    assert await stored_name(hass, DURATION_UNKNOWN) == "Grid Status: Unknown (h)"

@@ -15,7 +15,11 @@ from homeassistant.components.recorder.statistics import (
     get_metadata,
     statistics_during_period,
 )
-from homeassistant.const import ATTR_DEVICE_CLASS
+from homeassistant.const import (
+    ATTR_DEVICE_CLASS,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.translation import (
@@ -42,6 +46,15 @@ TRAILING_HOURS = 3
 CHUNK_HOURS = 24 * 7
 
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+# `async_translate_state` returns these two untouched (translation.py:469):
+# the frontend renders them from its own `state.default` strings, which the
+# backend never sees. So a chart legend would read `off` beside `Closed`.
+# English only, like everything else the instance language decides.
+_FRONTEND_STATES = {
+    STATE_UNAVAILABLE: "Unavailable",
+    STATE_UNKNOWN: "Unknown",
+}
 
 # Both of `state_changes_during_period`'s queries compare strictly, so a
 # state landing exactly on window_start is returned by neither. Querying from
@@ -95,6 +108,8 @@ class Compiler:
             device_class = state.attributes.get(ATTR_DEVICE_CLASS)
 
         def translate(state: str) -> str:
+            if (rendered := _FRONTEND_STATES.get(state)) is not None:
+                return rendered
             return async_translate_state(
                 self._hass,
                 state,
