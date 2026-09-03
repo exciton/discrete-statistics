@@ -110,13 +110,13 @@ other entities, so the generic heading is the honest one. Only `helper` and
 `entity` are special-cased anywhere else in the frontend, so the key costs
 nothing else either way.
 
-**The integration provides no entities.** It was `integration_type: helper`
-once, which listed every entry in the Helpers panel — where
-`ha-config-helpers.ts:503-546` draws a row per *entity* and a red-exclamation
-row for any entry with none. That pushed us into adding a button just to
-carry the row, which then took the row's name and icon and brought a service
-device with it. As a normal integration none of that applies: the page lists
-the entries, and each row opens its configuration.
+**The integration provides no entities.** `integration_type: helper` would
+list every entry in the Helpers panel — where `ha-config-helpers.ts:503-546`
+draws a row per *entity* and a red-exclamation row for any entry with none —
+and so force a placeholder entity just to carry the row, which then takes the
+row's name and icon and brings a service device with it. As a normal
+integration none of that applies: the page lists the entries, and each row
+opens its configuration.
 
 `Compiler` is a class built from `(hass,)`; the entry points are its methods,
 not module-level functions.
@@ -157,10 +157,14 @@ derive per-bucket values. A sum that decreases is always a bug.
 the window.** `payload.build_payloads` takes `existing`, which `compiler`
 sources from the recorder's own `statistics_meta`. Emitting only the window's
 own states leaves a statistic with no row in the hour before the next window.
-Its base is then looked for further back (`_async_newest_sum_before`), so the
-sum no longer restarts at zero as it once did — but that lookup is one or two
-extra queries per statistic per compile, meant for the rare hole, not for
-every quiet state on every run; and a sparse series still breaks the `mean`.
+`_async_newest_sum_before` finds its base further back, but that lookup is
+one or two extra queries per statistic per compile, meant for the rare hole,
+not for every quiet state on every run; and a sparse series still breaks the
+`mean`.
+
+A hole is not sparseness: no statistic has a row there, so every sum carries
+across it and every average skips the hour alike. Density is a property of
+the hours that are compiled.
 
 Density is what makes the `mean` correct. Every row carries the hour's
 own value as its `mean`, `min` and `max` so the recorder's `_reduce_statistics`
@@ -205,9 +209,9 @@ answers a case the one before it cannot.
 
 Then nothing: the window opens later, at the first whole hour that begins
 in a recordable transition, and the hours passed over are not compiled at
-all (see below). The chain replaced a widening lookback of 1 hour, 1 day, 30
-days, which guessed at a distance and gave up past a month — where step 3 is
-exact and has no distance limit at all.
+all (see below). A widening lookback — 1 hour, 1 day, 30 days — would guess
+at a distance and give up past a month, where step 3 is exact and has no
+distance limit at all.
 
 Step 3 has only the state *token* to hand, since that is all an ID carries.
 `_readable_state` recovers the state from the name the statistic already
@@ -223,9 +227,8 @@ splits the series.
 it (`_async_opening_floor`). The hours before have no rows to rebuild them
 from, so compiling them does not describe the entity's past, it replaces
 it: when our own last row vouches for a state, every span falls to that one
-state and every real sum flattens to its base. A `recompute` from before the
-purge horizon used to do exactly that — a deletion by another name. Those
-hours stay as they were compiled when the rows still existed. The one
+state and every real sum flattens to its base — a deletion by another name.
+Those hours stay as they were compiled when the rows still existed. The one
 exception is a hole: downtime longer than the horizon leaves hours after the
 watermark that were never compiled, so the floor is the hour after the
 watermark or the evidence, whichever comes first. Opening there puts the
@@ -261,8 +264,8 @@ silently loses or double-counts boundary events.
 One boundary row is not an event: a row at `window_start` *into the state
 already carried*. The state machine's `last_changed` is that row, or an
 ignored row sat between two spells of the same state, so counting it would
-count a change from a state to itself. `_open_window` drops it. Before
-that, an entity born exactly on the hour earned a transition on every
+count a change from a state to itself. `_open_window` drops it; counting it
+gives an entity born exactly on the hour a transition on every
 trailing-window recompile of its birth hour.
 
 **A statistic ID's state is exactly one token, and that is what makes it
@@ -318,7 +321,7 @@ real name and merges with `unknown` exactly as `heat_cool` merges with
 normally, so it inherits a real state's disposition rather than
 needing a rule of its own. Substitute-then-resolve, not a direct answer: a
 direct answer would bypass `default` and make the stock `unknown` record where
-it used to be ignored. An explicit `states` entry for the raw value wins over
+`record_known` ignores it. An explicit `states` entry for the raw value wins over
 the substitution — blank is the most meaningful state a text error sensor has,
 and only the config knows that. The recorder stores NULL when an entity is removed
 or reloaded, and the history API hands that back as `""` — which tokenises to
@@ -399,7 +402,7 @@ Verified against 2026.8.3. Each of these was got wrong once.
   hole has rows on both sides, and the ones ahead are what it overwrites.
 - `Compiler.async_compile` drains the recorder in a `finally`, not on the
   success path. A chunk that raises leaves earlier chunks' writes queued, and
-  density is now read live from `statistics_meta` — so the next compile could
+  density is read live from `statistics_meta` — so the next compile could
   see half of them and leave the rest sparse.
 - The two `_async_existing` reads in an incremental compile are not
   redundant. Reusing the first one — taken before `_async_watermark`'s
