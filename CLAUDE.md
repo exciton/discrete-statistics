@@ -174,14 +174,33 @@ threshold.
 **Only completed hours are emitted.** Writing a partial bucket that a later run
 revises would make cumulative sums briefly wrong.
 
-**A boundary state that resolves to nothing widens the lookback
-(`WIDENING_LOOKBACKS`).** `include_start_time_state` returns exactly *one* row
-before the boundary, so a single ignored row there hides the perfectly good
-state behind it and the whole span falls to `no_data`. Because `window_start`
-moves with the watermark on every run, the idempotent upsert then rewrites
-already-correct duration rows downward, permanently. `compiler` widens the
-lookback until a recordable state appears; the two legitimate `no_data` cases
-(an entity's pre-history, a gap whose rows were purged) still fall through.
+**The state a window opens in has four sources, tried in order.** Each
+answers a case the one before it cannot.
+
+1. **The recorder, reading an hour further back than the window.**
+   `include_start_time_state` returns exactly *one* row before the boundary,
+   so a single ignored row there hides a good state moments behind it.
+   Reading the previous hour whole surfaces both, and `canonicalise` folds
+   everything before `window_start` into the carried state.
+2. **The previous chunk.** A chunk hands the state it ended in to the next,
+   so only the opening chunk queries at all. Threaded, never re-read:
+   mid-compile the previous chunk's rows are still queued, exactly as with
+   `base_sums`.
+3. **That hour's own statistics** (opening chunk only). A whole hour with
+   nothing recordable in it means the entity held one state throughout — and
+   our rows already encode the carry-forward decision, so they *are* the
+   resolved timeline. Free: `_async_previous_hour` fetches the values in the
+   same query as the sums. Only when one duration statistic accounts for the
+   hour; several would mean transitions inside it, which the recorder holds.
+4. **The state machine**, when `last_changed <= window_start` proves the live
+   state was already in effect. The only source left for an entity purge has
+   erased entirely.
+
+Then `no_data`. This replaced a widening lookback of 1 hour, 1 day, 30 days,
+which guessed at a distance and gave up past a month — where step 3 is exact
+and has no distance limit at all. Step 3 returns the state *token*, so a
+window carried entirely from statistics names its statistics `heatcool`
+rather than `heat_cool` until a real transition restores the readable form.
 
 **A long compile is chunked, and the base sum is threaded through it.**
 `async_compile` walks the window in `CHUNK_HOURS` slices to bound memory during

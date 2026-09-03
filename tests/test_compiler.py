@@ -1277,47 +1277,36 @@ async def test_a_full_recompute_still_trims_only_its_opening_chunk(
         assert spent == pytest.approx(1.0), hour
 
 
-async def test_a_mid_history_chunk_never_trims_during_a_full_recompute(
+async def test_the_carried_state_threads_across_a_chunk_seam(
     recorder, freezer, monkeypatch
 ):
-    """The restriction that keeps `opens_history` to the first chunk.
+    """A seam landing inside an ignored stretch keeps the state.
 
-    A stretch longer than the widening lookback leaves a later chunk with no
-    carried state. Trimming there writes nothing for those hours, so the
-    series gains a hole - and a later run whose window starts inside it finds
-    no base in the preceding hour and restarts at zero.
+    `include_start_time_state` hands back the `unavailable` row at the
+    boundary, which resolves to nothing, so the chunk has no state of its
+    own. The previous chunk's ending state is what carries it - the job the
+    widening lookback used to do, without a query or a distance limit.
     """
     monkeypatch.setattr(compiler_module, "CHUNK_HOURS", 2)
-    monkeypatch.setattr(compiler_module, "WIDENING_LOOKBACKS", (HOUR,))
 
     hass = recorder
     start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
     freezer.move_to(start)
     hass.states.async_set(ENTITY, "on")
     await hass.async_block_till_done()
-    # Ignored for long enough to defeat the widening lookback.
     freezer.move_to(start + timedelta(minutes=30))
     hass.states.async_set(ENTITY, "unavailable")
-    await hass.async_block_till_done()
-    freezer.move_to(start + timedelta(hours=5))
-    hass.states.async_set(ENTITY, "on")
     await hass.async_block_till_done()
     await get_instance(hass).async_block_till_done()
 
     freezer.move_to(start + timedelta(hours=6))
-    await Compiler(hass).async_compile(cfg(), None)
+    assert await Compiler(hass).async_compile(cfg(), start.timestamp()) == 6
 
+    # record_known ignores `unavailable`, so `on` runs through all six hours
+    # and across both seams.
     on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=6))
-    gap = await read_sums(hass, DURATION_NO_DATA, start, start + timedelta(hours=6))
-
-    # `on` exists from the first hour, so density requires a row in all six.
-    # Trimming the middle chunk would write nothing for hours 2 and 3.
-    assert len(on) == 6, on
-    # no_data begins where the gap does - density runs from a statistic's
-    # first appearance, not from the start of the window.
-    assert len(gap) == 4, gap
-    # And the six hours are still fully accounted for between them.
-    assert on[-1] + gap[-1] == pytest.approx(6.0)
+    assert on == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    assert DURATION_NO_DATA not in await existing(hass)
 
 
 async def test_unknown_and_unavailable_are_capitalised(recorder, freezer):
@@ -1546,3 +1535,69 @@ async def test_the_opening_hour_is_whole_when_it_comes_from_the_live_state(
     assert await Compiler(hass).async_compile_incremental(cfg()) == 1
     on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=3))
     assert on == [1.0]
+
+
+async def test_an_ignored_row_at_the_boundary_does_not_hide_the_state_behind_it(
+    recorder, freezer
+):
+    """`include_start_time_state` returns exactly one row before the window.
+
+    When that row is `unavailable`, the recordable state moments earlier is
+    invisible to it. Reading the previous hour whole is what surfaces both.
+    Nothing else can help here: it is the entity's first compile, so there
+    are no statistics, and its live state is the ignored one.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start + timedelta(hours=1))
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    freezer.move_to(start + timedelta(hours=1, minutes=40))
+    hass.states.async_set(ENTITY, "unavailable")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=5))
+    # The window opens at hour 2, past both rows: the only row before it is
+    # the `unavailable`.
+    await Compiler(hass).async_compile(
+        cfg(), (start + timedelta(hours=2)).timestamp()
+    )
+
+    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=5))
+    assert on == [1.0, 2.0, 3.0]
+    assert DURATION_NO_DATA not in await existing(hass)
+
+
+async def test_a_long_ignored_stretch_is_carried_by_our_own_statistics(
+    recorder, freezer
+):
+    """The case with no distance limit, and the reason the lookback went.
+
+    The entity has been `unavailable` for hours, so the recorder has nothing
+    recordable within the extra hour and its live state is the ignored one.
+    Our own rows for the previous hour do know: a whole hour with nothing to
+    record means it held one state throughout, and that is what they say.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    freezer.move_to(start + timedelta(minutes=30))
+    hass.states.async_set(ENTITY, "unavailable")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=4))
+    compiler = Compiler(hass)
+    await compiler.async_compile(cfg(), start.timestamp())
+
+    # Hours 3 onward: the previous hour is entirely inside the ignored
+    # stretch, so the recorder has nothing to offer even an hour back.
+    freezer.move_to(start + timedelta(hours=6))
+    await compiler.async_compile(cfg(), (start + timedelta(hours=3)).timestamp())
+
+    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=6))
+    assert on == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    assert DURATION_NO_DATA not in await existing(hass)
