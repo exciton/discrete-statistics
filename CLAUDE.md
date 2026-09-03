@@ -222,9 +222,12 @@ flattens to its base. A `recompute` from before the purge horizon used to
 do exactly that — a deletion by another name. Those hours stay as they were
 compiled when the rows still existed. The one exception is a hole: downtime
 longer than the horizon leaves hours after the watermark that were never
-compiled, and they must be filled with *something* or the next chunk finds
-no base and restarts every sum at zero, so the floor is the hour after the
-watermark or the evidence, whichever comes first. That clause is also what
+compiled, and they must be filled or the next chunk finds no base and
+restarts every sum at zero, so the floor is the hour after the watermark or
+the evidence, whichever comes first. Opening there puts the watermark hour
+itself in the position the carry chain's third source reads, so the hole
+is filled with the state our own last row proves — `no_data` only when that
+hour was not uniform, and the order of its states is lost. That clause is also what
 keeps the hourly run working after a purge — without it the trailing window
 would floor to the evidence and compile nothing.
 
