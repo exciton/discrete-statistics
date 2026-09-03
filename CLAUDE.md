@@ -213,6 +213,21 @@ name did not have the shape assumed and the token stands. Trusting it would
 be worse than the token, because a wrong state builds a different ID and
 splits the series.
 
+**A compile never opens before the recorder's evidence.** An explicit
+`start` earlier than the first whole hour of retained history is raised to
+it (`_async_opening_floor`). The hours before have no rows to rebuild them
+from, so compiling them does not describe the entity's past, it replaces
+it: every span falls to `no_data` or one carried state and every real sum
+flattens to its base. A `recompute` from before the purge horizon used to
+do exactly that — a deletion by another name. Those hours stay as they were
+compiled when the rows still existed. The one exception is a hole: downtime
+longer than the horizon leaves hours after the watermark that were never
+compiled, and they must be filled with *something* or the next chunk finds
+no base and restarts every sum at zero, so the floor is the hour after the
+watermark or the evidence, whichever comes first. That clause is also what
+keeps the hourly run working after a purge — without it the trailing window
+would floor to the evidence and compile nothing.
+
 **A long compile is chunked, and `_ChunkState` is threaded through it.**
 `async_compile` walks the window in `CHUNK_HOURS` slices to bound memory during
 a backfill, and each slice returns the sums, the known statistics and the
@@ -234,6 +249,13 @@ transitions *strictly* before it. Together they tile the timeline with no
 overlap or hole, so a transition exactly on a boundary is counted exactly once
 regardless of which window compiles it. Changing either comparison alone
 silently loses or double-counts boundary events.
+
+One boundary row is not an event: a row at `window_start` *into the state
+already carried*. The state machine's `last_changed` is that row, or an
+ignored row sat between two spells of the same state, so counting it would
+count a change from a state to itself. `_open_window` drops it. Before
+that, an entity born exactly on the hour earned a transition on every
+trailing-window recompile of its birth hour.
 
 **A statistic ID's state is exactly one token, and that is what makes it
 readable.** `build` slugifies the state with *no* separator, so an ID is
@@ -278,10 +300,14 @@ otherwise is equally load-bearing — without that test a backfill of old hours
 would be handed whatever the entity happens to be doing today.
 
 **`no_data` is reserved, but it can be chosen.** It is what the compiler
-attributes a span to when it cannot determine a real state — before an entity's
-first known state, or across a gap whose source rows were purged. A config may
-also name it, as `blank: no_data` or as a `states` target, which is
-how an operator says "I cannot interpret this, chart it as a gap".
+attributes a span to when it cannot determine a real state. With the carry
+chain and the opening floor that is now rare: not before an entity's first
+state (trimmed), not before the recorder's evidence (left alone), only a
+hole after the watermark that no source can account for — downtime longer
+than `purge_keep_days`, when the hour before the watermark was not uniform.
+A config may also name it, as `blank: no_data` or as a `states` target,
+which is how an operator says "I cannot interpret this, chart it as a gap",
+and that is now its usual source.
 
 What stays forbidden is a device reaching the band *by itself*: a raw state
 that happens to be called `no_data` resolves to nothing instead, or the band

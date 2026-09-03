@@ -177,18 +177,14 @@ class Compiler:
         self, cfg: EntityConfig, start: float | None, end: float | None = None
     ) -> int:
         """Compile [start, end) for one entity. Returns hours compiled."""
+        earliest = await self._async_earliest_state_ts(cfg.entity_id)
+        if earliest is None:
+            return 0
         # `start is None` means "from the beginning of what the recorder
         # still holds", so nothing precedes the window and the leading
         # no_data may be trimmed even though statistics already exist.
-        # An explicit start is a range the caller asked for, and reaching
-        # back past what is known is then a real gap worth showing.
         at_earliest_state = start is None
-        if start is None:
-            start = await self._async_earliest_state_ts(cfg.entity_id)
-            if start is None:
-                return 0
-
-        window_start = hour_start(start)
+        window_start = hour_start(earliest if start is None else start)
         # Only completed hours are emitted.
         window_end = hour_start(end if end is not None else dt_util.utcnow().timestamp())
         if window_end <= window_start:
@@ -196,6 +192,13 @@ class Compiler:
 
         await async_warm_state_translations(self._hass, cfg.entity_id)
         existing = await self._async_existing(cfg.entity_id)
+        if window_start < (evidence := first_whole_hour(earliest)):
+            window_start = await self._async_opening_floor(
+                existing, window_start, evidence
+            )
+            if window_end <= window_start:
+                return 0
+
         base_sums, previous_hour = await self._async_previous_hour(
             existing, window_start
         )
@@ -377,6 +380,14 @@ class Compiler:
             # held one state throughout, which is exactly what they say.
             carried = state.carried
 
+        if transitions and transitions[0] == (window_start, carried):
+            # A row on the boundary into the state already carried is that
+            # state's beginning, not a transition into it: the state
+            # machine's `last_changed` IS this row, or an ignored row sat
+            # between two spells of it. Counting it would count a change
+            # from a state to itself.
+            transitions = transitions[1:]
+
         if carried is None and (not state.existing or opens_history):
             # Nothing has ever been compiled for this entity, so a leading
             # no_data would complete no earlier series - it would only earn
@@ -413,6 +424,29 @@ class Compiler:
                 _as_datetime(window_start).isoformat(),
             )
         return window_start, carried, transitions
+
+    async def _async_opening_floor(
+        self, existing: Collection[str], window_start: float, evidence: float
+    ) -> float:
+        """Raise a window that opens before the recorder's evidence.
+
+        Hours before the first whole hour of retained history have no rows
+        to rebuild them from. Compiling them anyway does not describe the
+        entity's past, it replaces it: every span falls to no_data or to
+        one carried state, and every real sum flattens to its base. A
+        recompute reaching past the purge horizon therefore leaves those
+        hours as they were compiled when the rows still existed.
+
+        Unless they never were. Downtime longer than the horizon leaves a
+        hole between the watermark and the evidence, and a hole must be
+        filled with something, or the next chunk finds no base in the hour
+        before it and restarts every sum at zero. The floor is the hour
+        after the watermark, or the evidence, whichever comes first.
+        """
+        watermark = await self._async_watermark(existing)
+        if watermark is None:
+            return max(window_start, evidence)
+        return max(window_start, min(evidence, watermark + HOUR))
 
     async def _async_watermark(self, statistic_ids: Collection[str]) -> float | None:
         """Return the newest compiled hour for an entity, or None.

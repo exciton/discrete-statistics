@@ -321,13 +321,15 @@ async def test_watermark_is_the_newest_hour_across_statistics(recorder):
     assert watermark == (start + timedelta(hours=3)).timestamp()
 
 
-async def test_recompiling_back_past_known_history_is_no_data(recorder, freezer):
-    """Reaching back before an established series still yields no_data.
+async def test_recompiling_back_before_the_first_state_writes_no_gap(
+    recorder, freezer
+):
+    """A recompute asked to start before the recorder's evidence opens at
+    the evidence instead.
 
-    The leading no_data is trimmed only on an entity's first compile. Once
-    statistics exist, a recompute asked to start earlier than the entity's
-    history has a real gap to describe, and trimming it would leave a hole
-    the next run would read as a missing cumulative base.
+    The hours before it have no rows to rebuild them from. Attributing them
+    to no_data would not describe a gap in the entity's history - it would
+    manufacture one, and by density write it forever.
     """
     hass = recorder
     start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
@@ -338,16 +340,104 @@ async def test_recompiling_back_past_known_history_is_no_data(recorder, freezer)
 
     freezer.move_to(start + timedelta(hours=4))
     compiler = Compiler(hass)
-
-    # First compile: establishes the series, and emits no no_data at all.
     await compiler.async_compile(cfg(), start.timestamp())
+    await compiler.async_compile(cfg(), start.timestamp())
+
+    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=4))
+    assert on == [1.0, 2.0]
     assert DURATION_NO_DATA not in await existing(hass)
 
-    # Second compile, reaching back before the first known state.
+
+async def test_recomputing_past_the_purge_horizon_leaves_older_hours_alone(
+    recorder, freezer
+):
+    """The case the clamp exists for.
+
+    Months of statistics, ten days of recorder. A recompute from before the
+    horizon used to rebuild the whole range from nothing - no_data where the
+    rows had been, every real sum flattened to its base - which is a
+    deletion by another name. Hours the recorder cannot vouch for are now
+    left exactly as they were compiled when it could.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    for minutes, state in ((0, "on"), (90, "off"), (150, "on"), (390, "off")):
+        freezer.move_to(start + timedelta(minutes=minutes))
+        hass.states.async_set(ENTITY, state)
+        await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=10))
+    compiler = Compiler(hass)
+    await compiler.async_compile(cfg(), start.timestamp())
+    before = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=10))
+    assert before == [1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 5.5, 5.5, 5.5, 5.5]
+
+    # Everything the recorder held is purged; one new row arrives after.
+    await hass.services.async_call(
+        "recorder", "purge", {"keep_days": 0}, blocking=True
+    )
+    await get_instance(hass).async_block_till_done()
+    freezer.move_to(start + timedelta(hours=10, minutes=30))
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+    # The hourly run keeps the watermark current, as it would in practice.
+    freezer.move_to(start + timedelta(hours=11))
+    await compiler.async_compile_incremental(cfg())
+
+    # Now the recompute that used to destroy everything before hour 10.
+    freezer.move_to(start + timedelta(hours=12))
     await compiler.async_compile(cfg(), start.timestamp())
 
-    sums = await read_sums(hass, DURATION_NO_DATA, start, start + timedelta(hours=4))
-    assert sums[-1] == pytest.approx(2.0)
+    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=12))
+    assert on[:10] == before
+    assert on[10:] == [6.0, 7.0]
+    off = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=12))
+    assert off == [0.0, 0.5, 1.0, 1.0, 1.0, 1.0, 1.5, 2.5, 3.5, 4.5, 5.0, 5.0]
+    assert DURATION_NO_DATA not in await existing(hass)
+
+
+async def test_a_hole_after_the_watermark_is_still_filled(recorder, freezer):
+    """The clamp stops at the hour after the watermark.
+
+    Downtime longer than the purge horizon leaves hours that were never
+    compiled between the watermark and the recorder's evidence. They must be
+    filled, whatever they are filled with: leaving them empty means the next
+    chunk finds no base in the hour before it and restarts every sum at zero.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    freezer.move_to(start + timedelta(minutes=30))
+    hass.states.async_set(ENTITY, "off")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=2))
+    compiler = Compiler(hass)
+    await compiler.async_compile(cfg(), start.timestamp())
+
+    await hass.services.async_call(
+        "recorder", "purge", {"keep_days": 0}, blocking=True
+    )
+    await get_instance(hass).async_block_till_done()
+    freezer.move_to(start + timedelta(hours=5, minutes=30))
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=7))
+    await compiler.async_compile(cfg(), start.timestamp())
+
+    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=7))
+    off = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=7))
+    # Hours 0-1 untouched; hours 2-6 exist, and the sums never fall.
+    assert on[:2] == [0.5, 0.5]
+    assert len(on) == len(off) == 7
+    assert on == sorted(on) and off == sorted(off)
 
 
 async def test_an_ignored_state_at_the_window_start_does_not_destroy_durations(
@@ -437,32 +527,36 @@ async def test_a_boundary_transition_is_counted_once_from_either_window(
 
 
 async def test_no_data_has_no_count_statistic(recorder, freezer):
-    """no_data has no transitions into it, so a count would be a fixed zero."""
+    """no_data is a band for spans we cannot describe; counting them would
+    measure our own ignorance. Even a config that routes a state there
+    earns a duration statistic only."""
     hass = recorder
     start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
-    freezer.move_to(start + timedelta(hours=2))
+    as_gap = EntityConfig(
+        entity_id=ENTITY, name="Grid Status", default="record", states={},
+        blank="no_data",
+    )
+    freezer.move_to(start)
     hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    freezer.move_to(start + timedelta(hours=1))
+    hass.states.async_set(ENTITY, "")
     await hass.async_block_till_done()
     await get_instance(hass).async_block_till_done()
 
-    freezer.move_to(start + timedelta(hours=4))
-    compiler = Compiler(hass)
-    # Twice: the first compile establishes the series, and only then does a
-    # start before the entity's history describe a gap rather than the
-    # trimmed opening sliver.
-    await compiler.async_compile(cfg(), start.timestamp())
-    await compiler.async_compile(cfg(), start.timestamp())
+    freezer.move_to(start + timedelta(hours=3))
+    await Compiler(hass).async_compile(as_gap, start.timestamp())
 
     # The gap is real: the duration statistic exists and holds two hours.
     seconds = await read_sums(
-        hass, DURATION_NO_DATA, start, start + timedelta(hours=4)
+        hass, DURATION_NO_DATA, start, start + timedelta(hours=3)
     )
     assert seconds[-1] == pytest.approx(2.0)
 
     assert COUNT_NO_DATA not in await existing(hass)
     assert COUNT_ON in await existing(hass)
     assert (
-        await read_sums(hass, COUNT_NO_DATA, start, start + timedelta(hours=4))
+        await read_sums(hass, COUNT_NO_DATA, start, start + timedelta(hours=3))
         == []
     )
 
@@ -944,6 +1038,35 @@ async def test_an_entitys_first_state_is_not_counted_as_a_transition(
     assert counts == [0, 0, 0]
 
 
+async def test_a_boundary_row_into_the_carried_state_is_not_a_transition(
+    recorder, freezer, monkeypatch
+):
+    """on, then an ignored row, then on again exactly on a chunk seam.
+
+    The ignored row is carried forward, so the entity was on throughout
+    and nothing transitioned. The second chunk sees a row into `on` at its
+    boundary and is handed `on` as the carried state; without the dedupe it
+    counted a change from on to on.
+    """
+    monkeypatch.setattr(compiler_module, "CHUNK_HOURS", 2)
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    for minutes, state in ((0, "on"), (90, "unavailable"), (120, "on")):
+        freezer.move_to(start + timedelta(minutes=minutes))
+        hass.states.async_set(ENTITY, state)
+        await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=4))
+    await Compiler(hass).async_compile(cfg(), start.timestamp())
+
+    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=4))
+    assert on == [1.0, 2.0, 3.0, 4.0]
+    assert await read_sums(hass, COUNT_ON, start, start + timedelta(hours=4)) == [
+        0, 0, 0, 0
+    ]
+
+
 async def test_a_reloaded_entity_does_not_kill_the_compile(recorder, freezer):
     """A reload writes an empty state and restores the real one moments later.
     It cannot go in a statistic ID, and letting build() raise aborted the
@@ -1352,12 +1475,17 @@ async def test_no_data_is_rendered_too(recorder, freezer):
     await hass.async_block_till_done()
     await get_instance(hass).async_block_till_done()
 
-    freezer.move_to(start + timedelta(hours=4))
-    compiler = Compiler(hass)
-    # Twice: the second reaches back past an established series, which is
-    # what writes no_data at all.
-    await compiler.async_compile(cfg(), start.timestamp())
-    await compiler.async_compile(cfg(), start.timestamp())
+    freezer.move_to(start + timedelta(hours=3))
+    hass.states.async_set(ENTITY, "")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=5))
+    as_gap = EntityConfig(
+        entity_id=ENTITY, name="Grid Status", default="record", states={},
+        blank="no_data",
+    )
+    await Compiler(hass).async_compile(as_gap, start.timestamp())
 
     assert await stored_name(hass, DURATION_NO_DATA) == "Grid Status: No Data (h)"
 
