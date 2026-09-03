@@ -370,7 +370,7 @@ one an entry already owns, which is also what keeps it out of
 
 ## Home Assistant APIs, and their traps
 
-Verified against 2026.8.3. Each of these was got wrong once.
+Verified against 2026.8.3.
 
 - `async_add_external_statistics` is a `@callback` — call it, do not await it.
   It only *enqueues*; `Compiler.async_compile` drains via `async_block_till_done()`
@@ -421,9 +421,9 @@ across statistics that already carry that unit, it cannot convert on demand.
 
 ## Testing conventions
 
-Every test must fail when its fix is reverted. Two tests in this repo's history
-passed regardless of the code under test and had to be discarded. When adding a
-test for a bug fix, revert the fix, watch it fail, then restore.
+Every test must fail when its fix is reverted; a test that passes regardless
+of the code under test proves nothing. When adding a test for a bug fix,
+revert the fix, watch it fail, then restore.
 
 Integration tests use `recorder_mock` and `freezer`. `tests/test_compiler.py`,
 `test_init.py` and `test_service.py` each override the root conftest's autouse
