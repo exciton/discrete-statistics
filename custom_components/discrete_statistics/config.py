@@ -62,9 +62,9 @@ class EntityConfig:
         that.
 
         NO_DATA may be reached only on purpose. A device that happens to
-        report the string `no_data` must not slip into the compiler's own
-        band, because that would make "the device said this" and "we could
-        not tell" the same reading; but an operator who writes `no_data` as a
+        report the string `no_data` must not slip into the band reserved for
+        "we could not tell", because that would make it and "the device said
+        this" the same reading; but an operator who writes `no_data` as a
         target is asking for exactly that, and is allowed it. The test is who
         asked, not what the value is.
         """

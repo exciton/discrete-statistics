@@ -39,7 +39,7 @@ from homeassistant.const import STATE_UNKNOWN
 
 # `ignore` is deliberately absent. With no per-state mapping to supply
 # exceptions it makes resolve() return None for every state, so nothing is
-# ever recordable and the entity's whole timeline is attributed to no_data.
+# ever recordable and the entity never compiles an hour.
 # It stays valid in YAML, where `states:` supplies those exceptions.
 UI_DEFAULTS = [DEFAULT_RECORD, DEFAULT_RECORD_KNOWN]
 
