@@ -454,7 +454,21 @@ class Compiler:
         }
 
     async def _async_earliest_state_ts(self, entity_id: str) -> float | None:
-        """Return the timestamp of the oldest retained state, or None."""
+        """Return the timestamp to open an entity's history at, or None.
+
+        The oldest retained state, or - when the recorder holds nothing at
+        all, because the entity has not changed within `purge_keep_days` -
+        the first whole hour after the live state began. An entity with no
+        history and no current state earns nothing; one with a current state
+        earns the span it has demonstrably held it for.
+
+        A whole hour, not `last_changed` itself, so that the window opens at
+        a moment `_carried_from_state_machine` will vouch for: it requires
+        `last_changed <= window_start`, and the hour containing the change
+        starts before it. The part-hour is dropped for the same reason the
+        leading no_data is - a part-known hour cannot both be recorded and
+        total wall-clock time.
+        """
         history = await get_instance(self._hass).async_add_executor_job(
             state_changes_during_period,
             self._hass,
@@ -466,6 +480,12 @@ class Compiler:
             1,
             False,
         )
-        if not (rows := history.get(entity_id)):
+        if rows := history.get(entity_id):
+            return rows[0].last_changed_timestamp
+
+        state = self._hass.states.get(entity_id)
+        if state is None:
             return None
-        return rows[0].last_changed_timestamp
+        began = state.last_changed.timestamp()
+        opening = hour_start(began)
+        return opening if opening == began else opening + HOUR

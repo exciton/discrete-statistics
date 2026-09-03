@@ -283,6 +283,12 @@ card's `entities` list to be drawn.
 
 ## Backfilling
 
+An entity that has not changed within the recorder's window has no history at
+all — purge keeps nothing per entity — but it is still recorded: Home
+Assistant knows its current state and when that began, which is enough to
+account for every whole hour since. An entity with neither history nor a
+current state records nothing.
+
 A newly configured entity compiles its whole retained history on its first
 ordinary run — there is no watermark to trail, so there is nothing to do but
 start at the beginning. `recompute` is for the cases that first run cannot

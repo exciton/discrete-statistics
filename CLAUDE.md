@@ -237,7 +237,11 @@ and the quieter the entity, the likelier it is, which is the wrong way round
 for this integration. `_carried_from_state_machine` asks the state machine,
 which still holds both the state and when it last changed.
 `last_changed <= window_start` is what makes it sound rather than a guess: it
-proves the state was already in effect when the window opened. Refusing it
+proves the state was already in effect when the window opened.
+`_async_earliest_state_ts` opens such an entity's history at the first *whole*
+hour after `last_changed` for exactly that reason — the hour containing the
+change starts before it, so the carried state would be refused and the entity
+would compile nothing at all. Refusing it
 otherwise is equally load-bearing — without that test a backfill of old hours
 would be handed whatever the entity happens to be doing today.
 

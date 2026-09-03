@@ -1397,7 +1397,9 @@ async def test_a_state_older_than_the_purge_horizon_is_still_carried(
         "recorder", "purge", {"keep_days": 0}, blocking=True
     )
     await get_instance(hass).async_block_till_done()
-    assert await Compiler(hass)._async_earliest_state_ts(ENTITY) is None
+    # Nothing left in the recorder, so the opening moment now comes from the
+    # live state: it began exactly on the hour, so that hour is usable whole.
+    assert await Compiler(hass)._async_earliest_state_ts(ENTITY) == start.timestamp()
 
     await Compiler(hass).async_compile(
         cfg(), (start + timedelta(hours=1)).timestamp()
@@ -1455,3 +1457,92 @@ async def test_an_ignored_live_state_is_not_carried(recorder, freezer):
         )
         is None
     )
+
+
+async def test_an_entity_with_no_history_but_a_live_state_still_compiles(
+    recorder, freezer
+):
+    """Its whole span in one state, and no transitions into it.
+
+    Nothing in the recorder, because it has not changed within the horizon -
+    but the state machine knows what it is and since when, which is enough
+    to account for every hour since.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=5))
+    await hass.services.async_call(
+        "recorder", "purge", {"keep_days": 0}, blocking=True
+    )
+    await get_instance(hass).async_block_till_done()
+
+    await Compiler(hass).async_compile_incremental(cfg())
+
+    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=5))
+    counts = await read_sums(hass, COUNT_ON, start, start + timedelta(hours=5))
+    assert on == [1.0, 2.0, 3.0, 4.0, 5.0]
+    assert counts == [0, 0, 0, 0, 0]
+    assert DURATION_NO_DATA not in await existing(hass)
+
+
+async def test_an_entity_with_neither_history_nor_a_state_compiles_nothing(
+    recorder, freezer
+):
+    """There is nothing to say about it, so nothing is said."""
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start + timedelta(hours=4))
+
+    assert await Compiler(hass).async_compile_incremental(cfg()) == 0
+    assert await existing(hass) == []
+
+
+async def test_a_live_state_that_began_this_hour_waits(recorder, freezer):
+    """A part-known hour cannot both be recorded and total wall-clock time."""
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start + timedelta(minutes=20))
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(minutes=50))
+    await hass.services.async_call(
+        "recorder", "purge", {"keep_days": 0}, blocking=True
+    )
+    await get_instance(hass).async_block_till_done()
+
+    assert await Compiler(hass).async_compile_incremental(cfg()) == 0
+
+
+async def test_the_opening_hour_is_whole_when_it_comes_from_the_live_state(
+    recorder, freezer
+):
+    """Rounding up is what makes the carried state vouchable.
+
+    `_carried_from_state_machine` requires `last_changed <= window_start`.
+    Opening at the hour *containing* the change fails that test, so nothing
+    carries, no transition exists to trim to, and the entity compiles zero
+    hours instead of the hours it plainly held.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start + timedelta(minutes=20))
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=2, minutes=30))
+    await hass.services.async_call(
+        "recorder", "purge", {"keep_days": 0}, blocking=True
+    )
+    await get_instance(hass).async_block_till_done()
+
+    assert await Compiler(hass).async_compile_incremental(cfg()) == 1
+    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=3))
+    assert on == [1.0]
