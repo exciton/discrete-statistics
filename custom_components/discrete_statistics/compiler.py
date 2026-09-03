@@ -34,7 +34,7 @@ from .config import EntityConfig
 from .const import DOMAIN, HOUR, METRIC_DURATION, NO_DATA
 from .naming import display_name
 from .payload import build_payloads
-from .statistic_ids import belongs_to, parse
+from .statistic_ids import belongs_to, parse, state_token
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -69,6 +69,27 @@ _UNRENDERED_STATES = {
 # rather than close it. Anything below a microsecond rounds straight back,
 # datetime.fromtimestamp being microsecond-resolution.
 START_MARGIN = 0.5
+
+def _readable_state(stored_name: str, token: str) -> str:
+    """Recover a state from the name its statistic already carries.
+
+    An ID holds only the token, so a state carried out of one would read
+    `heatcool` where the entity says `heat_cool` - and that name would then
+    be written for as long as nothing transitioned. The stored name still
+    has the readable form, in the half `rename` leaves alone.
+
+    Verified rather than trusted: the recovered text must tokenise back to
+    the same token, or the name did not have the shape assumed and the token
+    stands.
+    """
+    head, separator, _ = stored_name.rpartition(" (")
+    if not separator:
+        return token
+    _, separator, state = head.rpartition(": ")
+    if separator and state_token(state) == token:
+        return state
+    return token
+
 
 def _as_datetime(timestamp: float) -> datetime:
     return datetime.fromtimestamp(timestamp, tz=timezone.utc)
@@ -205,7 +226,7 @@ class Compiler:
         # previous chunk's rows are still queued, so reading them again would
         # see a stale hour - the same reason base_sums threads rather than
         # being re-read.
-        carried_in = self._carried_from_statistics(previous_hour)
+        carried_in = self._carried_from_statistics(previous_hour, existing)
 
         compiled = 0
         chunk_start = window_start
@@ -331,7 +352,9 @@ class Compiler:
             carried_out,
         )
 
-    def _carried_from_statistics(self, values: Mapping[str, float]) -> str | None:
+    def _carried_from_statistics(
+        self, values: Mapping[str, float], names: Mapping[str, str]
+    ) -> str | None:
         """The state a uniform previous hour was spent in, if there was one.
 
         Our own rows already encode the carry-forward decision - an hour
@@ -345,21 +368,18 @@ class Compiler:
         transitions happened inside it, so the recorder has rows there and
         `include_start_time_state` finds them: the two sources answer
         disjoint questions.
-
-        Returns the state *token*, not the state it was written from
-        (`heat_cool` comes back as `heatcool`). Building an ID from a token
-        gives the same ID, so nothing misroutes, but a window carried entirely
-        from here names its statistics from the token until a real transition
-        restores the readable form.
         """
         held = [
-            parts[1]
+            (statistic_id, parts[1])
             for statistic_id, value in values.items()
             if value
             and (parts := parse(statistic_id)) is not None
             and parts[2] == METRIC_DURATION
         ]
-        return held[0] if len(held) == 1 else None
+        if len(held) != 1:
+            return None
+        statistic_id, token = held[0]
+        return _readable_state(names.get(statistic_id, ""), token)
 
     def _carried_from_state_machine(
         self, cfg: EntityConfig, window_start: float

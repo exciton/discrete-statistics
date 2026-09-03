@@ -1601,3 +1601,61 @@ async def test_a_long_ignored_stretch_is_carried_by_our_own_statistics(
     on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=6))
     assert on == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
     assert DURATION_NO_DATA not in await existing(hass)
+
+
+DURATION_HEATCOOL = "discrete_statistics:binary_sensor_grid_status_heatcool_duration"
+
+
+async def test_a_state_carried_from_statistics_keeps_its_readable_name(
+    recorder, freezer
+):
+    """A statistic ID holds only the token, its stored name holds the state.
+
+    Carrying out of a statistic and composing from the token would rename
+    `heat_cool` to `heatcool` for as long as nothing transitioned - written
+    into the metadata, so visible on every chart.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "heat_cool")
+    await hass.async_block_till_done()
+    freezer.move_to(start + timedelta(minutes=30))
+    hass.states.async_set(ENTITY, "unavailable")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=4))
+    compiler = Compiler(hass)
+    await compiler.async_compile(cfg(), start.timestamp())
+    assert await stored_name(hass, DURATION_HEATCOOL) == "Grid Status: heat_cool (h)"
+
+    # Hours 3 on are carried out of the statistics, not out of any row.
+    freezer.move_to(start + timedelta(hours=6))
+    await compiler.async_compile(cfg(), (start + timedelta(hours=3)).timestamp())
+
+    assert await stored_name(hass, DURATION_HEATCOOL) == "Grid Status: heat_cool (h)"
+    assert await read_sums(
+        hass, DURATION_HEATCOOL, start, start + timedelta(hours=6)
+    ) == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+
+
+def test_readable_state_is_verified_against_the_token():
+    """Trusting the name blindly would invent a state and split the series.
+
+    Whatever sits after the last ": " becomes the bucket key, and a wrong
+    one builds a different statistic ID. So the recovered text has to
+    tokenise back to the token the ID actually carries.
+    """
+    assert compiler_module._readable_state("Grid: heat_cool (h)", "heatcool") == (
+        "heat_cool"
+    )
+    # A display name may hold colons of its own; the state is the last part.
+    assert compiler_module._readable_state(
+        "Shed: Grid: heat_cool (h)", "heatcool"
+    ) == "heat_cool"
+    # Renamed by hand, or written by an older format: no shape to read.
+    assert compiler_module._readable_state("renamed by hand", "heatcool") == "heatcool"
+    # Right shape, wrong state - the name does not belong to this ID.
+    assert compiler_module._readable_state("Grid: off (h)", "heatcool") == "heatcool"
+    assert compiler_module._readable_state("", "heatcool") == "heatcool"

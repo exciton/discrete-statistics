@@ -198,9 +198,16 @@ answers a case the one before it cannot.
 
 Then `no_data`. This replaced a widening lookback of 1 hour, 1 day, 30 days,
 which guessed at a distance and gave up past a month — where step 3 is exact
-and has no distance limit at all. Step 3 returns the state *token*, so a
-window carried entirely from statistics names its statistics `heatcool`
-rather than `heat_cool` until a real transition restores the readable form.
+and has no distance limit at all.
+
+Step 3 has only the state *token* to hand, since that is all an ID carries.
+`_readable_state` recovers the state from the name the statistic already
+holds — the half `rename` leaves alone — so a window carried out of
+statistics still reads `heat_cool` rather than `heatcool`. Verified, not
+trusted: the recovered text must tokenise back to the same token, or the
+name did not have the shape assumed and the token stands. Trusting it would
+be worse than the token, because a wrong state builds a different ID and
+splits the series.
 
 **A long compile is chunked, and the base sum is threaded through it.**
 `async_compile` walks the window in `CHUNK_HOURS` slices to bound memory during
