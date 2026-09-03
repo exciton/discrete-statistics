@@ -280,8 +280,8 @@ current state records nothing.
 A newly configured entity compiles its whole retained history on its first
 ordinary run — there is no watermark to trail, so there is nothing to do but
 start at the beginning. `recompute` is for the cases that first run cannot
-cover: re-attributing history after a configuration change, repairing a range,
-or filling in hours written before a feature existed.
+cover: re-attributing history after a configuration change, or repairing a
+range.
 
 ```yaml
 action: discrete_statistics.recompute
@@ -301,11 +301,6 @@ data:
   entity_id: binary_sensor.grid_status
   start: "2026-01-01T00:00:00Z"
 ```
-
-Hours compiled before `mean`, `min` and `max` were added carry only a sum.
-Home Assistant leaves a missing mean out of its rollup rather than counting it
-as zero, so a day made partly of such hours would report a misleadingly high
-average. A recompute over the range fills them in.
 
 ### Recompute never deletes
 

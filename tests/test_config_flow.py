@@ -186,6 +186,10 @@ async def test_options_flow_name_only_change_skips_recompile(recorder):
     # rebuilds statistic metadata on every ordinary compile, so it needs no
     # history rewrite. A full recompute here would take the shared lock for
     # no reason and raise a notification the user did not ask for.
+    #
+    # The entry's title follows the name. Creation sets title=name; without
+    # the listener syncing it, editing Name would rename the chart series
+    # while leaving the entry row's title stale forever.
     hass = recorder
     hass.set_state(CoreState.running)
     assert await async_setup_component(hass, DOMAIN, {})
@@ -226,45 +230,6 @@ async def test_options_flow_name_only_change_skips_recompile(recorder):
     assert not full_mock.called
     cfg = hass.data[DOMAIN]["entry_configs"][entry.entry_id]
     assert cfg.name == "Grid"
-
-
-async def test_options_flow_keeps_title_in_sync_with_name(recorder):
-    # Creation sets title=name. Without the listener syncing it, editing
-    # Name in options would rename the chart series while leaving the entry
-    # row's title stale forever.
-    hass = recorder
-    hass.set_state(CoreState.running)
-    assert await async_setup_component(hass, DOMAIN, {})
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={CONF_ENTITY_ID: ENTITY},
-        options={CONF_NAME: "Grid Status", CONF_DEFAULT: DEFAULT_RECORD_KNOWN},
-        unique_id=ENTITY,
-        title="Grid Status",
-    )
-    entry.add_to_hass(hass)
-    with patch(
-        "custom_components.discrete_statistics.Compiler.async_compile_incremental",
-        return_value=0,
-    ):
-        assert await hass.config_entries.async_setup(entry.entry_id)
-        await hass.async_block_till_done()
-
-    with patch(
-        "custom_components.discrete_statistics.Compiler.async_compile",
-        return_value=0,
-    ):
-        result = await hass.config_entries.options.async_init(entry.entry_id)
-        result = await hass.config_entries.options.async_configure(
-            result["flow_id"],
-            {
-                CONF_NAME: "Grid",
-                CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
-                CONF_BLANK: STATE_UNKNOWN,
-            },
-        )
-        await hass.async_block_till_done()
-
     assert entry.title == f"Grid ({ENTITY})"
 
 
@@ -342,6 +307,7 @@ async def test_changing_blank_recompiles_the_whole_history(recorder):
         await hass.async_block_till_done(wait_background_tasks=True)
 
     assert full.called
+    assert full.call_args.args[1] is None
     assert entry.options[CONF_BLANK] == "ok"
 
 

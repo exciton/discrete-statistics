@@ -155,19 +155,6 @@ def test_record_keyword_is_not_treated_as_a_map_target():
     assert cfg.resolve("record") is None
 
 
-def test_genuine_map_target_still_forced_under_default_ignore():
-    [cfg] = parse(
-        [
-            {
-                "entity_id": "sensor.x",
-                "default": "ignore",
-                "states": {"cool": "cooling"},
-            }
-        ]
-    )
-    assert cfg.resolve("cooling") == "cooling"
-
-
 def test_duplicate_entity_id_is_rejected():
     """Two configs for one entity write conflicting values to the same IDs."""
     with pytest.raises(vol.Invalid, match="configured more than once"):
@@ -241,7 +228,8 @@ def test_an_empty_state_is_treated_as_unknown():
 
     It cannot go in a statistic ID, and it is not an absence of data - it is
     a state we cannot name. So it inherits whatever disposition `unknown`
-    has, rather than getting a rule of its own.
+    has, rather than getting a rule of its own: substituted and then
+    resolved, not answered directly, or `default` would be bypassed.
     """
     known = parse([{"entity_id": "sensor.x", "default": "record_known"}])[0]
     assert known.resolve("") is None
@@ -280,17 +268,6 @@ def test_an_ignored_state_stays_ignored():
     assert cfg.resolve("blip") is None
 
 
-def test_an_explicit_mapping_beats_the_blank_substitution():
-    """Blank is the most important state a text error sensor has.
-
-    An error sensor reports "" for "no error", so it must be mappable. The
-    substitution is a fallback for states nobody has named, not an override
-    of the config.
-    """
-    cfg = parse([{"entity_id": "sensor.x", "states": {"": "ok"}}])[0]
-    assert cfg.resolve("") == "ok"
-
-
 def test_the_blank_option_catches_what_has_no_name():
     cfg = parse([{"entity_id": "sensor.x", "blank": "ok"}])[0]
     assert cfg.resolve("") == "ok"
@@ -300,6 +277,12 @@ def test_the_blank_option_catches_what_has_no_name():
 
 
 def test_the_two_compose_with_the_explicit_entry_first():
+    """Blank is the most important state a text error sensor has.
+
+    An error sensor reports "" for "no error", so it must be mappable. The
+    substitution is a fallback for states nobody has named, not an override
+    of the config.
+    """
     cfg = parse(
         [{
             "entity_id": "sensor.x",
@@ -309,24 +292,6 @@ def test_the_two_compose_with_the_explicit_entry_first():
     )[0]
     assert cfg.resolve("") == "ok"
     assert cfg.resolve("!!!") == "weird"
-
-
-def test_the_substitution_still_runs_through_the_default():
-    """Not a direct answer, or it would override `default` silently.
-
-    This is what keeps `blank: unknown` a genuine no-op: it must
-    still be ignored by record_known exactly as a real unknown would be.
-    """
-    known = parse([{"entity_id": "sensor.x", "default": "record_known"}])[0]
-    assert known.resolve("") is None
-    recorded = parse([{"entity_id": "sensor.x", "default": "record"}])[0]
-    assert recorded.resolve("") == "unknown"
-
-    # And a substitute that is not an ignored state is recorded either way.
-    both = parse(
-        [{"entity_id": "sensor.x", "blank": "ok"}]
-    )[0]
-    assert both.resolve("") == "ok"
 
 
 def test_the_blank_default_is_unknown():

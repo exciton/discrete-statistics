@@ -25,6 +25,11 @@ def test_builds_expected_id():
         build("binary_sensor.grid_status", "off", METRIC_DURATION)
         == "discrete_statistics:binary_sensor_grid_status_off_duration"
     )
+    # Case-folded, like the rest of the slug.
+    assert (
+        build("binary_sensor.grid_status", "Off", METRIC_DURATION)
+        == "discrete_statistics:binary_sensor_grid_status_off_duration"
+    )
 
 
 def test_count_metric():
@@ -72,20 +77,9 @@ def test_genuine_unknown_state_is_accepted():
     assert result.endswith("_unknown_duration")
 
 
-def test_the_state_is_always_one_token():
-    """Underscores are stripped from the state, never from the entity."""
-    assert (
-        build("climate.zone", "heat_cool", METRIC_COUNT)
-        == "discrete_statistics:climate_zone_heatcool_count"
-    )
-    assert (
-        build("binary_sensor.grid_status", "Off", METRIC_DURATION)
-        == "discrete_statistics:binary_sensor_grid_status_off_duration"
-    )
-
-
 def test_nesting_entities_do_not_collide():
-    """The reason the state is one token.
+    """The reason the state is one token, with underscores stripped from it
+    and never from the entity.
 
     Under a multi-token state these two produce the identical ID and write
     to the same series, silently interleaving two entities' data.

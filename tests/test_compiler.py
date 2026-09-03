@@ -55,7 +55,6 @@ async def recorder(recorder_mock, hass):
     return hass
 
 
-
 async def existing(hass, entity_id=ENTITY):
     """The statistic IDs the recorder holds for an entity."""
     await get_instance(hass).async_block_till_done()
@@ -251,7 +250,13 @@ async def test_the_trailing_window_picks_up_a_late_committed_state(
 async def test_a_state_absent_from_a_window_keeps_its_cumulative_base(
     recorder, freezer
 ):
-    """A statistic missing from a window must not restart its sum at zero."""
+    """A statistic missing from a window must not restart its sum at zero.
+
+    The windows are compiled back to back, deliberately without draining the
+    recorder between them: the compiler drains its own writes before
+    returning, so a caller compiling one window after another does not have
+    to know about the queue.
+    """
     hass = recorder
     start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
     freezer.move_to(start)
@@ -282,53 +287,8 @@ async def test_a_state_absent_from_a_window_keeps_its_cumulative_base(
 
     sums = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=6))
 
-    assert len(sums) == 6
     # 1800 s in the first window, nothing in the second, 900 s in the third.
-    assert sums == sorted(sums), f"cumulative sum went backwards: {sums}"
-    assert sums[-1] == pytest.approx(0.75)
-
-
-async def test_back_to_back_compiles_see_the_previous_write(recorder, freezer):
-    """Adjacent windows compiled in succession must carry the base forward.
-
-    Deliberately without draining the recorder between the two calls: the
-    compiler drains its own writes before returning, so a caller compiling
-    one window after another does not have to know about the queue.
-    """
-    hass = recorder
-    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
-    freezer.move_to(start)
-    hass.states.async_set(ENTITY, "on")
-    await hass.async_block_till_done()
-    for offset, state in (
-        (timedelta(minutes=30), "off"),
-        (timedelta(hours=1), "on"),
-        (timedelta(hours=2, minutes=30), "off"),
-        (timedelta(hours=2, minutes=45), "on"),
-        (timedelta(hours=4, minutes=15), "off"),
-        (timedelta(hours=4, minutes=30), "on"),
-    ):
-        freezer.move_to(start + offset)
-        hass.states.async_set(ENTITY, state)
-        await hass.async_block_till_done()
-    await get_instance(hass).async_block_till_done()
-
-    freezer.move_to(start + timedelta(hours=6))
-    compiler = Compiler(hass)
-
-    for window in range(3):
-        window_start = start + timedelta(hours=2 * window)
-        await compiler.async_compile(
-            cfg(),
-            window_start.timestamp(),
-            (window_start + timedelta(hours=2)).timestamp(),
-        )
-
-    sums = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=6))
-
-    # 1800 s of "off" in the first window, then 900 s in each of the next two.
-    assert sums == sorted(sums), f"cumulative sum went backwards: {sums}"
-    assert sums == [0.5, 0.5, 0.75, 0.75, 1.0, 1.0]
+    assert sums == [0.5, 0.5, 0.5, 0.5, 0.75, 0.75]
 
 
 async def test_watermark_is_the_newest_hour_across_statistics(recorder):
@@ -823,7 +783,13 @@ async def test_a_new_entity_opens_at_the_first_whole_hour_it_knows(
 
 
 async def test_a_first_state_on_the_hour_loses_nothing(recorder, freezer):
-    """No hour is trimmed when the first state already sits on a boundary."""
+    """No hour is trimmed when the first state already sits on a boundary.
+
+    Nor is that state counted as a transition. Mid-hour the trim makes it
+    the carried state; on the hour the trim is a no-op and canonicalise
+    leaves it as a transition - but nothing transitioned INTO an entity's
+    first known state, so neither is counted.
+    """
     hass = recorder
     start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
     freezer.move_to(start + timedelta(hours=2))
@@ -839,6 +805,11 @@ async def test_a_first_state_on_the_hour_loses_nothing(recorder, freezer):
         1.0,
         2.0,
         3.0,
+    ]
+    assert await read_sums(hass, COUNT_ON, start, start + timedelta(hours=5)) == [
+        0,
+        0,
+        0,
     ]
 
 
@@ -1133,30 +1104,6 @@ async def test_two_entities_never_write_into_each_others_statistics(
     assert await read_sums(
         hass, OTHER_DURATION_ON, start, start + timedelta(hours=4)
     ) == [0.0, 0.0, 1.0, 2.0]
-
-
-async def test_an_entitys_first_state_is_not_counted_as_a_transition(
-    recorder, freezer
-):
-    """Whether it lands on the hour must not change the count.
-
-    Mid-hour the trim makes it the carried state; on the hour the trim is a
-    no-op and canonicalise leaves it as a transition. Nothing transitioned
-    INTO an entity's first known state, so neither should be counted.
-    """
-    hass = recorder
-    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
-    freezer.move_to(start + timedelta(hours=2))  # exactly on the hour
-    hass.states.async_set(ENTITY, "on")
-    await hass.async_block_till_done()
-    await get_instance(hass).async_block_till_done()
-
-    freezer.move_to(start + timedelta(hours=5))
-    compiler = Compiler(hass)
-    await compiler.async_compile(cfg(), start.timestamp())
-
-    counts = await read_sums(hass, COUNT_ON, start, start + timedelta(hours=5))
-    assert counts == [0, 0, 0]
 
 
 async def test_a_boundary_row_into_the_carried_state_is_not_a_transition(
@@ -1582,7 +1529,8 @@ async def test_a_state_older_than_the_purge_horizon_is_still_carried(
     An entity that sits in one state for longer than the horizon has no rows
     left at all - purge deletes every row past it, with no per-entity
     reprieve - so nothing would be compiled for it. The state machine still
-    knows, and knows since when.
+    knows, and knows since when: its whole span in one state, and no
+    transitions into it.
     """
     hass = recorder
     start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
@@ -1607,7 +1555,9 @@ async def test_a_state_older_than_the_purge_horizon_is_still_carried(
     )
 
     on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=4))
+    counts = await read_sums(hass, COUNT_ON, start, start + timedelta(hours=4))
     assert on == [1.0, 2.0, 3.0]
+    assert counts == [0, 0, 0]
 
 
 async def test_a_state_that_began_inside_the_window_is_not_carried(
@@ -1657,36 +1607,6 @@ async def test_an_ignored_live_state_is_not_carried(recorder, freezer):
         )
         is None
     )
-
-
-async def test_an_entity_with_no_history_but_a_live_state_still_compiles(
-    recorder, freezer
-):
-    """Its whole span in one state, and no transitions into it.
-
-    Nothing in the recorder, because it has not changed within the horizon -
-    but the state machine knows what it is and since when, which is enough
-    to account for every hour since.
-    """
-    hass = recorder
-    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
-    freezer.move_to(start)
-    hass.states.async_set(ENTITY, "on")
-    await hass.async_block_till_done()
-    await get_instance(hass).async_block_till_done()
-
-    freezer.move_to(start + timedelta(hours=5))
-    await hass.services.async_call(
-        "recorder", "purge", {"keep_days": 0}, blocking=True
-    )
-    await get_instance(hass).async_block_till_done()
-
-    await Compiler(hass).async_compile_incremental(cfg())
-
-    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=5))
-    counts = await read_sums(hass, COUNT_ON, start, start + timedelta(hours=5))
-    assert on == [1.0, 2.0, 3.0, 4.0, 5.0]
-    assert counts == [0, 0, 0, 0, 0]
 
 
 async def test_an_entity_with_neither_history_nor_a_state_compiles_nothing(
