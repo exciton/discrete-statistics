@@ -69,12 +69,5 @@
       "title": "Duplicate configuration for {entity_id}",
       "description": "{entity_id} is configured both in configuration.yaml and as a helper. The YAML configuration is being used and the helper has been disabled, because two configurations write conflicting values to the same statistics. Remove one of them."
     }
-  },
-  "entity": {
-    "button": {
-      "statistics": {
-        "name": "Statistics"
-      }
-    }
   }
 }

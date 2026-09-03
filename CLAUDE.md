@@ -57,7 +57,6 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
             compiler        the only module that touches the recorder
                 │
             __init__        setup, hourly schedule, recompute service
-            button          one entity per config entry: press to recompute
 ```
 
 Everything except `compiler`, `config_flow` and `naming` is pure and testable
@@ -81,20 +80,6 @@ Helpers list, and the notifications — those disagreeing is what the entity ID
 leaking into a title looked like. The registry comes before the state because
 attributes are stripped while an entity is unavailable, and because it holds
 what the user asked for when the two disagree.
-
-The `button` platform exists as much for the Helpers list as for the button.
-`ha-config-helpers.ts:503-546` builds a row per *entity* belonging to a helper
-integration and falls back to a `mdiAlertCircle` row per config entry with
-none — so the entity is what stops every helper being flagged, and it is also
-what the row shows. Hence the naming: the entity is attached to a
-`DeviceEntryType.SERVICE` device named after the entry and is itself called
-"Statistics", so the row reads `<helper> Statistics`. Without the device,
-`has_entity_name` leaves every helper's button called just "Statistics",
-fighting over one entity ID.
-
-One entity, deliberately: the list builds a row per entity, so a status
-sensor alongside the button would give each helper two rows rather than a
-richer one. Anything informative has to replace the button, not join it.
 
 `Compiler` is a class built from `(hass,)`; the entry points are its methods,
 not module-level functions.
@@ -257,9 +242,9 @@ invariant that statistic is then written forever. `_async_compile_chunk`
 advances `window_start` to the first whole hour that begins in a recordable
 state instead. The trim fires when nothing precedes the window: the entity
 has no statistics at all, or the window opens its history (`start=None`, what
-the button and a bare `recompute` do) and this is the first chunk. Gating it
+a bare `recompute` does) and this is the first chunk. Gating it
 on "no statistics" alone made a full recompute re-manufacture the sliver its
-first compile had skipped — the button turned that from rare into one click.
+first compile had skipped, every time it was run.
 Both halves matter: a window that begins mid-series must never trim, or the
 skipped hours have no rows and the next run finds no base in the hour before
 its window and restarts every cumulative sum at zero.

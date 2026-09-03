@@ -10,7 +10,6 @@ import voluptuous as vol
 from homeassistant.components import persistent_notification
 from homeassistant.components.recorder import get_instance
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
 from homeassistant.const import (
     CONF_ENTITY_ID,
     EVENT_HOMEASSISTANT_STARTED,
@@ -39,7 +38,6 @@ _LOGGER = logging.getLogger(__name__)
 
 __all__ = [
     "CONFIG_SCHEMA",
-    "async_recompute_entry",
     "async_setup",
     "async_setup_entry",
     "async_unload_entry",
@@ -47,10 +45,6 @@ __all__ = [
 ]
 
 SERVICE_RECOMPUTE = "recompute"
-
-# The entry needs an entity of its own, or the Helpers list marks it with a
-# red exclamation for having none.
-PLATFORMS = [Platform.BUTTON]
 
 RECOMPUTE_SCHEMA = vol.Schema(
     {
@@ -287,19 +281,6 @@ async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
     )
 
 
-async def async_recompute_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Rebuild one entry's whole history, reporting the outcome.
-
-    The button's entry point. A no-op for an entry that failed to set up, so
-    pressing the button on a YAML-clashing helper cannot compile a config
-    that is deliberately not in all_configs().
-    """
-    cfg = hass.data[DOMAIN]["entry_configs"].get(entry.entry_id)
-    if cfg is None:
-        return
-    await _async_compile_and_notify(hass, entry, cfg, full=True)
-
-
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up one UI-configured entity."""
     data = hass.data[DOMAIN]
@@ -327,7 +308,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async_delete_issue(hass, DOMAIN, _clash_issue_id(entry))
     data["entry_configs"][entry.entry_id] = cfg
     entry.async_on_unload(entry.add_update_listener(_async_entry_updated))
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     # Only when Home Assistant is already running, which means a genuine
     # creation or reload. At boot the EVENT_HOMEASSISTANT_STARTED handler
@@ -345,7 +325,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Stop compiling one entity. The shared machinery stays up."""
     hass.data[DOMAIN]["entry_configs"].pop(entry.entry_id, None)
     async_delete_issue(hass, DOMAIN, _clash_issue_id(entry))
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    return True
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:

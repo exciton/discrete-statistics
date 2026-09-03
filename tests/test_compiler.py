@@ -1213,12 +1213,11 @@ async def test_an_untranslatable_state_keeps_its_raw_name(recorder, freezer):
 async def test_a_full_recompute_does_not_re_create_the_opening_no_data(
     recorder, freezer
 ):
-    """What the Statistics button does, and it must be idempotent.
+    """A bare `recompute` compiles from the beginning, and must be idempotent.
 
     The trim used to be gated on the entity having no statistics, so the
-    second full compile - the first press of the button - manufactured the
-    opening sliver the first compile had correctly skipped. Density then
-    kept that no_data statistic forever.
+    second full compile manufactured the opening sliver the first had
+    correctly skipped. Density then kept that no_data statistic forever.
     """
     hass = recorder
     start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)

@@ -329,7 +329,7 @@ class Compiler:
             #
             # Allowed when the entity has no statistics at all, or when this
             # window opens its history - `start=None`, which is what the
-            # button and a bare `recompute` do. Both mean nothing precedes
+            # a bare `recompute` does. Both mean nothing precedes
             # the window, so moving its start cannot orphan a base. Trimming
             # a window that begins mid-series would: the hours skipped would
             # have no rows, and the next run would find no base in the hour
