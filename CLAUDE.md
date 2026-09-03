@@ -76,6 +76,14 @@ the frontend translates per user — so the stored name is in one language for
 everyone. That is a known limitation of putting a rendered string in metadata,
 not something to fix here.
 
+The options dialog's heading is a markdown link to the entity's history. The
+entry row's own `...` menu is fixed in the frontend
+(`ha-config-entry-row.ts`) — Devices, Entities, Logs, Reload, Rename,
+Disable, Delete — and an integration can contribute only an options flow, a
+reconfigure flow and a diagnostics download, so the dialog is the only place
+a link can go. `description_placeholders` are rendered by `ha-markdown`,
+which leaves same-host anchors alone so they navigate in-app.
+
 `naming` answers "what is this entity called": `display_name` for a label,
 `describe` for a label plus the entity ID where certainty matters — the
 options dialog, notifications. The chain is: a

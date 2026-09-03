@@ -535,7 +535,7 @@ async def test_the_options_dialog_says_what_it_is_editing(recorder, entity_regis
     result = await hass.config_entries.options.async_init(entry.entry_id)
 
     assert result["description_placeholders"] == {
-        "entity": f"Mains Power ({ENTITY})",
+        "entity": f"[Mains Power ({ENTITY})](/history?entity_id={ENTITY})",
         "default_name": "Mains Power",
     }
 

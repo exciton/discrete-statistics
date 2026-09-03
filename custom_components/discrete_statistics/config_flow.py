@@ -208,7 +208,15 @@ class DiscreteStatisticsOptionsFlow(OptionsFlow):
             ),
             errors=errors,
             description_placeholders={
-                "entity": describe(self.hass, entity_id),
+                # A markdown link: the dialog description is rendered by
+                # ha-markdown, which leaves same-host anchors alone so they
+                # navigate in-app (ha-markdown-element.ts:114). The entry
+                # row's own menu is fixed by the frontend and cannot be
+                # added to, so this is the only place to offer the link.
+                "entity": (
+                    f"[{describe(self.hass, entity_id)}]"
+                    f"(/history?entity_id={entity_id})"
+                ),
                 "default_name": display_name(self.hass, entity_id),
             },
         )
