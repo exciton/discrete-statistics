@@ -193,27 +193,30 @@ answers a case the one before it cannot.
    so a single ignored row there hides a good state moments behind it.
    Reading the previous hour whole surfaces both, and `canonicalise` folds
    everything before `window_start` into the carried state.
-2. **The previous chunk.** A chunk hands the state it ended in to the next,
+2. **The state machine**, when `last_changed <= window_start` proves the
+   live state was already in effect. Proof rather than inference, which is
+   why it outranks the two carries below: when it disagrees with our own
+   rows, the rows are stale — a change committed late in the hour before
+   the window and purged before that hour was recompiled. It is also the
+   only source left for an entity purge has erased entirely.
+3. **The previous chunk.** A chunk hands the state it ended in to the next,
    so only the opening chunk queries at all. Threaded, never re-read:
    mid-compile the previous chunk's rows are still queued, exactly as with
    `base_sums`.
-3. **That hour's own statistics** (opening chunk only). A whole hour with
+4. **That hour's own statistics** (opening chunk only). A whole hour with
    nothing recordable in it means the entity held one state throughout — and
    our rows already encode the carry-forward decision, so they *are* the
    resolved timeline. Free: `_async_base` fetches the values in the
    same query as the sums. Only when one duration statistic accounts for the
    hour; several would mean transitions inside it, which the recorder holds.
-4. **The state machine**, when `last_changed <= window_start` proves the live
-   state was already in effect. The only source left for an entity purge has
-   erased entirely.
 
 Then nothing: the window opens later, at the first whole hour that begins
 in a recordable transition, and the hours passed over are not compiled at
 all (see below). A widening lookback — 1 hour, 1 day, 30 days — would guess
-at a distance and give up past a month, where step 3 is exact and has no
+at a distance and give up past a month, where step 4 is exact and has no
 distance limit at all.
 
-Step 3 has only the state *token* to hand, since that is all an ID carries.
+Step 4 has only the state *token* to hand, since that is all an ID carries.
 `_readable_state` recovers the state from the name the statistic already
 holds — the half `rename` leaves alone — so a window carried out of
 statistics still reads `heat_cool` rather than `heatcool`. Verified, not
@@ -232,7 +235,7 @@ Those hours stay as they were compiled when the rows still existed. The one
 exception is a hole: downtime longer than the horizon leaves hours after the
 watermark that were never compiled, so the floor is the hour after the
 watermark or the evidence, whichever comes first. Opening there puts the
-watermark hour itself in the position the carry chain's third source reads,
+watermark hour itself in the position the carry chain's fourth source reads,
 so a hole our own last row can vouch for is filled with that state, and one
 it cannot — the watermark hour was not uniform, and the order of its states
 is lost — is left open. That clause is also what keeps the hourly run

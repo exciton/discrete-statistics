@@ -1787,3 +1787,164 @@ def test_readable_state_is_verified_against_the_token():
     # Right shape, wrong state - the name does not belong to this ID.
     assert compiler_module._readable_state("Grid: off (h)", "heatcool") == "heatcool"
     assert compiler_module._readable_state("", "heatcool") == "heatcool"
+
+
+async def test_a_chunk_that_raises_still_drains_the_ones_before_it(
+    recorder, freezer, monkeypatch
+):
+    """The writes of the chunks before it are committed, not left queued.
+
+    Density is read live from `statistics_meta`, so a compile that returned
+    with rows still queued would let the next one see half of them.
+    """
+    monkeypatch.setattr(compiler_module, "CHUNK_HOURS", 2)
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    for minutes, state in ((0, "on"), (30, "off"), (150, "on")):
+        freezer.move_to(start + timedelta(minutes=minutes))
+        hass.states.async_set(ENTITY, state)
+        await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=4))
+    compiler = Compiler(hass)
+    real = compiler._async_compile_chunk
+
+    async def second_chunk_raises(cfg, chunk_start, *args, **kwargs):
+        if chunk_start == (start + timedelta(hours=2)).timestamp():
+            raise RuntimeError("chunk failed")
+        return await real(cfg, chunk_start, *args, **kwargs)
+
+    monkeypatch.setattr(compiler, "_async_compile_chunk", second_chunk_raises)
+    with pytest.raises(RuntimeError, match="chunk failed"):
+        await compiler.async_compile(cfg(), start.timestamp())
+
+    # Read straight from the database, without draining the queue here.
+    result = await get_instance(hass).async_add_executor_job(
+        statistics_during_period,
+        hass,
+        start,
+        start + timedelta(hours=4),
+        {DURATION_ON, DURATION_OFF},
+        "hour",
+        None,
+        {"sum"},
+    )
+    assert [row["sum"] for row in result[DURATION_ON]] == [0.5, 0.5]
+    assert [row["sum"] for row in result[DURATION_OFF]] == [0.5, 1.5]
+
+
+async def test_the_state_machine_outranks_our_own_statistics(recorder, freezer):
+    """When the two disagree, the statistics are stale.
+
+    `last_changed <= window_start` proves the live state was already in
+    effect; a uniform hour in our rows only records what the recorder held
+    when that hour was compiled. Here a change committed late in hour 1
+    was purged before the hour could be recompiled, so the rows still say
+    `off` while the entity has been `on` since before the window opened.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    freezer.move_to(start + timedelta(minutes=30))
+    hass.states.async_set(ENTITY, "off")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=2))
+    compiler = Compiler(hass)
+    await compiler.async_compile(cfg(), start.timestamp())
+
+    # Committed after hour 1 was compiled, then purged with everything else.
+    freezer.move_to(start + timedelta(hours=1, minutes=45))
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+    freezer.move_to(start + timedelta(hours=2))
+    await hass.services.async_call(
+        "recorder", "purge", {"keep_days": 0}, blocking=True
+    )
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=4))
+    await compiler.async_compile(cfg(), (start + timedelta(hours=2)).timestamp())
+
+    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=4))
+    off = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=4))
+    assert on == [0.5, 0.5, 1.5, 2.5]
+    assert off == [0.5, 1.5, 1.5, 1.5]
+
+
+async def test_a_rename_reaches_an_absent_state_through_the_compiler(
+    recorder, freezer
+):
+    """Through the compiler, not only `payload.rename`.
+
+    The entity has not been `off` since hour 0, and the window being
+    recompiled never sees that state. Its statistic is relabelled all the
+    same, from the name the recorder already holds for it.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    for minutes, state in ((0, "off"), (30, "on")):
+        freezer.move_to(start + timedelta(minutes=minutes))
+        hass.states.async_set(ENTITY, state)
+        await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=4))
+    compiler = Compiler(hass)
+    await compiler.async_compile(cfg(), start.timestamp())
+    assert await stored_name(hass, DURATION_OFF) == "Grid Status: off (h)"
+
+    renamed = EntityConfig(
+        entity_id=ENTITY, name="Mains", default="record_known", states={}
+    )
+    await compiler.async_compile(renamed, (start + timedelta(hours=2)).timestamp())
+
+    assert await stored_name(hass, DURATION_OFF) == "Mains: off (h)"
+    assert await stored_name(hass, COUNT_OFF) == "Mains: off (#)"
+    assert await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=4)) == [
+        0.5, 0.5, 0.5, 0.5
+    ]
+
+
+async def test_the_evidence_is_the_first_whole_hour_not_the_hour_of_the_row(
+    recorder, freezer
+):
+    """The hour the oldest surviving row falls in is only partly known.
+
+    Hour 2 was compiled while the rows before that row still existed.
+    A recompute floored to the start of its hour would rebuild it from the
+    carry alone - here a uniform hour 1 - and lose the spell inside it.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    for minutes, state in ((0, "on"), (30, "off"), (140, "on"), (160, "off")):
+        freezer.move_to(start + timedelta(minutes=minutes))
+        hass.states.async_set(ENTITY, state)
+        await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=3))
+    compiler = Compiler(hass)
+    await compiler.async_compile(cfg(), start.timestamp())
+    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=3))
+    assert on == pytest.approx([0.5, 0.5, 0.5 + 1 / 3])
+
+    # Everything before 2:40 is purged; that row is the oldest evidence.
+    freezer.move_to(start + timedelta(hours=2, minutes=30))
+    await hass.services.async_call(
+        "recorder", "purge", {"keep_days": 0}, blocking=True
+    )
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=4))
+    await compiler.async_compile(cfg(), start.timestamp())
+
+    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=4))
+    off = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=4))
+    assert on == pytest.approx([0.5, 0.5, 0.5 + 1 / 3, 0.5 + 1 / 3])
+    assert off == pytest.approx([0.5, 1.5, 1.5 + 2 / 3, 2.5 + 2 / 3])

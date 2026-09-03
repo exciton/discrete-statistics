@@ -425,7 +425,7 @@ class Compiler:
         Unless they never were. Downtime longer than the horizon leaves a
         hole between the watermark and the evidence. The floor is the hour
         after the watermark, or the evidence, whichever comes first, which
-        puts the watermark hour where the carry chain's third source reads
+        puts the watermark hour where the carry chain's fourth source reads
         it: a hole our last row can vouch for is filled with that state,
         and one it cannot is left open.
         """

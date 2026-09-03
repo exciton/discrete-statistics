@@ -100,7 +100,8 @@ async def test_entry_compiles_when_hass_is_running(recorder):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
 
-    assert compile_mock.called
+    [(cfg,)] = [c.args for c in compile_mock.call_args_list]
+    assert cfg.entity_id == ENTITY
 
 
 async def test_entry_does_not_compile_during_startup(recorder):
