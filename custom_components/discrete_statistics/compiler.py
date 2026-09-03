@@ -150,7 +150,7 @@ class Compiler:
     async def async_compile_incremental(self, cfg: EntityConfig) -> int:
         """Compile from the watermark, recomputing the trailing window.
 
-        With no watermark - a new helper, or one whose statistics have all
+        With no watermark - a new entity, or one whose statistics have all
         been deleted - there is nothing to trail, so it compiles the whole
         of the entity's retained history instead.
         """
@@ -217,7 +217,7 @@ class Compiler:
                 compiled += hours
                 chunk_start = chunk_end
         finally:
-            # async_add_external_statistics only enqueues, and density is now
+            # async_add_external_statistics only enqueues, and density is
             # read live from statistics_meta. In `finally` because a chunk
             # that raises leaves earlier chunks' writes queued: the next
             # compile would then see half of them, leave the rest sparse, and

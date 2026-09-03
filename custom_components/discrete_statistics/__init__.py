@@ -18,7 +18,6 @@ from homeassistant.const import (
 from homeassistant.core import CoreState, Event, HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.event import async_track_time_change
 from homeassistant.helpers.issue_registry import (
     IssueSeverity,
@@ -219,7 +218,7 @@ async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Apply changed options and recompile only when attribution changed.
 
     add_update_listener fires on every async_update_entry, not only on an
-    options change - including a title-only rename from the Helpers list.
+    options change - including a title-only rename from the entries list.
     Comparing the freshly-built EntityConfig against the one on file is what
     keeps a cosmetic rename from taking the shared lock for a full recompute
     and raising a notification nobody asked for. Of what is left, only
@@ -240,7 +239,7 @@ async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
         return
     data["entry_configs"][entry.entry_id] = cfg
 
-    # Keep the Helpers row's title matching the name option; async_setup_entry
+    # Keep the entry row's title matching the name option; async_setup_entry
     # only sets the title once, at creation. This call re-fires this very
     # listener, which is safe *only* because of the equality check above: on
     # that re-entry entity_config_from_entry reproduces the same cfg, so it
@@ -273,7 +272,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     data = hass.data[DOMAIN]
     cfg = entity_config_from_entry(entry.data, entry.options)
 
-    # YAML is read at startup and can name an entity a helper already owns.
+    # YAML is read at startup and can name an entity an entry already owns.
     # YAML wins because async_setup runs first; failing setup here is what
     # keeps the entry out of all_configs(), so the exclusion cannot drift
     # from the failure.
@@ -312,23 +311,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Stop compiling one entity. The shared machinery stays up."""
     hass.data[DOMAIN]["entry_configs"].pop(entry.entry_id, None)
     async_delete_issue(hass, DOMAIN, _clash_issue_id(entry))
-    return True
-
-
-async def async_remove_config_entry_device(
-    _hass: HomeAssistant, _entry: ConfigEntry, _device: dr.DeviceEntry
-) -> bool:
-    """Allow this entry's devices to be deleted from their page.
-
-    Nothing here creates a device any more, so this is for clearing one left
-    behind by a version that did. Such a device cannot be removed otherwise:
-    Home Assistant offers the delete action only to integrations defining
-    this - `supports_remove_device` is whether the attribute exists
-    (config_entries.py:4164) - and `device_registry.async_cleanup` keeps any
-    device a live config entry references, with or without entities.
-
-    Nothing is held against a device, so removal is always safe.
-    """
     return True
 
 

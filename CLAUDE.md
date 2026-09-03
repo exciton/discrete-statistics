@@ -50,7 +50,7 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
        ├─ statistic_ids     pure: build, parse and match an external statistic ID
        ├─ config ── canonicalise   pure: recorder rows -> canonical transitions
        │   │    └─ config_flow    HA UI: entity -> EntityConfig, per entry
-       │   └─ statistic_ids       for the reserved-token comparison
+       │   └─ statistic_ids       for the blank-state test
        ├─ naming            HA: entity, state -> the names a person recognises
        └─ payload           pure: buckets -> cumulative StatisticData rows
                 │
@@ -200,7 +200,7 @@ answers a case the one before it cannot.
 3. **That hour's own statistics** (opening chunk only). A whole hour with
    nothing recordable in it means the entity held one state throughout — and
    our rows already encode the carry-forward decision, so they *are* the
-   resolved timeline. Free: `_async_previous_hour` fetches the values in the
+   resolved timeline. Free: `_async_base` fetches the values in the
    same query as the sums. Only when one duration statistic accounts for the
    hour; several would mean transitions inside it, which the recorder holds.
 4. **The state machine**, when `last_changed <= window_start` proves the live
@@ -425,7 +425,7 @@ Every test must fail when its fix is reverted; a test that passes regardless
 of the code under test proves nothing. When adding a test for a bug fix,
 revert the fix, watch it fail, then restore.
 
-Integration tests use `recorder_mock` and `freezer`. `tests/test_compiler.py`,
-`test_init.py` and `test_service.py` each override the root conftest's autouse
-`auto_enable_custom_integrations` fixture to request `recorder_db_url` first;
-this is fixture ordering against `recorder_mock`, not a workaround.
+Integration tests use `recorder_mock` and `freezer`. Each integration test
+module overrides the root conftest's autouse `auto_enable_custom_integrations`
+fixture to request `recorder_db_url` first; this is fixture ordering against
+`recorder_mock`, not a workaround.

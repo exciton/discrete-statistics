@@ -84,7 +84,7 @@ def test_the_state_is_always_one_token():
     )
 
 
-def test_nesting_entities_no_longer_collide():
+def test_nesting_entities_do_not_collide():
     """The reason the state is one token.
 
     Under a multi-token state these two produce the identical ID and write

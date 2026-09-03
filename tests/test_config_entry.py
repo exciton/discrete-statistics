@@ -208,7 +208,7 @@ async def test_notification_names_the_entity_and_its_id(recorder):
 
 
 async def test_notification_without_a_name_shows_the_id_once(recorder):
-    # An unnamed helper has nothing to distinguish, so printing the entity ID
+    # An unnamed entity has nothing to distinguish, so printing the entity ID
     # twice would be noise rather than information.
     hass = recorder
     hass.set_state(CoreState.running)
@@ -235,7 +235,7 @@ async def test_notification_without_a_name_shows_the_id_once(recorder):
 
 
 async def test_removing_a_clashing_entry_clears_its_issue(recorder):
-    # A user who resolves a YAML clash the obvious way - deleting the helper
+    # A user who resolves a YAML clash the obvious way - deleting the entry
     # - must not be left with a permanent repair card naming an entry that
     # no longer exists. async_unload_entry never runs for a SETUP_ERROR
     # entry, so the issue has to be cleared from async_remove_entry instead.
@@ -287,7 +287,7 @@ async def test_update_listener_does_not_fire_after_unload(recorder):
 
 
 async def test_entry_backfills_history_end_to_end(recorder, freezer):
-    """A helper created over existing history compiles all of it.
+    """An entry created over existing history compiles all of it.
 
     Seeded history must run comfortably longer than TRAILING_HOURS (3): the
     no-watermark branch of async_compile_incremental is supposed to start

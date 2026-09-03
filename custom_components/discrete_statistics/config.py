@@ -9,7 +9,7 @@ import voluptuous as vol
 from homeassistant.const import CONF_ENTITY_ID, CONF_NAME, STATE_UNKNOWN
 from homeassistant.helpers import config_validation as cv
 
-from .statistic_ids import is_blank, state_token
+from .statistic_ids import is_blank
 from .const import (
     DEFAULT_IGNORE,
     DEFAULT_RECORD,
@@ -229,7 +229,5 @@ def entity_config_from_entry(
         entity_id=data[CONF_ENTITY_ID],
         name=options.get(CONF_NAME) or None,
         default=options.get(CONF_DEFAULT, DEFAULT_RECORD_KNOWN),
-        # Not in the options flow yet; reading it here keeps the two config
-        # sources symmetric so adding the field is only a form change.
         blank=options.get(CONF_BLANK) or STATE_UNKNOWN,
     )

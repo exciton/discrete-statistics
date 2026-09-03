@@ -101,7 +101,7 @@ def belongs_to(statistic_id: str, entity_id: str) -> bool:
 
     Exact at the state boundary. Not at the domain/object_id one:
     `sensor.a_b` and `sensor_a.b` slugify alike and would claim each other's
-    IDs, as they did under the previous scheme too.
+    IDs.
     """
     if (parts := parse(statistic_id)) is None:
         return False

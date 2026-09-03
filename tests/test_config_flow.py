@@ -229,9 +229,9 @@ async def test_options_flow_name_only_change_skips_recompile(recorder):
 
 
 async def test_options_flow_keeps_title_in_sync_with_name(recorder):
-    # Creation sets title=name; nothing else did, so editing Name in options
-    # used to rename the chart series while leaving the Helpers row's title
-    # stale forever.
+    # Creation sets title=name. Without the listener syncing it, editing
+    # Name in options would rename the chart series while leaving the entry
+    # row's title stale forever.
     hass = recorder
     hass.set_state(CoreState.running)
     assert await async_setup_component(hass, DOMAIN, {})
@@ -366,7 +366,7 @@ async def _submit(hass, entity_id):
 async def test_a_measuring_entity_is_refused(recorder, entity_registry):
     """Each distinct reading would become its own pair of statistics.
 
-    It no longer fails loudly - a numeric state builds a perfectly valid ID -
+    It would not fail loudly - a numeric state builds a perfectly valid ID -
     so nothing else would stop it: hundreds of statistics, written densely,
     forever, with 21.5 and 2.15 sharing one because the token keeps only
     digits.

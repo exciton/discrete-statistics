@@ -14,7 +14,7 @@ recompute:
       name: Start
       description: >-
         Local time to recompute from. Omit to start at the oldest
-        retained state. Cannot be combined with "Clear first".
+        retained state.
       required: false
       selector:
         datetime:

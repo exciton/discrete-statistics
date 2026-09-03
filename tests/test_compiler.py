@@ -210,6 +210,44 @@ async def test_cadence_invariance(recorder, freezer):
     assert all_at_once == stepwise
 
 
+async def test_the_trailing_window_picks_up_a_late_committed_state(
+    recorder, freezer
+):
+    """The hourly run recompiles TRAILING_HOURS back from the watermark.
+
+    A state change committed after its hour was first compiled sits in the
+    oldest hour the trailing window reaches. Compiling only the newest hour
+    or two would leave the early compile's attribution in place forever.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=3))
+    compiler = Compiler(hass)
+    await compiler.async_compile_incremental(cfg())
+    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=3))
+    assert on == [1.0, 2.0, 3.0]
+
+    # The watermark is hour 2, so the trailing window opens at hour 0 - the
+    # hour this change lands in.
+    freezer.move_to(start + timedelta(minutes=30))
+    hass.states.async_set(ENTITY, "off")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=4))
+    await compiler.async_compile_incremental(cfg())
+
+    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=4))
+    off = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=4))
+    assert on == [0.5, 0.5, 0.5, 0.5]
+    assert off == [0.5, 1.5, 2.5, 3.5]
+
+
 async def test_a_state_absent_from_a_window_keeps_its_cumulative_base(
     recorder, freezer
 ):
@@ -383,7 +421,7 @@ async def test_recomputing_past_the_purge_horizon_leaves_older_hours_alone(
     freezer.move_to(start + timedelta(hours=11))
     await compiler.async_compile_incremental(cfg())
 
-    # Now the recompute that used to destroy everything before hour 10.
+    # A recompute from before the horizon, over hours it cannot rebuild.
     freezer.move_to(start + timedelta(hours=12))
     await compiler.async_compile(cfg(), start.timestamp())
 
@@ -431,10 +469,10 @@ async def test_a_hole_after_the_watermark_is_still_filled(recorder, freezer):
 
     on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=7))
     off = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=7))
-    # Hours 0-1 untouched; hours 2-6 exist, and the sums never fall.
-    assert on[:2] == [0.5, 0.5]
-    assert len(on) == len(off) == 7
-    assert on == sorted(on) and off == sorted(off)
+    # Hours 0-1 untouched; hours 2-4 are "off", the state hour 1 vouches
+    # for; hour 5 splits at the return; hour 6 is "on".
+    assert on == [0.5, 0.5, 0.5, 0.5, 0.5, 1.0, 2.0]
+    assert off == [0.5, 1.5, 2.5, 3.5, 4.5, 5.0, 5.0]
 
 
 async def test_a_hole_nothing_can_vouch_for_is_left_open(recorder, freezer):
@@ -832,7 +870,7 @@ async def test_an_unknown_opening_state_is_trimmed_too(recorder, freezer):
 
 
 async def test_the_incremental_first_run_is_trimmed(recorder, freezer):
-    """The watermark-less path is how a helper actually gets its first run."""
+    """The watermark-less path is how an entry actually gets its first run."""
     hass = recorder
     start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
     freezer.move_to(start + timedelta(minutes=17))
@@ -855,7 +893,7 @@ async def test_the_incremental_first_run_is_trimmed(recorder, freezer):
 
 
 async def test_nothing_is_compiled_until_a_whole_hour_is_known(recorder, freezer):
-    """A helper created mid-hour waits for the next one rather than inventing.
+    """An entry created mid-hour waits for the next one rather than inventing.
 
     Hour 0 has completed, so there is an hour to compile - but it is only
     known from 00:20, and the first hour known end to end has not finished
@@ -923,12 +961,12 @@ async def test_a_deleted_statistic_is_forgotten_not_recreated(recorder, freezer)
 
 
 async def test_deleting_one_metric_sticks_until_its_state_recurs(recorder, freezer):
-    """Deletion is per statistic now, not per state.
+    """Deletion is per statistic, not per state.
 
-    Removing the duration but keeping the count used to be undone on the
-    very next compile, because density was keyed by state and the surviving
-    count kept "on" alive. It now sticks - until "on" actually happens
-    again, at which point an observed state is recorded in full.
+    Density keyed by state would undo it on the very next compile, the
+    surviving count keeping "on" alive. Keyed by statistic it sticks - until
+    "on" actually happens again, at which point an observed state is
+    recorded in full.
     """
     hass = recorder
     start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
@@ -1053,10 +1091,10 @@ OTHER_DURATION_ON = "discrete_statistics:binary_sensor_grid_status_pump_on_durat
 async def test_two_entities_never_write_into_each_others_statistics(
     recorder, freezer
 ):
-    """`belongs_to` is what keeps them apart, and it is load-bearing now.
+    """`belongs_to` is what keeps them apart, and it is load-bearing.
 
     The entity IDs are chosen so one slug is a prefix of the other at an
-    underscore boundary - the case that collided under the old ID scheme.
+    underscore boundary - the case a multi-token state would collide on.
     A filter that is too broad would have each compile write dense rows into
     the other entity's series, and rename its metadata to its own name.
     """
@@ -1154,7 +1192,7 @@ async def test_a_reloaded_entity_does_not_kill_the_compile(recorder, freezer):
     """A reload writes an empty state and restores the real one moments later.
     It cannot go in a statistic ID, and letting build() raise aborted the
     entity's whole compile - permanently, because the watermark never got
-    past the chunk containing it. It is treated as `unknown` now, so under
+    past the chunk containing it. It is treated as `unknown` instead, so under
     record_known it is ignored and the previous state simply continues.
     """
     hass = recorder
@@ -1482,8 +1520,8 @@ async def test_the_carried_state_threads_across_a_chunk_seam(
 
     `include_start_time_state` hands back the `unavailable` row at the
     boundary, which resolves to nothing, so the chunk has no state of its
-    own. The previous chunk's ending state is what carries it - the job the
-    widening lookback used to do, without a query or a distance limit.
+    own. The previous chunk's ending state is what carries it, without a
+    query or a distance limit.
     """
     monkeypatch.setattr(compiler_module, "CHUNK_HOURS", 2)
 
@@ -1743,7 +1781,7 @@ async def test_an_ignored_row_at_the_boundary_does_not_hide_the_state_behind_it(
 async def test_a_long_ignored_stretch_is_carried_by_our_own_statistics(
     recorder, freezer
 ):
-    """The case with no distance limit, and the reason the lookback went.
+    """The case with no distance limit.
 
     The entity has been `unavailable` for hours, so the recorder has nothing
     recordable within the extra hour and its live state is the ignored one.

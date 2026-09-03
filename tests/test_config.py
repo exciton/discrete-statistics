@@ -329,7 +329,7 @@ def test_the_substitution_still_runs_through_the_default():
     assert both.resolve("") == "ok"
 
 
-def test_the_blank_default_is_unchanged_behaviour():
+def test_the_blank_default_is_unknown():
     cfg = parse([{"entity_id": "sensor.x"}])[0]
     assert cfg.blank == "unknown"
 

@@ -171,14 +171,13 @@ async def test_recompute_logs_the_explicit_start(recorder, freezer, caplog):
 
 
 async def test_recompute_leaves_statistics_outside_the_range_untouched(
-    recorder, freezer
+    recorder, freezer, caplog
 ):
     """Recompute only ever writes. Older statistics are never destroyed.
 
-    This is the contract that replaced `clear`: a mapping change leaves the
-    old statistic as a historical record that simply stops growing, rather
-    than a rebuild silently discarding everything the recorder can no longer
-    reach.
+    A mapping change leaves the old statistic as a historical record that
+    simply stops growing, rather than a rebuild silently discarding
+    everything the recorder can no longer reach.
     """
     hass = recorder
     start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
@@ -202,16 +201,20 @@ async def test_recompute_leaves_statistics_outside_the_range_untouched(
     assert before
 
     # Recompute a LATER window only; the early buckets must survive.
-    await hass.services.async_call(
-        DOMAIN,
-        "recompute",
-        {"entity_id": ENTITY, "start": (start + timedelta(hours=4)).isoformat()},
-        blocking=True,
-    )
-    await hass.async_block_till_done()
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="custom_components.discrete_statistics"):
+        await hass.services.async_call(
+            DOMAIN,
+            "recompute",
+            {"entity_id": ENTITY, "start": (start + timedelta(hours=4)).isoformat()},
+            blocking=True,
+        )
+        await hass.async_block_till_done()
     after = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=6))
 
     assert after == before
+    # Only hours 4 and 5 were compiled: `start` reached the compiler.
+    assert "compiled 2 hour(s)" in caplog.text
 
 
 async def test_unconfigured_entity_is_rejected(recorder):

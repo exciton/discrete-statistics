@@ -145,7 +145,7 @@ class DiscreteStatisticsConfigFlow(ConfigFlow, domain=DOMAIN):
         # and async_setup runs when the first entry is created - so
         # hass.data[DOMAIN] genuinely does not exist yet. This guard is the
         # only thing standing between that state and a KeyError on the very
-        # first helper anyone creates. Skipping the YAML check in that case
+        # first entry anyone creates. Skipping the YAML check in that case
         # is also correct: with no async_setup having run, no YAML config
         # can exist to clash with.
         data = self.hass.data.get(DOMAIN)
