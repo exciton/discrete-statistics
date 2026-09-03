@@ -9,6 +9,10 @@ the history of a binary sensor disappears when the recorder purges. This
 component derives per-state counters from recorder history and writes them
 as external statistics, which are never purged.
 
+It is not a replacement for `history_stats`, which answers a different
+question; [the comparison below](#compared-with-history_stats) says which to
+reach for.
+
 ## Installation
 
 Requires Home Assistant 2026.8.3 or later.
@@ -335,6 +339,171 @@ backfill using one code path.
 
 Runs are skipped while the recorder's queue is deep, since compiling is
 idempotent and the next run catches up.
+
+## Compared with `history_stats`
+
+Home Assistant's own [`history_stats`](https://www.home-assistant.io/integrations/history_stats/)
+answers a different question. It is a sensor whose value is *how much of a
+window* an entity spent in some states — the window being whatever its
+`start`/`end` templates render to right now — and it reads that from the
+recorder each time. This component writes the answer for every hour, once,
+into statistics that outlive the recorder. Each is the right tool for a specific job.
+
+### The same chart, both ways
+
+Grid outages per day and hours off-grid per day, for the last year. With
+`history_stats`, the statistics have to come from the recorder's own
+handling of the sensors, so each one needs a window that resets at midnight
+and a `state_class` the recorder will sum:
+
+```yaml
+sensor:
+  - platform: history_stats
+    name: Grid off today
+    unique_id: grid_off_today
+    entity_id: binary_sensor.grid_status
+    state: "off"
+    type: time
+    start: "{{ today_at('00:00') }}"
+    end: "{{ now() }}"
+    state_class: total_increasing
+  - platform: history_stats
+    name: Grid outages today
+    unique_id: grid_outages_today
+    entity_id: binary_sensor.grid_status
+    state: "off"
+    type: count
+    start: "{{ today_at('00:00') }}"
+    end: "{{ now() }}"
+    state_class: total_increasing
+```
+
+```yaml
+type: statistics-graph
+period: day
+days_to_show: 365
+stat_types:
+  - change
+entities:
+  - sensor.grid_off_today
+  - sensor.grid_outages_today
+```
+
+With this component:
+
+```yaml
+discrete_statistics:
+  - entity_id: binary_sensor.grid_status
+```
+
+```yaml
+type: statistics-graph
+period: day
+days_to_show: 365
+stat_types:
+  - change
+entities:
+  - discrete_statistics:binary_sensor_grid_status_off_duration
+  - discrete_statistics:binary_sensor_grid_status_off_count
+```
+
+The two cards look alike. The first one is wrong in ways that are hard to
+see:
+
+- **It starts today.** The sensors have no value before they exist, so the
+  chart is empty for the past year and fills in from now. The second reaches
+  back as far as the recorder held history when the entity was first
+  compiled.
+- **Midnight is detected, not known.** `total_increasing` has no reset
+  signal; the recorder infers one when the value drops below 90 % of the
+  previous reading. Whether an outage that spans midnight is counted once
+  or twice therefore depends on the day before: after a day with one outage
+  the count reads `1` on both sides of midnight, no drop, no reset, counted
+  once; after a day with two it drops from `2` to `1`, a reset, and the
+  outage is counted again. The second card credits it to the hour it began.
+- **A restart during the outage splits it.** `unavailable` is not `off`, so
+  the interval closes and a new one opens, the count goes up, and the
+  downtime is attributed to nothing. The second card carries `off` across
+  it.
+- **Three more states means six more sensors**, each with the same window
+  templates to keep right, and a state the entity has not shown yet has no
+  sensor at all.
+- **The value is a sensor's state**, so it is recorded to the recorder like
+  any other, purged like any other, and the statistics are derived from
+  samples of it rather than from the transitions themselves.
+
+None of that is a defect in `history_stats`: it was built to show a live
+figure, and the long-term statistics are a by-product of giving that figure
+a `state_class`. Writing the statistics directly is the point of this
+component.
+
+### Things this component does that `history_stats` cannot
+
+**Every state of an enum, from one line.** A heat pump's `hvac_action` has
+`heating`, `cooling`, `idle`, `defrosting` and whatever next year's firmware
+adds. One entry here records all of them, duration and count, and a state
+that appears later gets its statistics the first hour it is seen.
+`history_stats` matches one set of states per sensor and merges the set into
+one figure, so *time in each of N states* is N sensors, counts are N more,
+and a new state is a new sensor you have to know to create.
+
+**Survives `purge_keep_days`.** Statistics are never purged. A
+`history_stats` window that reaches past the recorder's retention returns
+a smaller number, silently: `0` hours over a range that was never recorded
+looks exactly like `0` hours in the state. Once this component has compiled
+the history, retention can be shortened without losing the series.
+
+**Hours that sum to the day.** Every state's duration is written for every
+hour, so a stacked bar of all of an entity's states is 24 h tall, and
+`mean` and `max` over a day are the average and the busiest hour — with quiet
+hours counted as quiet, not skipped.
+
+### Things `history_stats` does that this component cannot
+
+**A number right now.** Time in state *so far today*, updated on every change
+and at least once a minute. This component writes an hour after it closes;
+nothing here is ever more current than the last whole hour.
+
+**Any window.** The last thirty minutes, since sunrise, until 4 pm, the
+previous calendar month: whatever a template can render. This component has
+hourly buckets, and only what Home Assistant's statistics cards can do with
+them.
+
+**An entity.** A sensor can sit on a card, gate an automation, and be read in
+a template; `history_stats` also offers a `min_state_duration` filter for
+debouncing. Statistics are only reachable through the statistics cards and
+the recorder's websocket API.
+
+Its `ratio` type is not on that list. Hours per hour is already a fraction:
+the `mean` of a duration statistic over any period *is* the share of that
+period spent in the state - a `mean` of `0.4` is 40 % - and it is what the last
+chart under *Charts* draws.
+
+### Side by side
+
+| | `history_stats` | `discrete_statistics` |
+|---|---|---|
+| Produces | one sensor: a value for the current window | per-state duration and count statistics, per hour |
+| Freshness | on change, at least every minute | after each hour closes |
+| Resolution | seconds, within the window | hourly buckets |
+| Reach into the past | as far as the recorder's retention | whole retained history on first run, kept forever after |
+| Backfill | none — begins when the sensor is created | first run, and `recompute` for any range with history |
+| After purge | window silently shrinks toward `0` | statistics unaffected |
+| States per entity | one set per sensor, merged into one number | every state, automatically |
+| A new state | a new sensor, when you notice | recorded from its first hour |
+| Count means | intervals in the window; a state active at the start counts | transitions into the state, in the hour they happen |
+| `unavailable` / `unknown` | not in the list, so they break the interval | carry the previous state forward; configurable |
+| State mapping | none | `states:` map, `default`, `blank` |
+| Window | any template; two of `start`/`end`/`duration` | none — hourly, and whatever the cards aggregate |
+| Share of time | `ratio` % | `mean` of a duration: hours per hour is a fraction |
+| Debounce | `min_state_duration` | no |
+| Usable in automations | yes, it is a sensor | no |
+| Configuration | UI with live preview, or YAML; one sensor per state × metric × window | UI or YAML; one entry per entity |
+| Long-term statistics | of the sensor's own value (`measurement`), or `total_increasing` with reset detection | are the product |
+
+Use both: `history_stats` for the tile that says how long the door has been
+open today, this component for the chart of how often it was opened each
+week this year.
 
 ## Limitations
 
