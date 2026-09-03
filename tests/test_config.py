@@ -405,3 +405,10 @@ def test_an_explicit_record_of_a_no_data_named_state_is_honoured():
     """`states` naming it IS the operator asking."""
     cfg = parse([{"entity_id": "sensor.x", "states": {"no_data": "record"}}])[0]
     assert cfg.resolve("no_data") == "no_data"
+
+
+def test_a_state_spelling_unknown_resolves_to_unknown():
+    """It has a name, so it is not routed through `blank:`."""
+    cfg = parse([{"entity_id": "sensor.x", "blank": "ok", "default": "record"}])[0]
+    assert cfg.resolve("__unknown__") == "__unknown__"
+    assert cfg.resolve("!!!") == "ok"

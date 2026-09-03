@@ -153,3 +153,21 @@ def test_build_refuses_a_blank_state():
     for state in ("", "!!!", "-"):
         with pytest.raises(InvalidStatisticIdError):
             build("sensor.x", state, METRIC_DURATION)
+
+
+def test_a_state_that_normalises_to_unknown_is_a_name_not_a_blank():
+    """`__unknown__` spells unknown; `!!!` spells nothing.
+
+    slugify answers "unknown" for both, which is why blankness is judged on
+    the input. The first is a real name and merges with `unknown` the same
+    way `heat_cool` merges with `heatcool`; only the second has no name.
+    """
+    assert not is_blank("__unknown__")
+    assert not is_blank(" unknown ")
+    assert not is_blank("Unknown!")
+    assert is_blank("!!!")
+    assert is_blank("🙂")
+
+    assert build("sensor.x", "__unknown__", METRIC_DURATION) == build(
+        "sensor.x", "unknown", METRIC_DURATION
+    )

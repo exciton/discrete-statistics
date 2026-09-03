@@ -194,8 +194,12 @@ choice rather than a structural certainty: it is a band for spans we cannot
 describe, and counting them would measure our own ignorance.
 
 **A blank state is substituted, before anything else looks at it.** A blank
-state is one with no letters or digits — `state_token` keeps nothing else — so
-it has no name a statistic could carry. `resolve` swaps in `cfg.blank`
+state is one with no letters or digits, so it has no name a statistic could
+carry. Judged on the input rather than the token: `slugify` answers the literal
+`"unknown"` for punctuation, whitespace and emoji alike, so a state that
+genuinely spells unknown once normalised — `__unknown__`, `Unknown!` — is a
+real name and merges with `unknown` exactly as `heat_cool` merges with
+`heatcool`. `resolve` swaps in `cfg.blank`
 (default `unknown`) and then resolves normally, so it inherits a real state's disposition rather than
 needing a rule of its own. Substitute-then-resolve, not a direct answer: a
 direct answer would bypass `default` and make the stock `unknown` record where

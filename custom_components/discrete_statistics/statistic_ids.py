@@ -49,22 +49,17 @@ def state_token(state: str) -> str:
 def is_blank(state: str) -> bool:
     """True when a state has no name to put in a statistic ID.
 
-    `state_token` keeps only letters and digits, so this is exactly the set
-    with none of either: empty - what the recorder stores as NULL when an
-    entity is removed or reloaded, and the history API hands back as "" - or
-    whitespace, or punctuation alone.
+    Exactly the states with no letters or digits: empty - what the recorder
+    stores as NULL when an entity is removed or reloaded - or whitespace,
+    punctuation or symbols alone.
 
-    It also catches the rare state that slugifies onto the literal "unknown"
-    without being it. That is a collision rather than a blank, but it wants
-    the same treatment: there is no name here a statistic could carry.
-
-    Callers substitute `cfg.blank` for these before resolving, so they
-    inherit a real state's disposition rather than needing a case of their own.
+    The test is on the input, not the token, because slugify answers the
+    literal "unknown" for all of those. A state that genuinely spells unknown
+    once normalised - `__unknown__`, `Unknown!` - is a real name, and merges
+    with `unknown` exactly as `heat_cool` merges with `heatcool`. The second
+    clause is for input that has alphanumerics but transliterates away.
     """
-    token = state_token(state)
-    if not token:
-        return True
-    return token == "unknown" and state.strip().lower() != "unknown"
+    return not any(ch.isalnum() for ch in state) or not state_token(state)
 
 
 def build(entity_id: str, state: str, metric: str) -> str:
