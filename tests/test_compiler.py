@@ -1348,3 +1348,26 @@ async def test_unknown_and_unavailable_are_capitalised(recorder, freezer):
         hass, "discrete_statistics:binary_sensor_grid_status_unavailable_duration"
     ) == "Grid Status: Unavailable (h)"
     assert await stored_name(hass, DURATION_UNKNOWN) == "Grid Status: Unknown (h)"
+
+
+async def test_no_data_is_rendered_too(recorder, freezer):
+    """It is ours, so nothing has a translation for it.
+
+    Left raw it read `no_data` beside `Unavailable`, which looks like a bug
+    in the name rather than a deliberate band.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start + timedelta(hours=2))
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=4))
+    compiler = Compiler(hass)
+    # Twice: the second reaches back past an established series, which is
+    # what writes no_data at all.
+    await compiler.async_compile(cfg(), start.timestamp())
+    await compiler.async_compile(cfg(), start.timestamp())
+
+    assert await stored_name(hass, DURATION_NO_DATA) == "Grid Status: No Data (h)"

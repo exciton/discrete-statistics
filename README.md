@@ -199,7 +199,7 @@ purged — it attributes the time to `no_data`. Durations therefore always
 sum to 24h per day, and gaps are visible in the chart rather than silently
 filled in.
 
-`no_data` has a `_duration` statistic only, whether the compiler chose it or
+On a chart it is labelled **No Data**. It has a `_duration` statistic only, whether the compiler chose it or
 your config did: it measures time nobody can account for, and counting those
 spans would tell you nothing.
 

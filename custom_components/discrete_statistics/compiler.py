@@ -31,7 +31,7 @@ from homeassistant.util import dt as dt_util
 from .bucketer import bucket, hour_start
 from .canonicalise import canonicalise
 from .config import EntityConfig
-from .const import DOMAIN, HOUR
+from .const import DOMAIN, HOUR, NO_DATA
 from .naming import display_name
 from .payload import build_payloads
 from .statistic_ids import belongs_to
@@ -47,13 +47,16 @@ CHUNK_HOURS = 24 * 7
 
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
-# `async_translate_state` returns these two untouched (translation.py:469):
-# the frontend renders them from its own `state.default` strings, which the
-# backend never sees. So a chart legend would read `off` beside `Closed`.
-# English only, like everything else the instance language decides.
-_FRONTEND_STATES = {
+# States `async_translate_state` cannot render. It returns `unavailable` and
+# `unknown` untouched (translation.py:469) because the frontend renders those
+# from its own `state.default` strings, which the backend never sees; and
+# `no_data` is ours, so nothing has a translation for it. Without these a
+# legend reads `unavailable` and `no_data` beside a rendered `Closed`.
+# English only, and only for the states nothing else can name.
+_UNRENDERED_STATES = {
     STATE_UNAVAILABLE: "Unavailable",
     STATE_UNKNOWN: "Unknown",
+    NO_DATA: "No Data",
 }
 
 # Both of `state_changes_during_period`'s queries compare strictly, so a
@@ -108,7 +111,7 @@ class Compiler:
             device_class = state.attributes.get(ATTR_DEVICE_CLASS)
 
         def translate(state: str) -> str:
-            if (rendered := _FRONTEND_STATES.get(state)) is not None:
+            if (rendered := _UNRENDERED_STATES.get(state)) is not None:
                 return rendered
             return async_translate_state(
                 self._hass,

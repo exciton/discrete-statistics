@@ -66,10 +66,10 @@ lower module, the design is drifting.
 States in a statistic's name are rendered through `async_translate_state`, so
 a door sensor reads `Open`/`Closed` as it does everywhere else. It answers with
 the raw state when no translation exists, which covers `no_data` and most enum
-sensors. `unavailable` and `unknown` are a special case it returns untouched
-(`translation.py:469`) because the frontend renders those from its own
-`state.default` strings, which the backend never sees — `_FRONTEND_STATES`
-supplies them, in English. `_async_warm_translations` loads the cache first, because that
+sensors. `_UNRENDERED_STATES` covers the three it cannot name: `unavailable` and
+`unknown`, which it returns untouched (`translation.py:469`) because the
+frontend renders those from its own `state.default` strings that the backend
+never sees, and `no_data`, which is ours. English only. `_async_warm_translations` loads the cache first, because that
 function is a callback over one and a cold cache would rename every statistic
 back and forth. The language is `hass.config.language` — instance-wide, while
 the frontend translates per user — so the stored name is in one language for
