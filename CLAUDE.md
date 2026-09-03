@@ -49,7 +49,7 @@ A pure pipeline with a single I/O boundary. Dependencies point one way:
 const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds, count)}
        ├─ statistic_ids     pure: build, parse and match an external statistic ID
        ├─ config ── canonicalise   pure: recorder rows -> canonical transitions
-       │   │    └─ config_flow    HA UI: entity -> EntityConfig, as a helper
+       │   │    └─ config_flow    HA UI: entity -> EntityConfig, per entry
        │   └─ statistic_ids       for the reserved-token comparison
        ├─ naming            HA: entity -> the name a person recognises
        └─ payload           pure: buckets -> cumulative StatisticData rows
@@ -75,11 +75,19 @@ not something to fix here.
 
 `naming.display_name` is the one answer to "what is this entity called": a
 typed name, then the entity registry, then the live state's `friendly_name`,
-then the entity ID. It backs the chart labels, the helper's title in the
+then the entity ID. It backs the chart labels, the entry's title in the
 Helpers list, and the notifications — those disagreeing is what the entity ID
 leaking into a title looked like. The registry comes before the state because
 attributes are stripped while an entity is unavailable, and because it holds
 what the user asked for when the two disagree.
+
+**The integration provides no entities.** It was `integration_type: helper`
+once, which listed every entry in the Helpers panel — where
+`ha-config-helpers.ts:503-546` draws a row per *entity* and a red-exclamation
+row for any entry with none. That pushed us into adding a button just to
+carry the row, which then took the row's name and icon and brought a service
+device with it. As a normal integration none of that applies: the page lists
+the entries, and each row opens its configuration.
 
 `Compiler` is a class built from `(hass,)`; the entry points are its methods,
 not module-level functions.
@@ -236,7 +244,7 @@ entity's compile — permanently, because the watermark never advanced past the
 chunk containing it.
 
 **A series never opens with `no_data`.** An entity's first state rarely lands
-on the hour, so compiling from the hour containing it would give every helper
+on the hour, so compiling from the hour containing it would give every entity
 a `no_data` statistic recording the minutes before it — and by the density
 invariant that statistic is then written forever. `_async_compile_chunk`
 advances `window_start` to the first whole hour that begins in a recordable

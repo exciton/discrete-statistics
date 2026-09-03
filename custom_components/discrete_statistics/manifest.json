@@ -5,7 +5,6 @@
   "config_flow": true,
   "dependencies": ["recorder"],
   "documentation": "https://github.com/exciton/discrete-statistics",
-  "integration_type": "helper",
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/exciton/discrete-statistics/issues",
   "requirements": [],

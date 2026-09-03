@@ -121,7 +121,7 @@ discrete_statistics:
 
 ## Configuring from the UI
 
-Settings → Devices & Services → Helpers → **Create helper** → **Discrete
+Settings → Devices & Services → **Add integration** → **Discrete
 Statistics**. Pick an entity, optionally name it, and choose which states
 to record. Compiling starts in the background as soon as you press Submit,
 and a notification reports how many hours were compiled: the entity's full
@@ -129,20 +129,20 @@ retained history for a genuinely new entity, or just the trailing window if
 it was previously configured and deleted, since statistics are kept on
 removal and compiling resumes from that watermark.
 
-Changing a helper's recording rule recompiles that entity's whole history, so
+Changing an entry's recording rule recompiles that entity's whole history, so
 the change applies to the past as well as the future; changing only its name
 does not.
 
 The entity itself cannot be changed after creation: it determines the
 statistic IDs, so a change would orphan the existing series. Delete the
-helper and make a new one instead.
+entry and make a new one instead.
 
-An entity may be configured once, either in YAML or as a helper. The
-helper dialog refuses an entity that YAML already configures; a YAML block
-added later for an entity that a helper owns disables that helper and
-raises a repair issue.
+An entity may be configured once, either in YAML or through the UI. The
+dialog refuses an entity that YAML already configures; a YAML block added
+later for an entity the UI owns disables that entry and raises a repair
+issue.
 
-Removing a helper stops compiling. It never deletes statistics — do that
+Removing an entry stops compiling. It never deletes statistics — do that
 in Settings → System → Tools → Statistics.
 
 Entities that report a *measurement* are refused — anything with a
@@ -283,7 +283,7 @@ card's `entities` list to be drawn.
 
 ## Backfilling
 
-A new helper compiles the entity's whole retained history on its first
+A newly configured entity compiles its whole retained history on its first
 ordinary run — there is no watermark to trail, so there is nothing to do but
 start at the beginning. `recompute` is for the cases that first run cannot
 cover: re-attributing history after a configuration change, repairing a range,
