@@ -155,9 +155,9 @@ class DiscreteStatisticsConfigFlow(ConfigFlow, domain=DOMAIN):
 
         name = user_input.get(CONF_NAME) or None
         return self.async_create_entry(
-            # The entity's own name, not its ID: it is what the Helpers
-            # list shows and what people recognise.
-            title=display_name(self.hass, entity_id, name),
+            # Name and ID both: the name is what people recognise, the ID
+            # is what tells two similarly-named entities apart in a list.
+            title=describe(self.hass, entity_id, name),
             data={CONF_ENTITY_ID: entity_id},
             options={
                 CONF_NAME: name,

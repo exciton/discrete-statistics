@@ -88,8 +88,9 @@ which leaves same-host anchors alone so they navigate in-app.
 `describe` for a label plus the entity ID where certainty matters — the
 options dialog, notifications. The chain is: a
 typed name, then the entity registry, then the live state's `friendly_name`,
-then the entity ID. It backs the chart labels, the entry's title, the
-options dialog's heading, and the notifications — those disagreeing is what the entity ID
+then the entity ID. It backs the chart labels; `describe` adds the entity ID for the entry's
+title, the options dialog's heading and the notifications, where two
+similarly-named entities have to be told apart — those disagreeing is what the entity ID
 leaking into a title looked like. The registry comes before the state because
 attributes are stripped while an entity is unavailable, and because it holds
 what the user asked for when the two disagree.

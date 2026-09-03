@@ -72,7 +72,7 @@ async def test_user_flow_creates_an_entry(recorder):
         await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["title"] == "Grid Status"
+    assert result["title"] == f"Grid Status ({ENTITY})"
     assert result["data"] == {CONF_ENTITY_ID: ENTITY}
     assert result["options"] == {
         CONF_NAME: "Grid Status",
@@ -265,7 +265,7 @@ async def test_options_flow_keeps_title_in_sync_with_name(recorder):
         )
         await hass.async_block_till_done()
 
-    assert entry.title == "Grid"
+    assert entry.title == f"Grid ({ENTITY})"
 
 
 async def test_the_blank_setting_is_carried_into_the_entry(recorder):
@@ -458,8 +458,10 @@ async def test_a_binary_sensor_is_still_accepted(recorder):
     assert result["type"] is FlowResultType.CREATE_ENTRY
 
 
-async def test_the_helper_is_titled_with_the_entitys_name(recorder, entity_registry):
-    """The Helpers list shows this, and an entity ID is not what people read."""
+async def test_the_entry_is_titled_with_the_entitys_name_and_id(
+    recorder, entity_registry
+):
+    """The name is what people read; the ID tells near-identical rows apart."""
     hass = recorder
     assert await async_setup_component(hass, DOMAIN, {})
     entity_registry.async_get_or_create(
@@ -471,10 +473,10 @@ async def test_the_helper_is_titled_with_the_entitys_name(recorder, entity_regis
     result = await _submit(hass, ENTITY)
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["title"] == "Mains Power"
+    assert result["title"] == f"Mains Power ({ENTITY})"
 
 
-async def test_a_typed_name_still_titles_the_helper(recorder, entity_registry):
+async def test_a_typed_name_still_leads_the_title(recorder, entity_registry):
     hass = recorder
     assert await async_setup_component(hass, DOMAIN, {})
     entity_registry.async_get_or_create(
@@ -496,11 +498,11 @@ async def test_a_typed_name_still_titles_the_helper(recorder, entity_registry):
         },
     )
 
-    assert result["title"] == "Grid"
+    assert result["title"] == f"Grid ({ENTITY})"
 
 
 async def test_the_entity_id_titles_it_only_as_a_last_resort(recorder):
-    """No registry entry and no friendly name."""
+    """No registry entry and no friendly name: the ID is not printed twice."""
     hass = recorder
     assert await async_setup_component(hass, DOMAIN, {})
     hass.states.async_set(ENTITY, "on")

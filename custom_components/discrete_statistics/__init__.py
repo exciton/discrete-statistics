@@ -248,7 +248,7 @@ async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
     # instead of looping or recompiling a second time. Do not remove the
     # equality check while this call stays - it looks unrelated but it is
     # what stops the recursion.
-    title = display_name(hass, cfg.entity_id, cfg.name)
+    title = describe(hass, cfg.entity_id, cfg.name)
     if title != entry.title:
         hass.config_entries.async_update_entry(entry, title=title)
 
