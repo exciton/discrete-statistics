@@ -169,6 +169,12 @@ class Compiler:
         self, cfg: EntityConfig, start: float | None, end: float | None = None
     ) -> int:
         """Compile [start, end) for one entity. Returns hours compiled."""
+        # `start is None` means "from the beginning of what the recorder
+        # still holds", so nothing precedes the window and the leading
+        # no_data may be trimmed even though statistics already exist.
+        # An explicit start is a range the caller asked for, and reaching
+        # back past what is known is then a real gap worth showing.
+        at_earliest_state = start is None
         if start is None:
             start = await self._async_earliest_state_ts(cfg.entity_id)
             if start is None:
@@ -190,7 +196,14 @@ class Compiler:
             while chunk_start < window_end:
                 chunk_end = min(chunk_start + CHUNK_HOURS * HOUR, window_end)
                 base_sums, hours, existing = await self._async_compile_chunk(
-                    cfg, chunk_start, chunk_end, base_sums, existing
+                    cfg,
+                    chunk_start,
+                    chunk_end,
+                    base_sums,
+                    existing,
+                    # Only the chunk that opens the history: a later one
+                    # starts mid-series, where trimming would leave a hole.
+                    opens_history=at_earliest_state and chunk_start == window_start,
                 )
                 compiled += hours
                 chunk_start = chunk_end
@@ -232,6 +245,7 @@ class Compiler:
         window_end: float,
         base_sums: dict[str, float],
         existing: dict[str, str],
+        opens_history: bool = False,
     ) -> tuple[dict[str, float], int, dict[str, str]]:
         """Compile one chunk.
 
@@ -242,7 +256,7 @@ class Compiler:
         """
         rows = await self._async_history(cfg, window_start, window_end)
         opened = await self._async_open_window(
-            cfg, rows, window_start, window_end, existing
+            cfg, rows, window_start, window_end, existing, opens_history
         )
         if opened is None:
             return base_sums, 0, existing
@@ -281,6 +295,7 @@ class Compiler:
         window_start: float,
         window_end: float,
         existing: dict[str, str],
+        opens_history: bool = False,
     ) -> tuple[float, str | None, list[tuple[float, str]]] | None:
         """Decide where the window opens and in what state.
 
@@ -304,7 +319,7 @@ class Compiler:
                 if carried is not None:
                     break
 
-        if carried is None and not existing:
+        if carried is None and (not existing or opens_history):
             # Nothing has ever been compiled for this entity, so a leading
             # no_data would complete no earlier series - it would only earn
             # the entity a no_data statistic to write densely forever. Open
@@ -312,10 +327,13 @@ class Compiler:
             # whole first partial hour: a part-known hour cannot both be
             # recorded and total wall-clock time.
             #
-            # Conditional on the entity having no statistics, and must stay
-            # so. Skipping hours once statistics exist leaves a hole, and the
-            # next run finds no base in the hour before its window and
-            # restarts every cumulative sum at zero.
+            # Allowed when the entity has no statistics at all, or when this
+            # window opens its history - `start=None`, which is what the
+            # button and a bare `recompute` do. Both mean nothing precedes
+            # the window, so moving its start cannot orphan a base. Trimming
+            # a window that begins mid-series would: the hours skipped would
+            # have no rows, and the next run would find no base in the hour
+            # before it and restart every cumulative sum at zero.
             if not transitions:
                 return None
             first_known = transitions[0][0]

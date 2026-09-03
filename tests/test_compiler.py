@@ -1208,3 +1208,114 @@ async def test_an_untranslatable_state_keeps_its_raw_name(recorder, freezer):
     await Compiler(hass).async_compile(cfg(), start.timestamp())
 
     assert await stored_name(hass, DURATION_ON) == "Grid Status: on (h)"
+
+
+async def test_a_full_recompute_does_not_re_create_the_opening_no_data(
+    recorder, freezer
+):
+    """What the Statistics button does, and it must be idempotent.
+
+    The trim used to be gated on the entity having no statistics, so the
+    second full compile - the first press of the button - manufactured the
+    opening sliver the first compile had correctly skipped. Density then
+    kept that no_data statistic forever.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start + timedelta(hours=2, minutes=23))
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=6))
+    compiler = Compiler(hass)
+    await compiler.async_compile_incremental(cfg())
+    assert DURATION_NO_DATA not in await existing(hass)
+
+    await compiler.async_compile(cfg(), None)
+    assert DURATION_NO_DATA not in await existing(hass)
+
+    # And pressing it again changes nothing.
+    await compiler.async_compile(cfg(), None)
+    assert DURATION_NO_DATA not in await existing(hass)
+    assert await read_sums(hass, DURATION_ON, start, start + timedelta(hours=6)) == [
+        1.0,
+        2.0,
+        3.0,
+    ]
+
+
+async def test_a_full_recompute_still_trims_only_its_opening_chunk(
+    recorder, freezer, monkeypatch
+):
+    """A later chunk starts mid-series, where trimming would leave a hole."""
+    monkeypatch.setattr(compiler_module, "CHUNK_HOURS", 2)
+
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start + timedelta(minutes=30))
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    freezer.move_to(start + timedelta(hours=3))
+    hass.states.async_set(ENTITY, "off")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=6))
+    compiler = Compiler(hass)
+    await compiler.async_compile(cfg(), None)
+    await compiler.async_compile(cfg(), None)
+
+    assert DURATION_NO_DATA not in await existing(hass)
+    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=6))
+    off = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=6))
+    # Dense from hour 1, and every hour still totals wall-clock time.
+    assert len(on) == len(off) == 5
+    for hour in range(5):
+        spent = (on[hour] - (on[hour - 1] if hour else 0.0)) + (
+            off[hour] - (off[hour - 1] if hour else 0.0)
+        )
+        assert spent == pytest.approx(1.0), hour
+
+
+async def test_a_mid_history_chunk_never_trims_during_a_full_recompute(
+    recorder, freezer, monkeypatch
+):
+    """The restriction that keeps `opens_history` to the first chunk.
+
+    A stretch longer than the widening lookback leaves a later chunk with no
+    carried state. Trimming there writes nothing for those hours, so the
+    series gains a hole - and a later run whose window starts inside it finds
+    no base in the preceding hour and restarts at zero.
+    """
+    monkeypatch.setattr(compiler_module, "CHUNK_HOURS", 2)
+    monkeypatch.setattr(compiler_module, "WIDENING_LOOKBACKS", (HOUR,))
+
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    # Ignored for long enough to defeat the widening lookback.
+    freezer.move_to(start + timedelta(minutes=30))
+    hass.states.async_set(ENTITY, "unavailable")
+    await hass.async_block_till_done()
+    freezer.move_to(start + timedelta(hours=5))
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=6))
+    await Compiler(hass).async_compile(cfg(), None)
+
+    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=6))
+    gap = await read_sums(hass, DURATION_NO_DATA, start, start + timedelta(hours=6))
+
+    # `on` exists from the first hour, so density requires a row in all six.
+    # Trimming the middle chunk would write nothing for hours 2 and 3.
+    assert len(on) == 6, on
+    # no_data begins where the gap does - density runs from a statistic's
+    # first appearance, not from the start of the window.
+    assert len(gap) == 4, gap
+    # And the six hours are still fully accounted for between them.
+    assert on[-1] + gap[-1] == pytest.approx(6.0)

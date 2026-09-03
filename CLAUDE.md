@@ -255,10 +255,14 @@ on the hour, so compiling from the hour containing it would give every helper
 a `no_data` statistic recording the minutes before it — and by the density
 invariant that statistic is then written forever. `_async_compile_chunk`
 advances `window_start` to the first whole hour that begins in a recordable
-state instead. The trim is conditional on the entity having no statistics at
-all, and must stay that way: once statistics exist, skipping hours leaves a
-hole, and the next run finds no base in the hour before its window and restarts
-every cumulative sum at zero.
+state instead. The trim fires when nothing precedes the window: the entity
+has no statistics at all, or the window opens its history (`start=None`, what
+the button and a bare `recompute` do) and this is the first chunk. Gating it
+on "no statistics" alone made a full recompute re-manufacture the sliver its
+first compile had skipped — the button turned that from rare into one click.
+Both halves matter: a window that begins mid-series must never trim, or the
+skipped hours have no rows and the next run finds no base in the hour before
+its window and restarts every cumulative sum at zero.
 
 **Nothing in this integration deletes statistics.** Recompute overwrites
 buckets it has source data for and leaves everything else alone, so a rebuild
