@@ -110,7 +110,7 @@ async def test_registers_statistic_ids_it_writes(recorder, freezer):
     await compiler.async_compile(cfg(), start.timestamp())
 
     assert DURATION_ON in await existing(hass)
-    assert await stored_name(hass, DURATION_ON) == "Grid Status: on (duration)"
+    assert await stored_name(hass, DURATION_ON) == "Grid Status: on (h)"
 
 
 async def test_records_an_outage_duration_and_count(recorder, freezer):
@@ -907,8 +907,8 @@ async def test_two_entities_never_write_into_each_others_statistics(
     assert DURATION_ON not in await existing(hass, OTHER)
 
     # Each keeps its own name, and its own values.
-    assert await stored_name(hass, DURATION_ON) == "Grid Status: on (duration)"
-    assert await stored_name(hass, OTHER_DURATION_ON) == "Pump: on (duration)"
+    assert await stored_name(hass, DURATION_ON) == "Grid Status: on (h)"
+    assert await stored_name(hass, OTHER_DURATION_ON) == "Pump: on (h)"
     assert await read_sums(hass, DURATION_ON, start, start + timedelta(hours=4)) == [
         1.0,
         2.0,
@@ -1054,3 +1054,157 @@ async def test_a_state_mapped_to_no_data_charts_as_a_gap(recorder, freezer):
         assert spent == pytest.approx(1.0), hour
     # Still duration-only, even though something transitioned into it.
     assert COUNT_NO_DATA not in await existing(hass)
+
+
+UNNAMED = EntityConfig(
+    entity_id=ENTITY, name=None, default="record_known", states={}
+)
+
+
+async def test_the_statistic_name_falls_back_to_the_entitys_name(recorder, freezer):
+    """Not to its ID: the friendly name is what people see everywhere else."""
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on", {"friendly_name": "Mains Power"})
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=3))
+    await Compiler(hass).async_compile(UNNAMED, start.timestamp())
+
+    assert await stored_name(hass, DURATION_ON) == "Mains Power: on (h)"
+
+
+async def test_a_typed_name_still_wins(recorder, freezer):
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on", {"friendly_name": "Mains Power"})
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=3))
+    await Compiler(hass).async_compile(cfg(), start.timestamp())
+
+    assert await stored_name(hass, DURATION_ON) == "Grid Status: on (h)"
+
+
+async def test_the_entity_id_is_the_last_resort(recorder, freezer):
+    """No typed name, no registry entry, no friendly name."""
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=3))
+    await Compiler(hass).async_compile(UNNAMED, start.timestamp())
+
+    assert await stored_name(hass, DURATION_ON) == f"{ENTITY}: on (h)"
+
+
+async def test_the_registry_name_survives_the_entity_being_unavailable(
+    recorder, freezer, entity_registry
+):
+    """Attributes are stripped when unavailable; the registry entry is not.
+
+    Reading the live state first would rename every statistic to the entity
+    ID for as long as it was away, and rename them back afterwards.
+    """
+    hass = recorder
+    entity_registry.async_get_or_create(
+        "binary_sensor", "demo", "unique-1", suggested_object_id="grid_status",
+        original_name="Mains Power",
+    )
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    freezer.move_to(start + timedelta(hours=1))
+    hass.states.async_set(ENTITY, "unavailable")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=3))
+    await Compiler(hass).async_compile(UNNAMED, start.timestamp())
+
+    assert await stored_name(hass, DURATION_ON) == "Mains Power: on (h)"
+
+
+async def test_the_registry_name_wins_over_a_stale_friendly_name(
+    recorder, freezer, entity_registry
+):
+    """They disagree only after a rename the integration has not republished.
+
+    The registry holds what the user asked for, so it is the authority. This
+    is what actually makes the lookup order matter - the unavailable case
+    reaches the registry either way, by falling through.
+    """
+    hass = recorder
+    entity_registry.async_get_or_create(
+        "binary_sensor", "demo", "unique-2", suggested_object_id="grid_status",
+        original_name="Old Name",
+    )
+    entity_registry.async_update_entity(ENTITY, name="Mains Power")
+
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on", {"friendly_name": "Old Name"})
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=3))
+    await Compiler(hass).async_compile(UNNAMED, start.timestamp())
+
+    assert await stored_name(hass, DURATION_ON) == "Mains Power: on (h)"
+
+
+async def test_states_are_rendered_the_way_home_assistant_renders_them(
+    recorder, freezer, entity_registry
+):
+    """A door sensor reads Open/Closed in the UI, so the legend should too.
+
+    Verifies the whole chain: registry device class, warmed translations,
+    and the raw state where no translation exists.
+    """
+    hass = recorder
+    assert await async_setup_component(hass, "binary_sensor", {})
+    await hass.async_block_till_done()
+    entity_registry.async_get_or_create(
+        "binary_sensor", "demo", "door-1",
+        suggested_object_id="grid_status",
+        original_name="Front Door",
+        original_device_class="door",
+    )
+
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    freezer.move_to(start + timedelta(hours=1))
+    hass.states.async_set(ENTITY, "off")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=3))
+    await Compiler(hass).async_compile(UNNAMED, start.timestamp())
+
+    assert await stored_name(hass, DURATION_ON) == "Front Door: Open (h)"
+    assert await stored_name(hass, DURATION_OFF) == "Front Door: Closed (h)"
+
+
+async def test_an_untranslatable_state_keeps_its_raw_name(recorder, freezer):
+    """Most enum sensors have no translations, and no_data is ours."""
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=3))
+    await Compiler(hass).async_compile(cfg(), start.timestamp())
+
+    assert await stored_name(hass, DURATION_ON) == "Grid Status: on (h)"

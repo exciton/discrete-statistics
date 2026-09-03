@@ -45,10 +45,13 @@ change.
 | key | default | meaning |
 |---|---|---|
 | `entity_id` | required | the entity to track |
-| `name` | the entity's ID | used in statistic display names |
+| `name` | the entity's own name | used in statistic display names |
 | `default` | `record_known` | disposition for states not listed |
 | `states` | `{}` | per-state overrides |
 | `blank` | `unknown` | what to do with a state that has no letters or digits |
+
+Both `default` and `blank` are available in the UI as well; per-state
+mappings are still YAML-only.
 
 `default` accepts:
 
@@ -158,6 +161,15 @@ Separators are stripped from the state, so it is always one word in the ID:
 `heat_cool` becomes `..._heatcool_duration`. The readable state stays in the
 statistic's name. Two states that differ only by separators therefore share a
 statistic and are recorded together.
+
+Statistics are named `<entity>: <state> (h)` for durations and `(#)` for
+counts, with the state rendered the way Home Assistant renders it — a door
+sensor reads `Open`/`Closed`, not `on`/`off`.
+
+*Limitation:* that rendering uses the **instance** language, from Settings →
+System → General, because the name is one stored string with no viewer in
+scope. Home Assistant's own screens translate per user, so a household whose
+members use different languages sees one language here.
 
 Both are cumulative sums, so charts use the `change` stat type to show
 per-bucket values. Durations are in **hours**, so an hourly bucket in a single

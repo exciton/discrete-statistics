@@ -21,14 +21,26 @@ from homeassistant.const import CONF_ENTITY_ID, CONF_NAME
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 
-from .config import CONF_DEFAULT, is_configured
-from .const import DEFAULT_RECORD, DEFAULT_RECORD_KNOWN, DOMAIN
+from .config import CONF_BLANK, CONF_DEFAULT, blank_error, is_configured
+from .const import (
+    DEFAULT_RECORD,
+    DEFAULT_RECORD_KNOWN,
+    DISPOSITION_IGNORE,
+    DOMAIN,
+    NO_DATA,
+)
+from homeassistant.const import STATE_UNKNOWN
 
 # `ignore` is deliberately absent. With no per-state mapping to supply
 # exceptions it makes resolve() return None for every state, so nothing is
 # ever recordable and the entity's whole timeline is attributed to no_data.
 # It stays valid in YAML, where `states:` supplies those exceptions.
 UI_DEFAULTS = [DEFAULT_RECORD, DEFAULT_RECORD_KNOWN]
+
+# Offered, not exhaustive: `blank` takes any state name, and mapping to a
+# real one is the point for a text sensor whose blank means "no error".
+# custom_value lets the dropdown be typed into.
+BLANK_SUGGESTIONS = [STATE_UNKNOWN, DISPOSITION_IGNORE, NO_DATA]
 
 OPTIONS_SCHEMA = vol.Schema(
     {
@@ -38,6 +50,14 @@ OPTIONS_SCHEMA = vol.Schema(
                 options=UI_DEFAULTS,
                 mode=selector.SelectSelectorMode.DROPDOWN,
                 translation_key=CONF_DEFAULT,
+            )
+        ),
+        vol.Required(CONF_BLANK, default=STATE_UNKNOWN): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=BLANK_SUGGESTIONS,
+                mode=selector.SelectSelectorMode.DROPDOWN,
+                translation_key=CONF_BLANK,
+                custom_value=True,
             )
         ),
     }
@@ -59,6 +79,15 @@ class DiscreteStatisticsConfigFlow(ConfigFlow, domain=DOMAIN):
         """Pick an entity and how its states are recorded."""
         if user_input is None:
             return self.async_show_form(step_id="user", data_schema=USER_SCHEMA)
+
+        if problem := blank_error(user_input[CONF_BLANK]):
+            return self.async_show_form(
+                step_id="user",
+                data_schema=self.add_suggested_values_to_schema(
+                    USER_SCHEMA, user_input
+                ),
+                errors={CONF_BLANK: problem},
+            )
 
         entity_id = user_input[CONF_ENTITY_ID]
         # entity_id is identity: it builds every statistic ID, so it is the
@@ -82,7 +111,11 @@ class DiscreteStatisticsConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_create_entry(
             title=name or entity_id,
             data={CONF_ENTITY_ID: entity_id},
-            options={CONF_NAME: name, CONF_DEFAULT: user_input[CONF_DEFAULT]},
+            options={
+                CONF_NAME: name,
+                CONF_DEFAULT: user_input[CONF_DEFAULT],
+                CONF_BLANK: user_input[CONF_BLANK],
+            },
         )
 
     @staticmethod
@@ -103,16 +136,22 @@ class DiscreteStatisticsOptionsFlow(OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Show and save the editable options."""
+        errors: dict[str, str] = {}
         if user_input is not None:
-            return self.async_create_entry(
-                data={
-                    CONF_NAME: user_input.get(CONF_NAME) or None,
-                    CONF_DEFAULT: user_input[CONF_DEFAULT],
-                }
-            )
+            if problem := blank_error(user_input[CONF_BLANK]):
+                errors[CONF_BLANK] = problem
+            else:
+                return self.async_create_entry(
+                    data={
+                        CONF_NAME: user_input.get(CONF_NAME) or None,
+                        CONF_DEFAULT: user_input[CONF_DEFAULT],
+                        CONF_BLANK: user_input[CONF_BLANK],
+                    }
+                )
         return self.async_show_form(
             step_id="init",
             data_schema=self.add_suggested_values_to_schema(
-                OPTIONS_SCHEMA, self.config_entry.options
+                OPTIONS_SCHEMA, user_input or self.config_entry.options
             ),
+            errors=errors,
         )

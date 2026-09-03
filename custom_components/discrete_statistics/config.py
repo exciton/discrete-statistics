@@ -115,22 +115,36 @@ class EntityConfig:
         return None  # DEFAULT_IGNORE
 
 
-def _usable_blank(value: str) -> str:
-    """Validate the `blank:` setting.
+def blank_error(value: str) -> str | None:
+    """Return a translation key when `blank:` cannot take this, else None.
 
     `ignore` carries the previous state forward. Any other value is a state
     name to substitute. `record` is refused rather than quietly treated as a
     name: a blank state has nothing to record it under, which is the whole
     reason this setting exists.
+
+    Shared with the config flow, so YAML and the UI cannot disagree about
+    what is acceptable.
     """
     if value == DISPOSITION_IGNORE:
-        return value
+        return None
     if value == DISPOSITION_RECORD:
+        return "blank_record"
+    if is_blank(value):
+        return "blank_unusable"
+    return None
+
+
+def _usable_blank(value: str) -> str:
+    """Validate the `blank:` setting for YAML."""
+    if (problem := blank_error(value)) == "blank_record":
         raise vol.Invalid(
             f"{DISPOSITION_RECORD!r} is not a valid {CONF_BLANK!r} setting: "
             f"a blank state has no name to record it under"
         )
-    return _usable_state_name(value)
+    if problem is not None:
+        raise vol.Invalid(f"{value!r} does not produce a usable statistic ID")
+    return value
 
 
 def _usable_state_name(value: str) -> str:

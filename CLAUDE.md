@@ -62,6 +62,24 @@ Everything except `compiler` and `config_flow` is pure and testable without
 a `hass` instance. Keep it that way: if a change needs recorder access in a
 lower module, the design is drifting.
 
+States in a statistic's name are rendered through `async_translate_state`, so
+a door sensor reads `Open`/`Closed` as it does everywhere else. It answers with
+the raw state when no translation exists, which covers `no_data` and most enum
+sensors. `_async_warm_translations` loads the cache first, because that
+function is a callback over one and a cold cache would rename every statistic
+back and forth. The language is `hass.config.language` — instance-wide, while
+the frontend translates per user — so the stored name is in one language for
+everyone. That is a known limitation of putting a rendered string in metadata,
+not something to fix here.
+
+Statistic display names are resolved in `compiler._display_name`, not in
+`payload`: a typed name, then the entity registry, then the live state's
+`friendly_name`, then the entity ID. The registry comes before the state
+because attributes are stripped while an entity is unavailable — reading the
+state first would rename every statistic to the ID for the duration and back
+afterwards — and because it holds what the user asked for when the two
+disagree.
+
 `Compiler` is a class built from `(hass,)`; the entry points are its methods,
 not module-level functions.
 `Compiler.async_compile(cfg, start, end=None)` compiles `[start, end)` and is

@@ -11,7 +11,9 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.discrete_statistics.config import CONF_DEFAULT
+from homeassistant.const import STATE_UNKNOWN
+
+from custom_components.discrete_statistics.config import CONF_BLANK, CONF_DEFAULT
 from custom_components.discrete_statistics.const import (
     DEFAULT_IGNORE,
     DEFAULT_RECORD,
@@ -60,6 +62,7 @@ async def test_user_flow_creates_an_entry(recorder):
                 CONF_ENTITY_ID: ENTITY,
                 CONF_NAME: "Grid Status",
                 CONF_DEFAULT: DEFAULT_RECORD,
+                CONF_BLANK: STATE_UNKNOWN,
             },
         )
         await hass.async_block_till_done()
@@ -67,7 +70,11 @@ async def test_user_flow_creates_an_entry(recorder):
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == "Grid Status"
     assert result["data"] == {CONF_ENTITY_ID: ENTITY}
-    assert result["options"] == {CONF_NAME: "Grid Status", CONF_DEFAULT: DEFAULT_RECORD}
+    assert result["options"] == {
+        CONF_NAME: "Grid Status",
+        CONF_DEFAULT: DEFAULT_RECORD,
+        CONF_BLANK: STATE_UNKNOWN,
+    }
 
 
 async def test_flow_rejects_an_entity_already_in_an_entry(recorder):
@@ -82,7 +89,7 @@ async def test_flow_rejects_an_entity_already_in_an_entry(recorder):
     )
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
-        {CONF_ENTITY_ID: ENTITY, CONF_DEFAULT: DEFAULT_RECORD_KNOWN},
+        {CONF_ENTITY_ID: ENTITY, CONF_DEFAULT: DEFAULT_RECORD_KNOWN, CONF_BLANK: STATE_UNKNOWN},
     )
 
     assert result["type"] is FlowResultType.ABORT
@@ -101,7 +108,7 @@ async def test_flow_rejects_an_entity_configured_in_yaml(recorder):
     )
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
-        {CONF_ENTITY_ID: ENTITY, CONF_DEFAULT: DEFAULT_RECORD_KNOWN},
+        {CONF_ENTITY_ID: ENTITY, CONF_DEFAULT: DEFAULT_RECORD_KNOWN, CONF_BLANK: STATE_UNKNOWN},
     )
 
     assert result["type"] is FlowResultType.ABORT
@@ -120,7 +127,7 @@ async def test_flow_does_not_offer_ignore(recorder):
     )
     with pytest.raises(vol.Invalid):
         result["data_schema"](
-            {CONF_ENTITY_ID: ENTITY, CONF_DEFAULT: DEFAULT_IGNORE}
+            {CONF_ENTITY_ID: ENTITY, CONF_DEFAULT: DEFAULT_IGNORE, CONF_BLANK: STATE_UNKNOWN}
         )
 
 
@@ -151,11 +158,15 @@ async def test_options_flow_updates_and_recompiles(recorder):
         assert result["step_id"] == "init"
         result = await hass.config_entries.options.async_configure(
             result["flow_id"],
-            {CONF_NAME: "Grid", CONF_DEFAULT: DEFAULT_RECORD},
+            {CONF_NAME: "Grid", CONF_DEFAULT: DEFAULT_RECORD, CONF_BLANK: STATE_UNKNOWN},
         )
         await hass.async_block_till_done()
 
-    assert entry.options == {CONF_NAME: "Grid", CONF_DEFAULT: DEFAULT_RECORD}
+    assert entry.options == {
+        CONF_NAME: "Grid",
+        CONF_DEFAULT: DEFAULT_RECORD,
+        CONF_BLANK: STATE_UNKNOWN,
+    }
     # A disposition change reattributes every past hour, so the recompute
     # must start from the earliest retained state, not from the watermark.
     assert full_mock.called
@@ -195,11 +206,19 @@ async def test_options_flow_name_only_change_skips_recompile(recorder):
         result = await hass.config_entries.options.async_init(entry.entry_id)
         result = await hass.config_entries.options.async_configure(
             result["flow_id"],
-            {CONF_NAME: "Grid", CONF_DEFAULT: DEFAULT_RECORD_KNOWN},
+            {
+                CONF_NAME: "Grid",
+                CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
+                CONF_BLANK: STATE_UNKNOWN,
+            },
         )
         await hass.async_block_till_done()
 
-    assert entry.options == {CONF_NAME: "Grid", CONF_DEFAULT: DEFAULT_RECORD_KNOWN}
+    assert entry.options == {
+        CONF_NAME: "Grid",
+        CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
+        CONF_BLANK: STATE_UNKNOWN,
+    }
     assert not full_mock.called
     cfg = hass.data[DOMAIN]["entry_configs"][entry.entry_id]
     assert cfg.name == "Grid"
@@ -234,8 +253,89 @@ async def test_options_flow_keeps_title_in_sync_with_name(recorder):
         result = await hass.config_entries.options.async_init(entry.entry_id)
         result = await hass.config_entries.options.async_configure(
             result["flow_id"],
-            {CONF_NAME: "Grid", CONF_DEFAULT: DEFAULT_RECORD_KNOWN},
+            {
+                CONF_NAME: "Grid",
+                CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
+                CONF_BLANK: STATE_UNKNOWN,
+            },
         )
         await hass.async_block_till_done()
 
     assert entry.title == "Grid"
+
+
+async def test_the_blank_setting_is_carried_into_the_entry(recorder):
+    """A text sensor whose blank means "no error" needs a name, not a preset."""
+    hass = recorder
+    assert await async_setup_component(hass, DOMAIN, {})
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_ENTITY_ID: ENTITY,
+            CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
+            CONF_BLANK: "ok",
+        },
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["options"][CONF_BLANK] == "ok"
+
+
+@pytest.mark.parametrize(
+    ("value", "error"),
+    [("record", "blank_record"), ("", "blank_unusable"), ("!!!", "blank_unusable")],
+)
+async def test_an_unusable_blank_keeps_the_form_open(recorder, value, error):
+    """An error on the field, not an abort: the dialog is still fillable."""
+    hass = recorder
+    assert await async_setup_component(hass, DOMAIN, {})
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_ENTITY_ID: ENTITY, CONF_DEFAULT: DEFAULT_RECORD_KNOWN, CONF_BLANK: value},
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {CONF_BLANK: error}
+
+
+async def test_changing_blank_recompiles_the_whole_history(recorder):
+    """It reattributes every past state, exactly as `default` does."""
+    hass = recorder
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENTITY_ID: ENTITY},
+        options={
+            CONF_NAME: "Grid Status",
+            CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
+            CONF_BLANK: STATE_UNKNOWN,
+        },
+        unique_id=ENTITY,
+    )
+    entry.add_to_hass(hass)
+    assert await async_setup_component(hass, DOMAIN, {})
+    await hass.async_block_till_done()
+
+    with patch(
+        "custom_components.discrete_statistics.Compiler.async_compile",
+        return_value=0,
+    ) as full:
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {
+                CONF_NAME: "Grid Status",
+                CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
+                CONF_BLANK: "ok",
+            },
+        )
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert full.called
+    assert entry.options[CONF_BLANK] == "ok"

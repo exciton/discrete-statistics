@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import functools as ft
 import logging
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from datetime import datetime, timezone
 
 from homeassistant.components.recorder import get_instance
@@ -15,7 +15,13 @@ from homeassistant.components.recorder.statistics import (
     get_metadata,
     statistics_during_period,
 )
+from homeassistant.const import ATTR_DEVICE_CLASS, ATTR_FRIENDLY_NAME
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.translation import (
+    async_get_translations,
+    async_translate_state,
+)
 from homeassistant.util import dt as dt_util
 
 from .bucketer import bucket, hour_start
@@ -65,6 +71,80 @@ class Compiler:
 
     def __init__(self, hass: HomeAssistant) -> None:
         self._hass = hass
+
+    def _display_name(self, cfg: EntityConfig) -> str:
+        """What labels this entity's charts.
+
+        A name typed into the helper wins. Otherwise the entity's own name.
+
+        The registry is consulted at all because attributes are stripped while
+        an entity is unavailable, and falling back to the ID there would
+        rename every statistic and rename it back when it returned. It is
+        consulted *first* because it holds what the user asked for: the two
+        disagree only after a rename the integration has not yet republished.
+        """
+        if cfg.name:
+            return cfg.name
+        entry = er.async_get(self._hass).async_get(cfg.entity_id)
+        if entry is not None and (name := entry.name or entry.original_name):
+            return name
+        state = self._hass.states.get(cfg.entity_id)
+        if state is not None and (name := state.attributes.get(ATTR_FRIENDLY_NAME)):
+            return name
+        return cfg.entity_id
+
+    def _state_translator(self, cfg: EntityConfig) -> Callable[[str], str]:
+        """Render canonical states the way Home Assistant renders them.
+
+        A `binary_sensor` with `device_class: door` reads Open/Closed
+        everywhere else in the UI, so a chart legend saying on/off looks
+        wrong. `async_translate_state` returns the raw state when there is no
+        translation, which covers our own `no_data` and any enum sensor
+        without one.
+
+        LIMITATION: `hass.config.language` is instance-wide, while the
+        frontend translates per viewing user. The name is one stored string
+        with no viewer in scope, so everyone sees the instance language.
+        """
+        entry = er.async_get(self._hass).async_get(cfg.entity_id)
+        domain = cfg.entity_id.partition(".")[0]
+        device_class = entry.device_class or entry.original_device_class if entry else None
+        if device_class is None and (
+            state := self._hass.states.get(cfg.entity_id)
+        ) is not None:
+            device_class = state.attributes.get(ATTR_DEVICE_CLASS)
+
+        def translate(state: str) -> str:
+            return async_translate_state(
+                self._hass,
+                state,
+                domain,
+                entry.platform if entry else None,
+                entry.translation_key if entry else None,
+                device_class,
+            )
+
+        return translate
+
+    async def _async_warm_translations(self, cfg: EntityConfig) -> None:
+        """Load what `_state_translator` reads from the cache.
+
+        `async_translate_state` is a callback over a cache and answers with
+        the raw state when it is cold - so without this the same statistic
+        could be named `Closed` on one compile and `closed` on the next,
+        rewriting its metadata each time.
+
+        Not covered by a test: setting a component up loads its translations,
+        so any test that makes a translation resolvable has already warmed
+        the cache. This is reasoning, not evidence.
+        """
+        language = self._hass.config.language
+        await async_get_translations(self._hass, language, "entity_component")
+        entry = er.async_get(self._hass).async_get(cfg.entity_id)
+        if entry is not None and entry.translation_key:
+            await async_get_translations(
+                self._hass, language, "entity", {entry.platform}
+            )
 
     async def _async_existing(self, entity_id: str) -> dict[str, str]:
         """Return {statistic_id: stored name} for one entity's statistics.
@@ -120,6 +200,7 @@ class Compiler:
         if window_end <= window_start:
             return 0
 
+        await self._async_warm_translations(cfg)
         existing = await self._async_existing(cfg.entity_id)
         base_sums = await self._async_base_sums(existing, window_start)
 
@@ -194,7 +275,14 @@ class Compiler:
         # next window finds no row in the hour before it, restarts that
         # statistic's cumulative sum from zero and loses the running total.
         payloads = build_payloads(
-            cfg, buckets, window_start, window_end, base_sums, existing
+            cfg,
+            buckets,
+            window_start,
+            window_end,
+            base_sums,
+            existing,
+            display=self._display_name(cfg),
+            translate=self._state_translator(cfg),
         )
 
         next_sums = dict(base_sums)

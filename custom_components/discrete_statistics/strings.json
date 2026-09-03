@@ -7,18 +7,24 @@
         "data": {
           "entity_id": "Entity",
           "name": "Name",
-          "default": "States to record"
+          "default": "States to record",
+          "blank": "Blank states"
         },
         "data_description": {
           "entity_id": "The binary or enum entity to track. It cannot be changed later, because it determines the statistic IDs.",
-          "name": "Shown on charts. Defaults to the entity ID.",
-          "default": "Time in an ignored state is credited to the previous recorded state - it never creates a gap, and it does not count as a transition."
+          "name": "Shown on charts. Defaults to the entity's own name.",
+          "default": "Time in an ignored state is credited to the previous recorded state - it never creates a gap, and it does not count as a transition.",
+          "blank": "Some entities report a state with no letters or digits at all - empty, or punctuation. That has no name to record under, so this says what becomes of it. Type any state name to record it as that instead."
         }
       }
     },
     "abort": {
       "already_configured": "This entity already has discrete statistics.",
       "yaml_configured": "This entity is configured in configuration.yaml. Edit it there, or remove it from YAML first."
+    },
+    "error": {
+      "blank_record": "A blank state has no name to record it under. Choose Ignore, or type a state name to record it as.",
+      "blank_unusable": "That has no letters or digits either, so it cannot name a statistic. Choose Ignore, or type a state name."
     }
   },
   "options": {
@@ -27,13 +33,19 @@
         "title": "Discrete statistics options",
         "data": {
           "name": "Name",
-          "default": "States to record"
+          "default": "States to record",
+          "blank": "Blank states"
         },
         "data_description": {
-          "name": "Shown on charts. Defaults to the entity ID.",
-          "default": "Time in an ignored state is credited to the previous recorded state - it never creates a gap, and it does not count as a transition. Changing this recompiles the entity's whole history."
+          "name": "Shown on charts. Defaults to the entity's own name.",
+          "default": "Time in an ignored state is credited to the previous recorded state - it never creates a gap, and it does not count as a transition. Changing this recompiles the entity's whole history.",
+          "blank": "Some entities report a state with no letters or digits at all - empty, or punctuation. That has no name to record under, so this says what becomes of it. Type any state name to record it as that instead."
         }
       }
+    },
+    "error": {
+      "blank_record": "A blank state has no name to record it under. Choose Ignore, or type a state name to record it as.",
+      "blank_unusable": "That has no letters or digits either, so it cannot name a statistic. Choose Ignore, or type a state name."
     }
   },
   "selector": {
@@ -41,6 +53,13 @@
       "options": {
         "record": "Record every state, including unavailable and unknown",
         "record_known": "Record known states, ignoring unavailable and unknown"
+      }
+    },
+    "blank": {
+      "options": {
+        "unknown": "Record as unknown (ignored unless you record unknown states)",
+        "ignore": "Ignore - carry the previous state forward",
+        "no_data": "Record as a gap (no_data)"
       }
     }
   },

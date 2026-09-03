@@ -263,7 +263,13 @@ async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
     if title != entry.title:
         hass.config_entries.async_update_entry(entry, title=title)
 
-    if old_cfg is not None and cfg.default == old_cfg.default:
+    # `default` and `blank` both change how past states were attributed, so
+    # either one moving means the whole history must be recompiled. A name
+    # change reaches the display on the next ordinary run with no rewrite.
+    if old_cfg is not None and (cfg.default, cfg.blank) == (
+        old_cfg.default,
+        old_cfg.blank,
+    ):
         return
 
     entry.async_create_background_task(

@@ -34,7 +34,7 @@ def test_single_hour_single_state():
         cfg(), {("on", T0): (HOUR, 0)}, T0, T0 + HOUR, {}
     )
     metadata, rows = payloads[DURATION_ON]
-    assert metadata["name"] == "binary_sensor.grid_status: on (duration)"
+    assert metadata["name"] == "binary_sensor.grid_status: on (h)"
     assert metadata["source"] == "discrete_statistics"
     assert metadata["statistic_id"] == DURATION_ON
     assert metadata["has_sum"] is True
@@ -115,7 +115,7 @@ def test_configured_name_is_used():
         cfg(name="Grid Status"), {("on", T0): (HOUR, 0)}, T0, T0 + HOUR, {}
     )
     metadata, _ = payloads[DURATION_ON]
-    assert metadata["name"] == "Grid Status: on (duration)"
+    assert metadata["name"] == "Grid Status: on (h)"
 
 
 def test_start_times_are_utc_aware():
@@ -147,9 +147,9 @@ def test_no_data_count_is_not_emitted_even_when_already_known():
         T0 + HOUR,
         {},
         {
-            DURATION_NO_DATA: "x: no_data (duration)",
-            COUNT_NO_DATA: "x: no_data (count)",
-            DURATION_ON: "x: on (duration)",
+            DURATION_NO_DATA: "x: no_data (h)",
+            COUNT_NO_DATA: "x: no_data (#)",
+            DURATION_ON: "x: on (h)",
         },
     )
     assert DURATION_NO_DATA in payloads
@@ -204,7 +204,7 @@ def test_a_quiet_hour_gets_a_zero_mean_not_a_missing_one():
         T0,
         T0 + 2 * HOUR,
         {},
-        {DURATION_ON: "x: on (duration)", DURATION_OFF: "x: off (duration)"},
+        {DURATION_ON: "x: on (h)", DURATION_OFF: "x: off (h)"},
     )
     _, on_rows = payloads[DURATION_ON]
     assert [row["mean"] for row in on_rows] == [1.0, 0.0]
@@ -258,10 +258,10 @@ def test_a_rename_reaches_a_state_absent_from_the_window():
         T0,
         T0 + HOUR,
         {},
-        {DURATION_ON: "Old Name: on (duration)"},
+        {DURATION_ON: "Old Name: on (h)"},
     )
     metadata, _ = payloads[DURATION_ON]
-    assert metadata["name"] == "Grid Status: on (duration)"
+    assert metadata["name"] == "Grid Status: on (h)"
 
 
 def test_a_rename_survives_a_colon_in_the_old_display_name():
@@ -272,10 +272,10 @@ def test_a_rename_survives_a_colon_in_the_old_display_name():
         T0,
         T0 + HOUR,
         {},
-        {DURATION_ON: "Outbuilding: Grid Status: on (duration)"},
+        {DURATION_ON: "Outbuilding: Grid Status: on (h)"},
     )
     metadata, _ = payloads[DURATION_ON]
-    assert metadata["name"] == "Grid: on (duration)"
+    assert metadata["name"] == "Grid: on (h)"
 
 
 def test_an_unrecognisable_name_is_left_alone_rather_than_mangled():
@@ -301,7 +301,7 @@ def test_a_statistic_known_only_from_existing_is_carried_at_its_base():
         T0,
         T0 + 2 * HOUR,
         {DURATION_OFF: 7.5},
-        {DURATION_OFF: "x: off (duration)"},
+        {DURATION_OFF: "x: off (h)"},
     )
     _, off_rows = payloads[DURATION_OFF]
     assert [row["sum"] for row in off_rows] == [7.5, 7.5]

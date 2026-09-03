@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any, Mapping, NamedTuple
 
@@ -12,7 +13,9 @@ from .const import DOMAIN, HOUR, METRIC_COUNT, METRIC_DURATION, NO_DATA
 from .statistic_ids import build as build_statistic_id
 from .statistic_ids import parse, state_token
 
-_METRIC_LABEL = {METRIC_DURATION: "duration", METRIC_COUNT: "count"}
+# Short because the name sits in a chart legend, and because the duration
+# label matches the unit the statistic already carries.
+_METRIC_LABEL = {METRIC_DURATION: "h", METRIC_COUNT: "#"}
 _NO_DATA_TOKEN = state_token(NO_DATA)
 
 Payload = tuple[dict[str, Any], list[dict[str, Any]]]
@@ -26,14 +29,9 @@ class _Planned(NamedTuple):
     name: str
 
 
-def display_name(cfg: EntityConfig) -> str:
-    """What labels this entity's charts."""
-    return cfg.name or cfg.entity_id
-
-
-def compose_name(cfg: EntityConfig, state: str, metric: str) -> str:
+def compose_name(display: str, state: str, metric: str) -> str:
     """Build a statistic's display name from its parts."""
-    return f"{display_name(cfg)}: {state} ({_METRIC_LABEL[metric]})"
+    return f"{display}: {state} ({_METRIC_LABEL[metric]})"
 
 
 def rename(stored: str, display: str) -> str:
@@ -93,6 +91,8 @@ def build_payloads(
     window_end: float,
     base_sums: dict[str, float],
     existing: Mapping[str, str] | None = None,
+    display: str | None = None,
+    translate: Callable[[str], str] | None = None,
 ) -> dict[str, Payload]:
     """Return {statistic_id: (metadata, rows)} with cumulative sums.
 
@@ -107,6 +107,13 @@ def build_payloads(
     it, so the count would be a permanent zero written densely forever.
     """
     existing = existing or {}
+    # The caller resolves this: it is the entity's own name where there is
+    # one, which needs a `hass` this module deliberately does not have.
+    display = display or cfg.name or cfg.entity_id
+    # Renders a state the way Home Assistant would. Resolved by the caller,
+    # which has the `hass` and the entity's device class; identity here so
+    # this module stays testable on its own.
+    translate = translate or (lambda state: state)
     hours: list[float] = []
     hour = window_start
     while hour < window_end:
@@ -114,7 +121,6 @@ def build_payloads(
         hour += HOUR
 
     folded, labels = _fold(buckets)
-    display = display_name(cfg)
 
     planned: dict[str, _Planned] = {}
 
@@ -124,7 +130,7 @@ def build_payloads(
                 continue
             statistic_id = build_statistic_id(cfg.entity_id, state, metric)
             planned[statistic_id] = _Planned(
-                token, metric, compose_name(cfg, state, metric)
+                token, metric, compose_name(display, translate(state), metric)
             )
 
     for statistic_id, stored_name in existing.items():
