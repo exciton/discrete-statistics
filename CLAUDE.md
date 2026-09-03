@@ -57,6 +57,7 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
             compiler        the only module that touches the recorder
                 │
             __init__        setup, hourly schedule, recompute service
+            button          one entity per config entry: press to recompute
 ```
 
 Everything except `compiler`, `config_flow` and `naming` is pure and testable
@@ -80,6 +81,12 @@ Helpers list, and the notifications — those disagreeing is what the entity ID
 leaking into a title looked like. The registry comes before the state because
 attributes are stripped while an entity is unavailable, and because it holds
 what the user asked for when the two disagree.
+
+The `button` platform exists as much for the Helpers list as for the button:
+a config entry with no entity of its own is drawn with a red exclamation.
+Its entity is attached to a `DeviceEntryType.SERVICE` device named after the
+entry, because `has_entity_name` without a device leaves every helper's
+button called just "Recompute" and fighting over `button.recompute`.
 
 `Compiler` is a class built from `(hass,)`; the entry points are its methods,
 not module-level functions.
