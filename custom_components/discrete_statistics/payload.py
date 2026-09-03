@@ -9,14 +9,13 @@ from typing import Any, Mapping, NamedTuple
 from homeassistant.components.recorder.models import StatisticMeanType
 
 from .config import EntityConfig
-from .const import DOMAIN, HOUR, METRIC_COUNT, METRIC_DURATION, NO_DATA
+from .const import DOMAIN, HOUR, METRIC_COUNT, METRIC_DURATION
 from .statistic_ids import build as build_statistic_id
 from .statistic_ids import parse, state_token
 
 # Short because the name sits in a chart legend, and because the duration
 # label matches the unit the statistic already carries.
 _METRIC_LABEL = {METRIC_DURATION: "h", METRIC_COUNT: "#"}
-_NO_DATA_TOKEN = state_token(NO_DATA)
 
 Payload = tuple[dict[str, Any], list[dict[str, Any]]]
 
@@ -111,9 +110,6 @@ def build_payloads(
     sum forward at a zero hourly value. A statistic left out of an hour loses
     its cumulative base on the next window - the caller reads that base from
     the preceding hour, finds nothing, and restarts from zero.
-
-    NO_DATA is the one state with no `count`: nothing ever transitions into
-    it, so the count would be a permanent zero written densely forever.
     """
     existing = existing or {}
     # The caller resolves this: it is the entity's own name where there is
@@ -135,8 +131,6 @@ def build_payloads(
 
     for token, state in labels.items():
         for metric in (METRIC_DURATION, METRIC_COUNT):
-            if token == _NO_DATA_TOKEN and metric == METRIC_COUNT:
-                continue
             statistic_id = build_statistic_id(cfg.entity_id, state, metric)
             planned[statistic_id] = _Planned(
                 token, metric, compose_name(display, translate(state), metric)
@@ -148,8 +142,6 @@ def build_payloads(
         if (parts := parse(statistic_id)) is None:
             continue
         _, token, metric = parts
-        if token == _NO_DATA_TOKEN and metric == METRIC_COUNT:
-            continue
         # Not seen this window: the readable state survives only in the
         # stored name, so swap its display half rather than rebuilding it.
         planned[statistic_id] = _Planned(

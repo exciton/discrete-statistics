@@ -78,11 +78,6 @@ behaves exactly like a real `unknown` — ignored by `record_known`, recorded by
 `record`. `blank: ignore` is different from that: it ignores blanks only, and
 leaves genuine `unknown` states alone.
 
-`no_data` is a legal answer for both `blank:` and a `states:` target
-— that is how you say "I cannot interpret this state, chart it as a gap". A
-device cannot reach that band on its own, though: a sensor that literally
-reports the string `no_data` is ignored unless your config names it.
-
 A blank state often carries real meaning, so an entry in `states:` beats the
 substitution. A text sensor that reports `""` for "no error" wants:
 
@@ -116,8 +111,6 @@ discrete_statistics:
       idle: record
       cool: cooling
 ```
-
-`no_data` is reserved and cannot be used as a state name or map target.
 
 ## Configuring from the UI
 
@@ -191,17 +184,7 @@ the quietest. Every hour has a row — including the ones in which nothing
 happened — so the average is over the whole period rather than only its
 active hours.
 
-### The `no_data` state
-
-`no_data` is a state your configuration can choose — as `blank:` or as a
-`states:` target — for readings you cannot interpret and would rather see
-charted as a gap than folded into a real state. The component never picks
-it by itself: an hour it cannot open in a known state is left uncompiled
-instead (see below).
-
-On a chart it is labelled **No Data**. It has a `_duration` statistic only:
-it measures time nobody can account for, and counting those spans would
-tell you nothing.
+### Blank states
 
 A state that cannot be recorded at all is treated as `unknown` rather than as
 a gap: an empty one, which Home Assistant produces when an entity is removed
@@ -250,7 +233,6 @@ stat_types:
 entities:
   - discrete_statistics:binary_sensor_grid_status_on_duration
   - discrete_statistics:binary_sensor_grid_status_off_duration
-  - discrete_statistics:binary_sensor_grid_status_nodata_duration
 ```
 
 Weekly heat pump behaviour over three months:

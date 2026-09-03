@@ -17,11 +17,8 @@ from .const import (
     DISPOSITION_IGNORE,
     DISPOSITION_RECORD,
     DOMAIN,
-    NO_DATA,
     UNKNOWN_STATES,
 )
-
-_NO_DATA_TOKEN = state_token(NO_DATA)
 
 CONF_DEFAULT = "default"
 CONF_STATES = "states"
@@ -60,26 +57,14 @@ class EntityConfig:
         carry real meaning: for a text sensor reporting an error, it is
         usually the most important state there is, and only the config knows
         that.
-
-        NO_DATA may be reached only on purpose. A device that happens to
-        report the string `no_data` must not slip into the band reserved for
-        "we could not tell", because that would make it and "the device said
-        this" the same reading; but an operator who writes `no_data` as a
-        target is asking for exactly that, and is allowed it. The test is who
-        asked, not what the value is.
         """
-        chosen = raw_state in self.states
-        if not chosen and is_blank(raw_state):
+        if raw_state not in self.states and is_blank(raw_state):
             if self.blank == DISPOSITION_IGNORE:
                 return None
-            # The operator picked the substitute, so this counts as chosen.
             raw_state = self.blank
-            chosen = True
 
         canonical = self._resolve(raw_state)
         if canonical is None:
-            return None
-        if not chosen and state_token(canonical) == _NO_DATA_TOKEN:
             return None
         if is_blank(canonical):
             # Named explicitly - `"": record` - but still not an ID.
@@ -87,7 +72,7 @@ class EntityConfig:
         return canonical
 
     def _resolve(self, raw_state: str) -> str | None:
-        """Apply the disposition table and the default, without the guard."""
+        """Apply the disposition table and the default."""
         if (disposition := self.states.get(raw_state)) is not None:
             if disposition == DISPOSITION_IGNORE:
                 return None
@@ -148,14 +133,7 @@ def _usable_blank(value: str) -> str:
 
 
 def _usable_state_name(value: str) -> str:
-    """Reject a name that cannot itself become a statistic.
-
-    NO_DATA is allowed: naming it is how an operator says "I cannot
-    interpret this state, chart it as a gap". What stays forbidden is a
-    device reaching the band on its own, which `resolve` enforces.
-    """
-    if state_token(value) == _NO_DATA_TOKEN:
-        return value
+    """Reject a name that cannot itself become a statistic."""
     if is_blank(value):
         raise vol.Invalid(
             f"{value!r} does not produce a usable statistic ID"
@@ -168,7 +146,7 @@ def _usable_map_targets(states: dict[str, str]) -> dict[str, str]:
 
     Only a target becomes a canonical state, and only those reach an ID.
     Keys are raw recorder values and stay unrestricted, or an entity that
-    genuinely reports `No Data` could not be mapped anywhere.
+    genuinely reports a blank could not be mapped anywhere.
     """
     for value in states.values():
         if value not in (DISPOSITION_RECORD, DISPOSITION_IGNORE):

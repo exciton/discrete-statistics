@@ -23,18 +23,14 @@ from homeassistant.helpers.translation import (
     async_translate_state,
 )
 
-from .const import NO_DATA
-
 # States `async_translate_state` cannot render. It returns `unavailable` and
 # `unknown` untouched (translation.py:469) because the frontend renders those
-# from its own `state.default` strings, which the backend never sees; and
-# `no_data` is ours, so nothing has a translation for it. Without these a
-# legend reads `unavailable` and `no_data` beside a rendered `Closed`.
-# English only, and only for the states nothing else can name.
+# from its own `state.default` strings, which the backend never sees. Without
+# these a legend reads `unavailable` beside a rendered `Closed`. English
+# only, and only for the states nothing else can name.
 _UNRENDERED_STATES = {
     STATE_UNAVAILABLE: "Unavailable",
     STATE_UNKNOWN: "Unknown",
-    NO_DATA: "No Data",
 }
 
 
@@ -78,8 +74,7 @@ def state_translator(hass: HomeAssistant, entity_id: str) -> Callable[[str], str
     A `binary_sensor` with `device_class: door` reads Open/Closed everywhere
     else in the UI, so a chart legend saying on/off looks wrong.
     `async_translate_state` returns the raw state when there is no
-    translation, which covers our own `no_data` and any enum sensor without
-    one.
+    translation, which covers any enum sensor without one.
 
     LIMITATION: `hass.config.language` is instance-wide, while the frontend
     translates per viewing user. The name is one stored string with no viewer

@@ -66,11 +66,11 @@ lower module, the design is drifting.
 States in a statistic's name are rendered by `naming.state_translator`,
 which wraps `async_translate_state`, so
 a door sensor reads `Open`/`Closed` as it does everywhere else. It answers with
-the raw state when no translation exists, which covers `no_data` and most enum
-sensors. `_UNRENDERED_STATES` covers the three it cannot name: `unavailable` and
+the raw state when no translation exists, which covers most enum sensors.
+`_UNRENDERED_STATES` covers the two it cannot name: `unavailable` and
 `unknown`, which it returns untouched (`translation.py:469`) because the
 frontend renders those from its own `state.default` strings that the backend
-never sees, and `no_data`, which is ours. English only.
+never sees. English only.
 `naming.async_warm_state_translations` loads the cache first, because that
 function is a callback over one and a cold cache would rename every statistic
 back and forth. Both live in `naming` rather than `compiler`: they are the
@@ -307,24 +307,6 @@ would compile nothing at all. Refusing it
 otherwise is equally load-bearing — without that test a backfill of old hours
 would be handed whatever the entity happens to be doing today.
 
-**`no_data` is reserved, and only a config reaches it.** The compiler never
-attributes a span to it: an hour it cannot open in a known state is not
-compiled (below), so the band would only ever have recorded our own
-ignorance, and by density recorded it forever. A config names it, as
-`blank: no_data` or as a `states` target, which is how an operator says "I
-cannot interpret this, chart it as a gap" — that is its whole source.
-
-What stays forbidden is a device reaching the band *by itself*: a raw state
-that happens to be called `no_data` resolves to nothing instead, or the band
-would stop distinguishing "the device said this" from "we could not tell".
-`resolve` enforces that with the `chosen` flag — the test is who asked, not
-what the value is.
-
-Either way it has a duration statistic and no count. Transitions into it do
-exist once a config routes states there, so the absence is now a deliberate
-choice rather than a structural certainty: it is a band for spans we cannot
-describe, and counting them would measure our own ignorance.
-
 **A blank state is substituted, before anything else looks at it.** A blank
 state is one with no letters or digits, so it has no name a statistic could
 carry. Judged on the input rather than the token: `slugify` answers the literal
@@ -340,27 +322,23 @@ it used to be ignored. An explicit `states` entry for the raw value wins over
 the substitution — blank is the most meaningful state a text error sensor has,
 and only the config knows that. The recorder stores NULL when an entity is removed
 or reloaded, and the history API hands that back as `""` — which tokenises to
-nothing and would leave a double underscore. It is not an absence of data,
-which is what `no_data` means; it is a state we cannot name. Letting it reach
+nothing and would leave a double underscore. It is a state we cannot name,
+not an absence of data. Letting it reach
 `build` instead raises `InvalidStatisticIdError`, and that aborted the whole
 entity's compile — permanently, because the watermark never advanced past the
 chunk containing it.
 
 **A window no source can open is moved, not filled.** `_open_window`
 advances `window_start` to the first whole hour that begins in a recordable
-transition, and the hours passed over are not written. It used to fill them
-with `no_data` unless nothing preceded the window, on the grounds that a
-window beginning mid-series must never move: the skipped hours would have no
-rows, and the next run would find no base in the hour before its window and
-restart every sum at zero. Two things changed. The hours passed over are
-either already compiled — a recompute that reached back to an hour the
-recorder can no longer open, which keeps the rows written when it could —
-or a genuine hole, downtime longer than the horizon that no row vouches
-for; and a hole is now what a chart should show there, not a band recording
-our own ignorance. And the base is read from the newest row *before* the
-window, not strictly the hour before it (`_async_base`), so a sum carries
-across a hole unchanged: time we cannot describe is time in no state, and
-`change` over the hole is zero. `last_reset` is no help here —
+transition, and the hours passed over are not written. They are either
+already compiled — a recompute that reached back to an hour the recorder
+can no longer open, which keeps the rows written when it could — or a
+genuine hole, downtime longer than the horizon that no row vouches for; and
+a hole is what a chart should show there, not a band recording our own
+ignorance. The base is read from the newest row *before* the window, not
+strictly the hour before it (`_async_base`), so a sum carries across a hole
+unchanged: time we cannot describe is time in no state, and `change` over
+the hole is zero. `last_reset` is no help here —
 `_augment_result_with_change` (`recorder/statistics.py:2036`) computes
 `change` as `sum - prev_sum` and never reads it; a series restarted at zero
 would chart the drop.

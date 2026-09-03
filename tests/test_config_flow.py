@@ -121,7 +121,7 @@ async def test_flow_rejects_an_entity_configured_in_yaml(recorder):
 
 async def test_flow_does_not_offer_ignore(recorder):
     # `ignore` with no per-state mapping makes every state resolve to None,
-    # so the entity's whole timeline becomes no_data. It returns to the
+    # so the entity never compiles an hour. It returns to the
     # dropdown with the state-mapping screen. YAML still accepts it.
     hass = recorder
     assert await async_setup_component(hass, DOMAIN, {})

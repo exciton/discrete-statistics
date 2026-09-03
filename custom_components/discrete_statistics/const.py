@@ -4,11 +4,6 @@ DOMAIN = "discrete_statistics"
 
 HOUR = 3600.0
 
-# Reserved canonical state for spans the compiler cannot attribute to a
-# real state: before an entity's first known state, or across a gap whose
-# source rows have been purged.
-NO_DATA = "no_data"
-
 METRIC_DURATION = "duration"
 METRIC_COUNT = "count"
 

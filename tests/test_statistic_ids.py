@@ -38,7 +38,7 @@ def test_count_metric():
     ("entity_id", "state"),
     [
         ("sensor.heat_pump_hvac_action", "heating"),
-        ("binary_sensor.grid_status", "no_data"),
+        ("binary_sensor.grid_status", "off"),
         ("sensor.a", "b"),
         ("climate.living_room", "Heat Cool"),
         ("sensor.x", "état"),
@@ -79,8 +79,8 @@ def test_the_state_is_always_one_token():
         == "discrete_statistics:climate_zone_heatcool_count"
     )
     assert (
-        build("binary_sensor.grid_status", "no_data", METRIC_DURATION)
-        == "discrete_statistics:binary_sensor_grid_status_nodata_duration"
+        build("binary_sensor.grid_status", "Off", METRIC_DURATION)
+        == "discrete_statistics:binary_sensor_grid_status_off_duration"
     )
 
 

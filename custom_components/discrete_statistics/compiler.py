@@ -361,9 +361,7 @@ class Compiler:
         The window may open later than asked. When no source can say what
         state it opened in, the hours until the first one that begins in a
         known state are not compiled at all: they keep whatever rows they
-        have, or none. Writing `no_data` there would not describe the
-        entity - it would record our own ignorance, and by density keep
-        recording it forever.
+        have, or none.
         """
         carried, transitions = canonicalise(cfg, rows, window_start)
 

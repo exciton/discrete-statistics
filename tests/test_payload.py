@@ -7,7 +7,7 @@ import pytest
 from homeassistant.components.recorder.models import StatisticMeanType
 
 from custom_components.discrete_statistics.config import EntityConfig
-from custom_components.discrete_statistics.const import HOUR, NO_DATA
+from custom_components.discrete_statistics.const import HOUR
 from custom_components.discrete_statistics.payload import build_payloads, rename
 
 T0 = 1767225600.0
@@ -25,8 +25,6 @@ def cfg(name=None):
 DURATION_ON = "discrete_statistics:binary_sensor_grid_status_on_duration"
 COUNT_ON = "discrete_statistics:binary_sensor_grid_status_on_count"
 DURATION_OFF = "discrete_statistics:binary_sensor_grid_status_off_duration"
-DURATION_NO_DATA = "discrete_statistics:binary_sensor_grid_status_nodata_duration"
-COUNT_NO_DATA = "discrete_statistics:binary_sensor_grid_status_nodata_count"
 
 
 def test_single_hour_single_state():
@@ -122,38 +120,6 @@ def test_start_times_are_utc_aware():
     payloads = build_payloads(cfg(), {("on", T0): (HOUR, 0)}, T0, T0 + HOUR, {})
     _, rows = payloads[DURATION_ON]
     assert rows[0]["start"].tzinfo is not None
-
-
-def test_no_data_gets_a_duration_but_no_count():
-    """Nothing transitions INTO no_data, so its count is structurally zero."""
-    payloads = build_payloads(
-        cfg(), {(NO_DATA, T0): (HOUR, 0), ("on", T0 + HOUR): (HOUR, 1)},
-        T0,
-        T0 + 2 * HOUR,
-        {},
-    )
-    assert DURATION_NO_DATA in payloads
-    assert COUNT_NO_DATA not in payloads
-    # Every other state keeps both metrics.
-    assert COUNT_ON in payloads
-
-
-def test_no_data_count_is_not_emitted_even_when_already_known():
-    """An existing no_data count must not be kept alive by density."""
-    payloads = build_payloads(
-        cfg(),
-        {},
-        T0,
-        T0 + HOUR,
-        {},
-        {
-            DURATION_NO_DATA: "x: no_data (h)",
-            COUNT_NO_DATA: "x: no_data (#)",
-            DURATION_ON: "x: on (h)",
-        },
-    )
-    assert DURATION_NO_DATA in payloads
-    assert COUNT_NO_DATA not in payloads
 
 
 def test_metadata_declares_an_arithmetic_mean_alongside_the_sum():

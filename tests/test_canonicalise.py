@@ -101,11 +101,3 @@ def test_leading_ignored_rows_leave_carried_state_none():
     assert transitions == [(T0 + 100.0, "on")]
 
 
-def test_source_state_named_no_data_is_ignored():
-    carried, transitions = canonicalise(
-        cfg(default="record"),
-        [FakeState("on", T0 - 500.0), FakeState("no_data", T0 + 100.0)],
-        T0,
-    )
-    assert carried == "on"
-    assert transitions == []

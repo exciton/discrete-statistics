@@ -60,8 +60,7 @@
     "blank": {
       "options": {
         "unknown": "Record as unknown (ignored unless you record unknown states)",
-        "ignore": "Ignore - carry the previous state forward",
-        "no_data": "Record as a gap (no_data)"
+        "ignore": "Ignore - carry the previous state forward"
       }
     }
   },

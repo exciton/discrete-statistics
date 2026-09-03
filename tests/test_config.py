@@ -112,11 +112,6 @@ def test_map_target_is_recorded_even_under_default_ignore():
     assert cfg.resolve("cooling") == "cooling"
 
 
-def test_source_state_no_data_is_ignored_at_runtime():
-    [cfg] = parse([{"entity_id": "sensor.x", "default": "record"}])
-    assert cfg.resolve("no_data") is None
-
-
 def test_invalid_default_rejected():
     with pytest.raises(vol.Invalid):
         parse([{"entity_id": "sensor.x", "default": "nonsense"}])
@@ -241,25 +236,6 @@ def test_entity_config_from_entry_has_no_state_map():
     assert cfg.states == {}
 
 
-def test_a_state_that_tokenises_to_no_data_can_be_mapped_away():
-    """The reserved band must not be a dead end.
-
-    A raw `No Data` would reach the compiler's own statistic ID if recorded
-    under its own name, so it is ignored by default - but mapping it
-    elsewhere is safe and must be allowed, because otherwise an entity that
-    reports it has no way to record that state at all.
-    """
-    cfg = parse([{"entity_id": "sensor.x", "states": {"No Data": "missing"}}])[0]
-    assert cfg.resolve("No Data") == "missing"
-
-
-def test_an_unmapped_state_tokenising_to_no_data_is_still_ignored():
-    cfg = parse([{"entity_id": "sensor.x", "default": "record"}])[0]
-    assert cfg.resolve("No Data") is None
-    assert cfg.resolve("no_data") is None
-    assert cfg.resolve("nodata") is None
-
-
 def test_an_empty_state_is_treated_as_unknown():
     """The recorder stores NULL when an entity is removed or reloaded.
 
@@ -374,37 +350,6 @@ def test_an_explicitly_recorded_blank_falls_back_rather_than_crashing():
         }]
     )[0]
     assert cfg.resolve("") == "unknown"
-
-
-def test_no_data_may_be_chosen_deliberately():
-    """The band means "we cannot say", which is what a blank state IS.
-
-    Allowed because the operator asked for it, not because the value is
-    special. Blank really does mean "broken" on some sensors.
-    """
-    cfg = parse([{"entity_id": "sensor.x", "blank": "no_data"}])[0]
-    assert cfg.resolve("") == "no_data"
-    assert cfg.resolve("!!!") == "no_data"
-
-
-def test_no_data_may_be_a_map_target():
-    """Same instruction by a different route."""
-    cfg = parse([{"entity_id": "sensor.x", "states": {"garbage": "no_data"}}])[0]
-    assert cfg.resolve("garbage") == "no_data"
-
-
-def test_a_device_still_cannot_reach_the_band_on_its_own():
-    """The rule is about who asked, not what the value is."""
-    cfg = parse([{"entity_id": "sensor.x", "default": "record"}])[0]
-    assert cfg.resolve("no_data") is None
-    assert cfg.resolve("No Data") is None
-    assert cfg.resolve("nodata") is None
-
-
-def test_an_explicit_record_of_a_no_data_named_state_is_honoured():
-    """`states` naming it IS the operator asking."""
-    cfg = parse([{"entity_id": "sensor.x", "states": {"no_data": "record"}}])[0]
-    assert cfg.resolve("no_data") == "no_data"
 
 
 def test_a_state_spelling_unknown_resolves_to_unknown():

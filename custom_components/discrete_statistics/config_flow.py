@@ -33,7 +33,6 @@ from .const import (
     DEFAULT_RECORD_KNOWN,
     DISPOSITION_IGNORE,
     DOMAIN,
-    NO_DATA,
 )
 from homeassistant.const import STATE_UNKNOWN
 
@@ -46,7 +45,7 @@ UI_DEFAULTS = [DEFAULT_RECORD, DEFAULT_RECORD_KNOWN]
 # Offered, not exhaustive: `blank` takes any state name, and mapping to a
 # real one is the point for a text sensor whose blank means "no error".
 # custom_value lets the dropdown be typed into.
-BLANK_SUGGESTIONS = [STATE_UNKNOWN, DISPOSITION_IGNORE, NO_DATA]
+BLANK_SUGGESTIONS = [STATE_UNKNOWN, DISPOSITION_IGNORE]
 
 OPTIONS_SCHEMA = vol.Schema(
     {
