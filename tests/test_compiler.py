@@ -1371,3 +1371,87 @@ async def test_no_data_is_rendered_too(recorder, freezer):
     await compiler.async_compile(cfg(), start.timestamp())
 
     assert await stored_name(hass, DURATION_NO_DATA) == "Grid Status: No Data (h)"
+
+
+async def test_a_state_older_than_the_purge_horizon_is_still_carried(
+    recorder, freezer
+):
+    """The case that matters most once purge_keep_days is short.
+
+    An entity that sits in one state for longer than the horizon has no rows
+    left at all - purge deletes every row past it, with no per-entity
+    reprieve - so the whole span would read no_data. The state machine still
+    knows, and knows since when.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    # Everything the recorder held about it is gone. Purge deletes rows
+    # older than *now*, so the clock has to have moved past them first.
+    freezer.move_to(start + timedelta(hours=4))
+    await hass.services.async_call(
+        "recorder", "purge", {"keep_days": 0}, blocking=True
+    )
+    await get_instance(hass).async_block_till_done()
+    assert await Compiler(hass)._async_earliest_state_ts(ENTITY) is None
+
+    await Compiler(hass).async_compile(
+        cfg(), (start + timedelta(hours=1)).timestamp()
+    )
+
+    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=4))
+    assert on == [1.0, 2.0, 3.0]
+    assert DURATION_NO_DATA not in await existing(hass)
+
+
+async def test_a_state_that_began_inside_the_window_is_not_carried(
+    recorder, freezer
+):
+    """It says nothing about how the window opened.
+
+    This is also what stops a backfill of old hours being handed whatever
+    the entity happens to be doing today.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start + timedelta(hours=2))
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+    freezer.move_to(start + timedelta(hours=4))
+    await hass.services.async_call(
+        "recorder", "purge", {"keep_days": 0}, blocking=True
+    )
+    await get_instance(hass).async_block_till_done()
+
+    compiler = Compiler(hass)
+    # last_changed is hour 2, the window opens at hour 0.
+    assert compiler._carried_from_state_machine(cfg(), start.timestamp()) is None
+    # And at hour 3 it is in effect, so it is carried.
+    assert (
+        compiler._carried_from_state_machine(
+            cfg(), (start + timedelta(hours=3)).timestamp()
+        )
+        == "on"
+    )
+
+
+async def test_an_ignored_live_state_is_not_carried(recorder, freezer):
+    """`unavailable` under record_known is still nothing to carry."""
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "unavailable")
+    await hass.async_block_till_done()
+
+    compiler = Compiler(hass)
+    assert (
+        compiler._carried_from_state_machine(
+            cfg(), (start + timedelta(hours=2)).timestamp()
+        )
+        is None
+    )

@@ -230,6 +230,17 @@ rebuilt from the ID — the ID holds only the token — so a rename would
 otherwise never reach a state the entity has not been in for months, and
 neither would a change to `mean_type` or the units.
 
+**A state older than the purge horizon is still known.** Purge deletes every
+row past `purge_keep_days` with no per-entity reprieve (`queries.py:281`), so
+an entity that sits in one state longer than that vanishes from history —
+and the quieter the entity, the likelier it is, which is the wrong way round
+for this integration. `_carried_from_state_machine` asks the state machine,
+which still holds both the state and when it last changed.
+`last_changed <= window_start` is what makes it sound rather than a guess: it
+proves the state was already in effect when the window opened. Refusing it
+otherwise is equally load-bearing — without that test a backfill of old hours
+would be handed whatever the entity happens to be doing today.
+
 **`no_data` is reserved, but it can be chosen.** It is what the compiler
 attributes a span to when it cannot determine a real state — before an entity's
 first known state, or across a gap whose source rows were purged. A config may

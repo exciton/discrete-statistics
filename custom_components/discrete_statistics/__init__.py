@@ -33,7 +33,7 @@ from .config import CONFIG_SCHEMA, EntityConfig, entity_config_from_entry, is_co
 # validate the YAML block, so it must stay imported even though nothing here
 # calls it directly.
 from .const import BACKLOG_THRESHOLD, DOMAIN
-from .naming import describe, display_name
+from .naming import describe
 
 _LOGGER = logging.getLogger(__name__)
 

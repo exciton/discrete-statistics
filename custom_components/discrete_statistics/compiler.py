@@ -306,6 +306,31 @@ class Compiler:
 
         return next_sums, int((window_end - window_start) / HOUR), next_existing
 
+    def _carried_from_state_machine(
+        self, cfg: EntityConfig, window_start: float
+    ) -> str | None:
+        """The live state, when it demonstrably held across the window.
+
+        The recorder can hold nothing at all for an entity that has not
+        changed within `purge_keep_days`: purge deletes every row past the
+        horizon with no per-entity reprieve (`queries.py:281`). An entity
+        that sits in one state longer than the horizon therefore disappears
+        from history entirely, and the whole span would be attributed to
+        no_data - most visibly for the quiet entities this integration is
+        most useful for.
+
+        The state machine still knows, and `last_changed` is what makes this
+        sound rather than a guess: at or before `window_start` proves the
+        state was already in effect then. After it, the state began inside
+        the window and says nothing about how the window opened, so it is
+        refused - which is also what keeps a backfill of old hours from
+        being handed today's state.
+        """
+        state = self._hass.states.get(cfg.entity_id)
+        if state is None or state.last_changed.timestamp() > window_start:
+            return None
+        return cfg.resolve(state.state)
+
     async def _async_open_window(
         self,
         cfg: EntityConfig,
@@ -321,6 +346,10 @@ class Compiler:
         nothing to compile.
         """
         carried, transitions = canonicalise(cfg, rows, window_start)
+
+        if carried is None:
+            # Free, and authoritative when it applies, so before the queries.
+            carried = self._carried_from_state_machine(cfg, window_start)
 
         if carried is None and any(
             row.last_changed_timestamp < window_start for row in rows
