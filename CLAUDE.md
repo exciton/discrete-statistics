@@ -95,13 +95,16 @@ leaking into a title looked like. The registry comes before the state because
 attributes are stripped while an entity is unavailable, and because it holds
 what the user asked for when the two disagree.
 
-`integration_type` is `service`. It only reaches one thing: the heading over
-the entries on the integration's page, which the frontend picks from a fixed
-table keyed on the type (`ha-config-integration-page.ts:844`) — `Services`,
-`Hubs`, `Devices`, `Helpers`, `Hardware`, or `Integration entries` when there
-is no type. There is no custom string; `hass.localize` is called on a frontend
-key, so `strings.json` cannot reach it. `service` is the least wrong of the
-six for a thing that computes rather than connects.
+No `integration_type` in the manifest, deliberately. It reaches one thing:
+the heading over the entries on the integration's page, which the frontend
+picks from a fixed table keyed on the type
+(`ha-config-integration-page.ts:844`) — `Services`, `Hubs`, `Devices`,
+`Helpers`, `Hardware`, or `Integration entries` with no type. There is no
+custom string; `hass.localize` runs on a frontend key, so `strings.json`
+cannot reach it. None of the six describes something that computes over
+other entities, so the generic heading is the honest one. Only `helper` and
+`entity` are special-cased anywhere else in the frontend, so the key costs
+nothing else either way.
 
 **The integration provides no entities.** It was `integration_type: helper`
 once, which listed every entry in the Helpers panel — where
