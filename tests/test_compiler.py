@@ -402,9 +402,10 @@ async def test_a_hole_after_the_watermark_is_still_filled(recorder, freezer):
     """The clamp stops at the hour after the watermark.
 
     Downtime longer than the purge horizon leaves hours that were never
-    compiled between the watermark and the recorder's evidence. They must be
-    filled, whatever they are filled with: leaving them empty means the next
-    chunk finds no base in the hour before it and restarts every sum at zero.
+    compiled between the watermark and the recorder's evidence. Opening at
+    the hour after the watermark puts the watermark hour where the carry
+    chain reads it, and here it was uniform - so our own last row vouches
+    for the state, and the hole is filled with it rather than left open.
     """
     hass = recorder
     start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
@@ -438,6 +439,143 @@ async def test_a_hole_after_the_watermark_is_still_filled(recorder, freezer):
     assert on[:2] == [0.5, 0.5]
     assert len(on) == len(off) == 7
     assert on == sorted(on) and off == sorted(off)
+
+
+async def test_a_hole_nothing_can_vouch_for_is_left_open(recorder, freezer):
+    """Downtime past the horizon, and the watermark hour was not uniform.
+
+    No source can say what state the entity held when the hole opened, so
+    the hours are not compiled at all - not filled with `no_data`, which
+    would earn the entity a statistic recording our own ignorance and,
+    by density, keep it forever. The series resumes at the first whole
+    hour the recorder can vouch for, and the sums continue from the last
+    row before the hole: time we cannot describe is time in no state.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    freezer.move_to(start + timedelta(minutes=30))
+    hass.states.async_set(ENTITY, "off")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    # Hour 0 alone is compiled, so the watermark hour holds a transition.
+    freezer.move_to(start + timedelta(hours=1))
+    compiler = Compiler(hass)
+    await compiler.async_compile_incremental(cfg())
+
+    await hass.services.async_call(
+        "recorder", "purge", {"keep_days": 0}, blocking=True
+    )
+    await get_instance(hass).async_block_till_done()
+    freezer.move_to(start + timedelta(hours=5, minutes=30))
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=7))
+    assert await compiler.async_compile_incremental(cfg()) == 1
+
+    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=7))
+    off = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=7))
+    # Hour 0, then nothing until hour 6 - which continues from hour 0.
+    assert on == [0.5, 1.5]
+    assert off == [0.5, 0.5]
+    assert DURATION_NO_DATA not in await existing(hass)
+
+    # The next hourly run opens on the far side of the hole, where the hour
+    # before its window has no row at all, and still finds its base.
+    freezer.move_to(start + timedelta(hours=8))
+    await compiler.async_compile_incremental(cfg())
+    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=8))
+    assert on == [0.5, 1.5, 2.5]
+
+
+async def test_a_recompute_opening_inside_a_hole_bases_on_the_row_before_it(
+    recorder, freezer
+):
+    """Rows on both sides of the hole: the newest is not the base.
+
+    The base must be the newest row *before* the window, and after a hole
+    that is not the hour before it. A recompute asked to start inside the
+    hole opens on its far side and must continue from the near side, not
+    from the rows it is about to overwrite.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    freezer.move_to(start + timedelta(minutes=30))
+    hass.states.async_set(ENTITY, "off")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=1))
+    compiler = Compiler(hass)
+    await compiler.async_compile_incremental(cfg())
+    await hass.services.async_call(
+        "recorder", "purge", {"keep_days": 0}, blocking=True
+    )
+    await get_instance(hass).async_block_till_done()
+    freezer.move_to(start + timedelta(hours=5, minutes=30))
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+    freezer.move_to(start + timedelta(hours=8))
+    await compiler.async_compile_incremental(cfg())
+    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=8))
+    assert on == [0.5, 1.5, 2.5]
+
+    await compiler.async_compile(cfg(), (start + timedelta(hours=3)).timestamp())
+    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=8))
+    assert on == [0.5, 1.5, 2.5]
+    assert DURATION_NO_DATA not in await existing(hass)
+
+
+async def test_hours_that_cannot_be_recomputed_are_left_as_they_are(
+    recorder, freezer
+):
+    """A recompute reaches an hour no source can open, with rows behind it.
+
+    The purge horizon fell inside the lookback hour and spared only an
+    ignored row, the hour before was not uniform, and the live state began
+    later. Those hours were compiled correctly when the recorder could
+    still vouch for them; the recompute passes over them and resumes at
+    the first hour it can open, basing on the rows it kept.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    for minutes, state in ((0, "off"), (20, "on"), (40, "unavailable"), (70, "off")):
+        freezer.move_to(start + timedelta(minutes=minutes))
+        hass.states.async_set(ENTITY, state)
+        await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=2))
+    compiler = Compiler(hass)
+    await compiler.async_compile(cfg(), start.timestamp())
+    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=2))
+    off = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=2))
+    assert on == pytest.approx([2 / 3, 5 / 6])
+    assert off == pytest.approx([1 / 3, 7 / 6])
+
+    # The horizon lands at 0:30: the recordable rows go, the ignored one stays.
+    freezer.move_to(start + timedelta(minutes=30))
+    await hass.services.async_call(
+        "recorder", "purge", {"keep_days": 0}, blocking=True
+    )
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=3))
+    await compiler.async_compile(cfg(), start.timestamp())
+    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=3))
+    off = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=3))
+    assert on == pytest.approx([2 / 3, 5 / 6, 5 / 6])
+    assert off == pytest.approx([1 / 3, 7 / 6, 13 / 6])
+    assert DURATION_NO_DATA not in await existing(hass)
 
 
 async def test_an_ignored_state_at_the_window_start_does_not_destroy_durations(
@@ -1370,7 +1508,8 @@ async def test_a_full_recompute_does_not_re_create_the_opening_no_data(
 async def test_a_full_recompute_still_trims_only_its_opening_chunk(
     recorder, freezer, monkeypatch
 ):
-    """A later chunk starts mid-series, where trimming would leave a hole."""
+    """A later chunk is handed the state the one before ended in, so it
+    never has to move its start."""
     monkeypatch.setattr(compiler_module, "CHUNK_HOURS", 2)
 
     hass = recorder

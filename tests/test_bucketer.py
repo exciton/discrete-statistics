@@ -3,7 +3,7 @@
 import pytest
 
 from custom_components.discrete_statistics.bucketer import bucket, hour_start
-from custom_components.discrete_statistics.const import HOUR, NO_DATA
+from custom_components.discrete_statistics.const import HOUR
 
 # 2026-01-01T00:00:00Z
 T0 = 1767225600.0
@@ -85,21 +85,6 @@ def test_multiple_transitions_within_one_hour():
     )
     assert result[("off", T0)] == (600.0 + 1800.0, 2)
     assert result[("on", T0)] == (600.0 + 600.0, 1)
-
-
-def test_no_carried_state_yields_no_data():
-    result = bucket(None, [(T0 + 1800.0, "on")], T0, T0 + HOUR)
-    assert result[(NO_DATA, T0)] == (1800.0, 0)
-    assert result[("on", T0)] == (1800.0, 1)
-
-
-def test_no_carried_state_and_no_transitions_is_all_no_data():
-    result = bucket(None, [], T0, T0 + 3 * HOUR)
-    assert result == {
-        (NO_DATA, T0): (HOUR, 0),
-        (NO_DATA, T0 + HOUR): (HOUR, 0),
-        (NO_DATA, T0 + 2 * HOUR): (HOUR, 0),
-    }
 
 
 def test_span_of_many_days_conserves_time():

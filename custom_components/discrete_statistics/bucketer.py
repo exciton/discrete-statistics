@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 
-from .const import HOUR, NO_DATA
+from .const import HOUR
 
 BucketKey = tuple[str, float]
 BucketValue = tuple[float, int]
@@ -32,16 +32,16 @@ def first_whole_hour(timestamp: float) -> float:
 
 
 def bucket(
-    carried_state: str | None,
+    carried_state: str,
     transitions: list[tuple[float, str]],
     window_start: float,
     window_end: float,
 ) -> dict[BucketKey, BucketValue]:
     """Bucket a run of states into {(state, hour_start): (seconds, count)}.
 
-    carried_state is the canonical state in effect at window_start, or None
-    if it is unknown, in which case the span until the first transition is
-    attributed to NO_DATA.
+    carried_state is the canonical state in effect at window_start. The
+    compiler never buckets a window it cannot open in a known state, so
+    there is no unknown to attribute.
 
     transitions must be ascending by timestamp, contain no two consecutive
     entries with the same state, and hold canonical state names only.
@@ -69,7 +69,7 @@ def bucket(
         seconds, count = result.get((state, hour), (0.0, 0))
         result[(state, hour)] = (seconds, count + 1)
 
-    current = carried_state if carried_state is not None else NO_DATA
+    current = carried_state
     cursor = window_start
 
     for timestamp, state in transitions:

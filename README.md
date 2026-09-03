@@ -193,27 +193,33 @@ active hours.
 
 ### The `no_data` state
 
-When the component cannot attribute a span to a real state — before an
-entity's first known state, or across a gap whose source rows have been
-purged — it attributes the time to `no_data`. Durations therefore always
-sum to 24h per day, and gaps are visible in the chart rather than silently
-filled in.
+`no_data` is a state your configuration can choose — as `blank:` or as a
+`states:` target — for readings you cannot interpret and would rather see
+charted as a gap than folded into a real state. The component never picks
+it by itself: an hour it cannot open in a known state is left uncompiled
+instead (see below).
 
-On a chart it is labelled **No Data**. It has a `_duration` statistic only, whether the compiler chose it or
-your config did: it measures time nobody can account for, and counting those
-spans would tell you nothing.
+On a chart it is labelled **No Data**. It has a `_duration` statistic only:
+it measures time nobody can account for, and counting those spans would
+tell you nothing.
 
 A state that cannot be recorded at all is treated as `unknown` rather than as
 a gap: an empty one, which Home Assistant produces when an entity is removed
 or reloaded, or one made only of punctuation. So it is ignored or recorded
 according to the same setting that governs `unknown`.
 
-A statistic is never *opened* with `no_data`, though. An entity's first state
-rarely lands exactly on the hour, and recording the few minutes before it would
-give every entity a permanent `no_data` statistic describing nothing more than
-the moment it was switched on. Compilation starts at the first whole hour whose
-state is known, so most entities never grow a `no_data` statistic at all — and
-one that appears later is a genuine gap worth looking at.
+### Gaps
+
+An hour the component cannot open in a known state is not recorded. That
+is the hour before an entity's first state — it rarely lands exactly on
+the hour, and recording the minutes before it would describe nothing more
+than the moment it was switched on — and, rarely, a stretch after the
+integration has been off for longer than the recorder's `purge_keep_days`,
+when the source rows for it are gone and nothing else can vouch for the
+state. Such hours have no rows at all: a chart shows nothing there, an
+average skips them, and the cumulative totals carry across unchanged.
+Everything on either side is untouched, and a `recompute` reaching into
+the stretch leaves it alone too.
 
 ## Charts
 
@@ -362,6 +368,6 @@ idempotent and the next run catches up.
   `recompute`.
 - Charts name their statistics explicitly; a newly appearing state must be
   added to the card.
-- An entity that stays `unavailable`/`unknown` for more than 30 days may have
-  part of that stretch attributed to `no_data` rather than to its last known
-  state, depending on when compilation runs. Durations still sum correctly.
+- Hours the component was not running for, beyond the recorder's
+  `purge_keep_days`, are recorded only when its own last row can vouch for
+  the state; otherwise they stay empty (see *Gaps*).

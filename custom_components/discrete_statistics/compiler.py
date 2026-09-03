@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import functools as ft
-import logging
 from collections.abc import Collection, Mapping
 from datetime import datetime, timezone
 from typing import NamedTuple
@@ -26,8 +25,6 @@ from .const import DOMAIN, HOUR, METRIC_DURATION
 from .naming import async_warm_state_translations, display_name, state_translator
 from .payload import build_payloads
 from .statistic_ids import belongs_to, parse, state_token
-
-_LOGGER = logging.getLogger(__name__)
 
 # Recompute this many trailing hours on every run, so a state committed by
 # the recorder after we first read its hour is still picked up.
@@ -180,10 +177,6 @@ class Compiler:
         earliest = await self._async_earliest_state_ts(cfg.entity_id)
         if earliest is None:
             return 0
-        # `start is None` means "from the beginning of what the recorder
-        # still holds", so nothing precedes the window and the leading
-        # no_data may be trimmed even though statistics already exist.
-        at_earliest_state = start is None
         window_start = hour_start(earliest if start is None else start)
         # Only completed hours are emitted.
         window_end = hour_start(end if end is not None else dt_util.utcnow().timestamp())
@@ -199,9 +192,7 @@ class Compiler:
             if window_end <= window_start:
                 return 0
 
-        base_sums, previous_hour = await self._async_previous_hour(
-            existing, window_start
-        )
+        base_sums, previous_hour = await self._async_base(existing, window_start)
         # Read once, for the hour this compile opens at. Every chunk after
         # the first takes the state from the one before it, for the reason
         # `_ChunkState` gives.
@@ -222,9 +213,6 @@ class Compiler:
                     chunk_end,
                     state,
                     first_chunk=chunk_start == window_start,
-                    # Only the chunk that opens the history: a later one
-                    # starts mid-series, where trimming would leave a hole.
-                    opens_history=at_earliest_state and chunk_start == window_start,
                 )
                 compiled += hours
                 chunk_start = chunk_end
@@ -267,7 +255,6 @@ class Compiler:
         state: _ChunkState,
         *,
         first_chunk: bool,
-        opens_history: bool,
     ) -> tuple[_ChunkState, int]:
         """Compile one chunk.
 
@@ -283,12 +270,19 @@ class Compiler:
         rows = await self._async_history(
             cfg, chunk_start - HOUR if first_chunk else chunk_start, chunk_end
         )
-        opened = self._open_window(
-            cfg, rows, chunk_start, chunk_end, state, opens_history
-        )
+        opened = self._open_window(cfg, rows, chunk_start, chunk_end, state)
         if opened is None:
             return state, 0
         window_start, carried, transitions = opened
+
+        sums = state.sums
+        if window_start != chunk_start:
+            # The window moved past hours no source could open, so the base
+            # was read for the wrong hour. Reading again is safe here and
+            # only here: a window moves only when no state was carried into
+            # it, and once a chunk has written anything the next one is
+            # handed the state it ended in - so nothing is queued yet.
+            sums, _ = await self._async_base(state.existing, window_start)
 
         buckets = bucket(carried, transitions, window_start, chunk_end)
 
@@ -301,13 +295,13 @@ class Compiler:
             buckets,
             window_start,
             chunk_end,
-            state.sums,
+            sums,
             state.existing,
             display=display_name(self._hass, cfg.entity_id, cfg.name),
             translate=state_translator(self._hass, cfg.entity_id),
         )
 
-        next_sums = dict(state.sums)
+        next_sums = dict(sums)
         next_existing = dict(state.existing)
         for statistic_id, (metadata, statistic_rows) in payloads.items():
             async_add_external_statistics(self._hass, metadata, statistic_rows)
@@ -333,9 +327,9 @@ class Compiler:
         changed within `purge_keep_days`: purge deletes every row past the
         horizon with no per-entity reprieve (`queries.py:281`). An entity
         that sits in one state longer than the horizon therefore disappears
-        from history entirely, and the whole span would be attributed to
-        no_data - most visibly for the quiet entities this integration is
-        most useful for.
+        from history entirely, and the whole span would go uncompiled -
+        most visibly for the quiet entities this integration is most useful
+        for.
 
         The state machine still knows, and `last_changed` is what makes this
         sound rather than a guess: at or before `window_start` proves the
@@ -356,14 +350,20 @@ class Compiler:
         window_start: float,
         window_end: float,
         state: _ChunkState,
-        opens_history: bool,
-    ) -> tuple[float, str | None, list[tuple[float, str]]] | None:
+    ) -> tuple[float, str, list[tuple[float, str]]] | None:
         """Decide where the window opens and in what state.
 
         Returns (window_start, carried, transitions), or None when there is
         nothing to compile. Deliberately synchronous: every source it
         consults is already to hand, which is what makes the order below
         safe to reason about.
+
+        The window may open later than asked. When no source can say what
+        state it opened in, the hours until the first one that begins in a
+        known state are not compiled at all: they keep whatever rows they
+        have, or none. Writing `no_data` there would not describe the
+        entity - it would record our own ignorance, and by density keep
+        recording it forever.
         """
         carried, transitions = canonicalise(cfg, rows, window_start)
 
@@ -388,41 +388,27 @@ class Compiler:
             # from a state to itself.
             transitions = transitions[1:]
 
-        if carried is None and (not state.existing or opens_history):
-            # Nothing has ever been compiled for this entity, so a leading
-            # no_data would complete no earlier series - it would only earn
-            # the entity a no_data statistic to write densely forever. Open
-            # at the first whole hour whose state we know instead, paying the
-            # whole first partial hour: a part-known hour cannot both be
-            # recorded and total wall-clock time.
-            #
-            # Allowed when the entity has no statistics at all, or when this
-            # window opens its history - `start=None`, which is what the
-            # a bare `recompute` does. Both mean nothing precedes
-            # the window, so moving its start cannot orphan a base. Trimming
-            # a window that begins mid-series would: the hours skipped would
-            # have no rows, and the next run would find no base in the hour
-            # before it and restart every cumulative sum at zero.
-            if not transitions:
-                return None
-            window_start = first_whole_hour(transitions[0][0])
-            if window_start >= window_end:
-                return None
-            carried, transitions = canonicalise(cfg, rows, window_start)
-            if transitions and transitions[0][0] == window_start:
-                # Nothing transitioned INTO an entity's first known state, so
-                # carry it rather than counting its birth as an event just
-                # because it fell on the hour.
-                carried = transitions[0][1]
-                transitions = transitions[1:]
+        if carried is not None:
             return window_start, carried, transitions
 
-        if carried is None:
-            _LOGGER.warning(
-                "No recoverable state for %s at %s; attributing the span to no_data",
-                cfg.entity_id,
-                _as_datetime(window_start).isoformat(),
-            )
+        # Open at the first whole hour whose state is known instead, paying
+        # the partial hour before it: a part-known hour cannot both be
+        # recorded and total wall-clock time. Whether the hours passed over
+        # hold rows or not, the base is read again for the new start, so
+        # the sums continue from the last row before it either way.
+        if not transitions:
+            return None
+        window_start = first_whole_hour(transitions[0][0])
+        if window_start >= window_end:
+            return None
+        carried, transitions = canonicalise(cfg, rows, window_start)
+        if transitions and transitions[0][0] == window_start:
+            # Nothing transitioned INTO an entity's first known state, so
+            # carry it rather than counting its birth as an event just
+            # because it fell on the hour.
+            carried = transitions[0][1]
+            transitions = transitions[1:]
+        assert carried is not None
         return window_start, carried, transitions
 
     async def _async_opening_floor(
@@ -432,16 +418,18 @@ class Compiler:
 
         Hours before the first whole hour of retained history have no rows
         to rebuild them from. Compiling them anyway does not describe the
-        entity's past, it replaces it: every span falls to no_data or to
-        one carried state, and every real sum flattens to its base. A
-        recompute reaching past the purge horizon therefore leaves those
-        hours as they were compiled when the rows still existed.
+        entity's past, it replaces it: when our own last row vouches for a
+        state, every span falls to that one state and every real sum
+        flattens to its base. A recompute reaching past the purge horizon
+        therefore leaves those hours as they were compiled when the rows
+        still existed.
 
         Unless they never were. Downtime longer than the horizon leaves a
-        hole between the watermark and the evidence, and a hole must be
-        filled with something, or the next chunk finds no base in the hour
-        before it and restarts every sum at zero. The floor is the hour
-        after the watermark, or the evidence, whichever comes first.
+        hole between the watermark and the evidence. The floor is the hour
+        after the watermark, or the evidence, whichever comes first, which
+        puts the watermark hour where the carry chain's third source reads
+        it: a hole our last row can vouch for is filled with that state,
+        and one it cannot is left open.
         """
         watermark = await self._async_watermark(existing)
         if watermark is None:
@@ -473,14 +461,22 @@ class Compiler:
                     newest = start
         return newest
 
-    async def _async_previous_hour(
+    async def _async_base(
         self, statistic_ids: Collection[str], window_start: float
     ) -> tuple[dict[str, float], dict[str, float]]:
-        """Return the hour before the window: its cumulative sums, and its own values.
+        """Return the sums the window continues from, and the previous hour's values.
 
-        Both come from one query. The sums are what the new rows continue
-        from; the values are how much of that hour each statistic accounted
-        for, which is what `_carried_from_statistics` reads.
+        Both come from one query of the hour before the window. The values
+        are how much of that hour each statistic accounted for, which is
+        what `_carried_from_statistics` reads.
+
+        A statistic with no row in that hour is looked for further back.
+        The hour before a window is empty on the far side of a hole - hours
+        no source could open, so never compiled - and the sum must carry
+        across it, or the series restarts at zero and every chart shows
+        the drop. The base is the newest row *before* the window, never the
+        newest row: a recompute opening inside a hole has rows on both
+        sides of it, and the ones ahead are what it is about to overwrite.
         """
         if not statistic_ids:
             return {}, {}
@@ -504,7 +500,46 @@ class Compiler:
             for statistic_id, rows in result.items()
             if rows and rows[-1].get("mean") is not None
         }
+        for statistic_id in statistic_ids:
+            if statistic_id in sums:
+                continue
+            before = await self._async_newest_sum_before(statistic_id, window_start)
+            if before is not None:
+                sums[statistic_id] = before
         return sums, values
+
+    async def _async_newest_sum_before(
+        self, statistic_id: str, window_start: float
+    ) -> float | None:
+        """The newest sum a statistic holds for an hour before window_start.
+
+        The newest row overall answers when it precedes the window, which
+        is every case but one: a recompute that opens inside a hole, with
+        rows on both sides of it. Only then is the history before the
+        window scanned - hourly rows, from the beginning. That path is
+        rare enough to pay for the scan rather than bound it.
+        """
+        instance = get_instance(self._hass)
+        result = await instance.async_add_executor_job(
+            get_last_statistics, self._hass, 1, statistic_id, True, {"sum"}
+        )
+        rows = result.get(statistic_id)
+        if not rows or rows[0].get("sum") is None:
+            return None
+        if rows[0]["start"] < window_start:
+            return rows[0]["sum"]
+        result = await instance.async_add_executor_job(
+            statistics_during_period,
+            self._hass,
+            EPOCH,
+            _as_datetime(window_start),
+            {statistic_id},
+            "hour",
+            None,
+            {"sum"},
+        )
+        rows = [row for row in result.get(statistic_id, []) if row.get("sum") is not None]
+        return rows[-1]["sum"] if rows else None
 
     async def _async_earliest_state_ts(self, entity_id: str) -> float | None:
         """Return the timestamp to open an entity's history at, or None.
@@ -518,9 +553,9 @@ class Compiler:
         A whole hour, not `last_changed` itself, so that the window opens at
         a moment `_carried_from_state_machine` will vouch for: it requires
         `last_changed <= window_start`, and the hour containing the change
-        starts before it. The part-hour is dropped for the same reason the
-        leading no_data is - a part-known hour cannot both be recorded and
-        total wall-clock time.
+        starts before it. The part-hour is dropped for the same reason any
+        window opens on a whole hour - a part-known hour cannot both be
+        recorded and total wall-clock time.
         """
         history = await get_instance(self._hass).async_add_executor_job(
             state_changes_during_period,

@@ -147,7 +147,8 @@ wrong data.
 
 **Durations sum to wall-clock time.** Every state's duration for a period must
 total exactly the period length: 1.0 per hour, 24 per day. This is the single
-best end-to-end check, and it catches both over- and under-attribution.
+best end-to-end check, and it catches both over- and under-attribution. It
+is a property of compiled hours; a hole (below) has no rows to sum.
 
 **Values are cumulative monotonic sums.** Charts use `stat_types: change` to
 derive per-bucket values. A sum that decreases is always a bug.
@@ -155,11 +156,13 @@ derive per-bucket values. A sum that decreases is always a bug.
 **Rows are dense over every *known* statistic, not merely the states seen in
 the window.** `payload.build_payloads` takes `existing`, which `compiler`
 sources from the recorder's own `statistics_meta`. Emitting only the window's
-own states leaves a statistic with no row in the hour before the next window,
-so its cumulative base reads as zero and the series restarts — the sum goes down, and the loss
-is permanent because the next run bases on the deflated rows.
+own states leaves a statistic with no row in the hour before the next window.
+Its base is then looked for further back (`_async_newest_sum_before`), so the
+sum no longer restarts at zero as it once did — but that lookup is one or two
+extra queries per statistic per compile, meant for the rare hole, not for
+every quiet state on every run; and a sparse series still breaks the `mean`.
 
-Density is also what makes the `mean` correct. Every row carries the hour's
+Density is what makes the `mean` correct. Every row carries the hour's
 own value as its `mean`, `min` and `max` so the recorder's `_reduce_statistics`
 can roll the hours up into an average hourly duration or count. It skips rows
 whose mean is `None`, so a sparse hour would not read as a quiet one — it
@@ -200,9 +203,11 @@ answers a case the one before it cannot.
    state was already in effect. The only source left for an entity purge has
    erased entirely.
 
-Then `no_data`. This replaced a widening lookback of 1 hour, 1 day, 30 days,
-which guessed at a distance and gave up past a month — where step 3 is exact
-and has no distance limit at all.
+Then nothing: the window opens later, at the first whole hour that begins
+in a recordable transition, and the hours passed over are not compiled at
+all (see below). The chain replaced a widening lookback of 1 hour, 1 day, 30
+days, which guessed at a distance and gave up past a month — where step 3 is
+exact and has no distance limit at all.
 
 Step 3 has only the state *token* to hand, since that is all an ID carries.
 `_readable_state` recovers the state from the name the statistic already
@@ -217,19 +222,19 @@ splits the series.
 `start` earlier than the first whole hour of retained history is raised to
 it (`_async_opening_floor`). The hours before have no rows to rebuild them
 from, so compiling them does not describe the entity's past, it replaces
-it: every span falls to `no_data` or one carried state and every real sum
-flattens to its base. A `recompute` from before the purge horizon used to
-do exactly that — a deletion by another name. Those hours stay as they were
-compiled when the rows still existed. The one exception is a hole: downtime
-longer than the horizon leaves hours after the watermark that were never
-compiled, and they must be filled or the next chunk finds no base and
-restarts every sum at zero, so the floor is the hour after the watermark or
-the evidence, whichever comes first. Opening there puts the watermark hour
-itself in the position the carry chain's third source reads, so the hole
-is filled with the state our own last row proves — `no_data` only when that
-hour was not uniform, and the order of its states is lost. That clause is also what
-keeps the hourly run working after a purge — without it the trailing window
-would floor to the evidence and compile nothing.
+it: when our own last row vouches for a state, every span falls to that one
+state and every real sum flattens to its base. A `recompute` from before the
+purge horizon used to do exactly that — a deletion by another name. Those
+hours stay as they were compiled when the rows still existed. The one
+exception is a hole: downtime longer than the horizon leaves hours after the
+watermark that were never compiled, so the floor is the hour after the
+watermark or the evidence, whichever comes first. Opening there puts the
+watermark hour itself in the position the carry chain's third source reads,
+so a hole our own last row can vouch for is filled with that state, and one
+it cannot — the watermark hour was not uniform, and the order of its states
+is lost — is left open. That clause is also what keeps the hourly run
+working after a purge — without it the trailing window would floor to the
+evidence and compile nothing.
 
 **A long compile is chunked, and `_ChunkState` is threaded through it.**
 `async_compile` walks the window in `CHUNK_HOURS` slices to bound memory during
@@ -302,15 +307,12 @@ would compile nothing at all. Refusing it
 otherwise is equally load-bearing — without that test a backfill of old hours
 would be handed whatever the entity happens to be doing today.
 
-**`no_data` is reserved, but it can be chosen.** It is what the compiler
-attributes a span to when it cannot determine a real state. With the carry
-chain and the opening floor that is now rare: not before an entity's first
-state (trimmed), not before the recorder's evidence (left alone), only a
-hole after the watermark that no source can account for — downtime longer
-than `purge_keep_days`, when the hour before the watermark was not uniform.
-A config may also name it, as `blank: no_data` or as a `states` target,
-which is how an operator says "I cannot interpret this, chart it as a gap",
-and that is now its usual source.
+**`no_data` is reserved, and only a config reaches it.** The compiler never
+attributes a span to it: an hour it cannot open in a known state is not
+compiled (below), so the band would only ever have recorded our own
+ignorance, and by density recorded it forever. A config names it, as
+`blank: no_data` or as a `states` target, which is how an operator says "I
+cannot interpret this, chart it as a gap" — that is its whole source.
 
 What stays forbidden is a device reaching the band *by itself*: a raw state
 that happens to be called `no_data` resolves to nothing instead, or the band
@@ -344,19 +346,29 @@ which is what `no_data` means; it is a state we cannot name. Letting it reach
 entity's compile — permanently, because the watermark never advanced past the
 chunk containing it.
 
-**A series never opens with `no_data`.** An entity's first state rarely lands
-on the hour, so compiling from the hour containing it would give every entity
-a `no_data` statistic recording the minutes before it — and by the density
-invariant that statistic is then written forever. `_async_compile_chunk`
+**A window no source can open is moved, not filled.** `_open_window`
 advances `window_start` to the first whole hour that begins in a recordable
-state instead. The trim fires when nothing precedes the window: the entity
-has no statistics at all, or the window opens its history (`start=None`, what
-a bare `recompute` does) and this is the first chunk. Gating it
-on "no statistics" alone made a full recompute re-manufacture the sliver its
-first compile had skipped, every time it was run.
-Both halves matter: a window that begins mid-series must never trim, or the
-skipped hours have no rows and the next run finds no base in the hour before
-its window and restarts every cumulative sum at zero.
+transition, and the hours passed over are not written. It used to fill them
+with `no_data` unless nothing preceded the window, on the grounds that a
+window beginning mid-series must never move: the skipped hours would have no
+rows, and the next run would find no base in the hour before its window and
+restart every sum at zero. Two things changed. The hours passed over are
+either already compiled — a recompute that reached back to an hour the
+recorder can no longer open, which keeps the rows written when it could —
+or a genuine hole, downtime longer than the horizon that no row vouches
+for; and a hole is now what a chart should show there, not a band recording
+our own ignorance. And the base is read from the newest row *before* the
+window, not strictly the hour before it (`_async_base`), so a sum carries
+across a hole unchanged: time we cannot describe is time in no state, and
+`change` over the hole is zero. `last_reset` is no help here —
+`_augment_result_with_change` (`recorder/statistics.py:2036`) computes
+`change` as `sum - prev_sum` and never reads it; a series restarted at zero
+would chart the drop.
+
+After a move the base is read again for the new start, which is safe only
+because a window moves only when no state was carried into it, and once a
+chunk has written anything the next one is handed the state it ended in —
+so nothing is queued yet. Do not re-read it anywhere else.
 
 **Nothing in this integration deletes statistics.** Recompute overwrites
 buckets it has source data for and leaves everything else alone, so a rebuild
@@ -404,8 +416,9 @@ Verified against 2026.8.3. Each of these was got wrong once.
   they are recompiled.
 - The recorder's upsert on `(metadata_id, start_ts)` is what makes recompilation
   idempotent. It holds only when recomputation starts from a bucket whose base
-  sum is known, which is why the base is read from the bucket *preceding* the
-  window rather than the newest one.
+  sum is known, which is why the base is read from the newest bucket *before*
+  the window rather than the newest one overall — a recompute opening inside a
+  hole has rows on both sides, and the ones ahead are what it overwrites.
 - `Compiler.async_compile` drains the recorder in a `finally`, not on the
   success path. A chunk that raises leaves earlier chunks' writes queued, and
   density is now read live from `statistics_meta` — so the next compile could
