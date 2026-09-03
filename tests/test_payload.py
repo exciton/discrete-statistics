@@ -8,7 +8,7 @@ from homeassistant.components.recorder.models import StatisticMeanType
 
 from custom_components.discrete_statistics.config import EntityConfig
 from custom_components.discrete_statistics.const import HOUR, NO_DATA
-from custom_components.discrete_statistics.payload import build_payloads
+from custom_components.discrete_statistics.payload import build_payloads, rename
 
 T0 = 1767225600.0
 
@@ -307,3 +307,30 @@ def test_a_statistic_known_only_from_existing_is_carried_at_its_base():
     assert [row["sum"] for row in off_rows] == [7.5, 7.5]
     assert [row["mean"] for row in off_rows] == [0.0, 0.0]
     assert [row["max"] for row in off_rows] == [0.0, 0.0]
+
+
+def test_a_colon_in_the_state_cannot_break_a_later_rename():
+    """`rename` splits on the last ": ", so the state must not contain one.
+
+    A text sensor can report anything, and a translated state is an
+    arbitrary string too. If the state kept its colon, the next rename of a
+    statistic absent from the window would take the boundary from inside the
+    state and truncate it.
+    """
+    buckets = {("Error: pump", T0): (HOUR, 1)}
+    payloads = build_payloads(cfg("Grid"), buckets, T0, T0 + HOUR, {})
+    statistic_id = "discrete_statistics:binary_sensor_grid_status_errorpump_duration"
+    metadata, _ = payloads[statistic_id]
+
+    assert metadata["name"] == "Grid: Error pump (h)"
+    assert rename(metadata["name"], "Mains") == "Mains: Error pump (h)"
+
+
+def test_a_colon_in_the_display_name_is_still_fine():
+    """Only the state has to be clean; the display may hold any number."""
+    payloads = build_payloads(
+        cfg("Shed: Grid"), {("on", T0): (HOUR, 1)}, T0, T0 + HOUR, {}
+    )
+    metadata, _ = payloads[DURATION_ON]
+    assert metadata["name"] == "Shed: Grid: on (h)"
+    assert rename(metadata["name"], "Mains") == "Mains: on (h)"

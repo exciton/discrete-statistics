@@ -189,7 +189,9 @@ map. Keying payloads by raw state instead would let the second state's rows
 
 **A statistic not seen in a window is still relabelled.** `build_payloads`
 receives each existing statistic's stored name and swaps the display half via
-`payload.rename`, splitting on the *last* `": "`. The state half cannot be
+`payload.rename`, splitting on the *last* `": "` — which is unambiguous
+only because `compose_name` strips colons from the state half. A display
+name may hold any number of them; a state may hold none. The state half cannot be
 rebuilt from the ID — the ID holds only the token — so a rename would
 otherwise never reach a state the entity has not been in for months, and
 neither would a change to `mean_type` or the units.

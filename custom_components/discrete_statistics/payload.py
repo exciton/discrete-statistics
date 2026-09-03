@@ -30,8 +30,17 @@ class _Planned(NamedTuple):
 
 
 def compose_name(display: str, state: str, metric: str) -> str:
-    """Build a statistic's display name from its parts."""
-    return f"{display}: {state} ({_METRIC_LABEL[metric]})"
+    """Build a statistic's display name from its parts.
+
+    Colons are stripped from the state, and only from the state. `rename`
+    finds the display half by splitting on the LAST `": "`, which is right
+    however many colons a display name has - but only while the state has
+    none. A state containing one would move that boundary and truncate
+    itself on the next rename, silently, and only for statistics the window
+    did not see. Removing the character outright is provably enough;
+    collapsing `": "` to `":"` is not, because `"a:  b"` survives it.
+    """
+    return f"{display}: {state.replace(':', '')} ({_METRIC_LABEL[metric]})"
 
 
 def rename(stored: str, display: str) -> str:
