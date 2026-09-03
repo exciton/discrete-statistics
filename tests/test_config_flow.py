@@ -508,3 +508,68 @@ async def test_the_entity_id_titles_it_only_as_a_last_resort(recorder):
 
     result = await _submit(hass, ENTITY)
     assert result["title"] == ENTITY
+
+
+async def test_the_options_dialog_says_what_it_is_editing(recorder, entity_registry):
+    """Otherwise the form is four fields with nothing naming the subject."""
+    hass = recorder
+    entity_registry.async_get_or_create(
+        "binary_sensor", "demo", "opt-1",
+        suggested_object_id="grid_status",
+        original_name="Mains Power",
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENTITY_ID: ENTITY},
+        options={
+            CONF_NAME: None,
+            CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
+            CONF_BLANK: STATE_UNKNOWN,
+        },
+        unique_id=ENTITY,
+    )
+    entry.add_to_hass(hass)
+    assert await async_setup_component(hass, DOMAIN, {})
+    await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    assert result["description_placeholders"] == {
+        "entity": f"Mains Power ({ENTITY})",
+        "default_name": "Mains Power",
+    }
+
+
+async def test_the_name_box_is_not_prefilled_with_the_default(recorder, entity_registry):
+    """A suggested value comes back on submit and would freeze the name.
+
+    The default belongs in the field's description, not in the field: the
+    whole point of leaving it blank is that the label follows the entity.
+    """
+    hass = recorder
+    entity_registry.async_get_or_create(
+        "binary_sensor", "demo", "opt-2",
+        suggested_object_id="grid_status",
+        original_name="Mains Power",
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENTITY_ID: ENTITY},
+        options={
+            CONF_NAME: None,
+            CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
+            CONF_BLANK: STATE_UNKNOWN,
+        },
+        unique_id=ENTITY,
+    )
+    entry.add_to_hass(hass)
+    assert await async_setup_component(hass, DOMAIN, {})
+    await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    suggested = {
+        key.schema: key.description.get("suggested_value")
+        for key in result["data_schema"].schema
+        if key.description
+    }
+    assert suggested.get(CONF_NAME) in (None, "")

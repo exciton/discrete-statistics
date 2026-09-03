@@ -27,7 +27,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 
 from .config import CONF_BLANK, CONF_DEFAULT, blank_error, is_configured
-from .naming import display_name
+from .naming import describe, display_name
 from .const import (
     DEFAULT_RECORD,
     DEFAULT_RECORD_KNOWN,
@@ -196,10 +196,19 @@ class DiscreteStatisticsOptionsFlow(OptionsFlow):
                         CONF_BLANK: user_input[CONF_BLANK],
                     }
                 )
+        # Which entity this is about, and what leaving the name blank would
+        # give. NOT prefilled into the box: a suggested value comes back on
+        # submit, which would freeze the name instead of letting it follow
+        # the entity.
+        entity_id = self.config_entry.data[CONF_ENTITY_ID]
         return self.async_show_form(
             step_id="init",
             data_schema=self.add_suggested_values_to_schema(
                 OPTIONS_SCHEMA, user_input or self.config_entry.options
             ),
             errors=errors,
+            description_placeholders={
+                "entity": describe(self.hass, entity_id),
+                "default_name": display_name(self.hass, entity_id),
+            },
         )

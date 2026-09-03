@@ -31,3 +31,15 @@ def display_name(
     if state is not None and (resolved := state.attributes.get(ATTR_FRIENDLY_NAME)):
         return resolved
     return entity_id
+
+
+def describe(hass: HomeAssistant, entity_id: str, name: str | None = None) -> str:
+    """Name an entity for a reader, with its ID so there is no doubt which.
+
+    The name is what they typed or what the entity calls itself; the ID is
+    what they search for in the logs and in Settings > Statistics. An entity
+    with no name of its own has nothing to distinguish, so the ID stands
+    alone rather than being printed twice.
+    """
+    label = display_name(hass, entity_id, name)
+    return f"{label} ({entity_id})" if label != entity_id else entity_id
