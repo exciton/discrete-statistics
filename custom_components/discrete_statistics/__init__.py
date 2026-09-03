@@ -32,6 +32,7 @@ from .config import CONFIG_SCHEMA, EntityConfig, entity_config_from_entry, is_co
 # validate the YAML block, so it must stay imported even though nothing here
 # calls it directly.
 from .const import BACKLOG_THRESHOLD, DOMAIN
+from .naming import display_name
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -172,7 +173,7 @@ def _clash_issue_id(entry: ConfigEntry) -> str:
     return f"yaml_clash_{entry.entry_id}"
 
 
-def _describe(cfg: EntityConfig) -> str:
+def _describe(hass: HomeAssistant, cfg: EntityConfig) -> str:
     """Name an entity the way a notification's reader thinks of it.
 
     The name is what they typed and what labels their charts; the entity ID
@@ -180,8 +181,9 @@ def _describe(cfg: EntityConfig) -> str:
     with no name of its own has nothing to distinguish, so the ID stands
     alone rather than being printed twice.
     """
-    if cfg.name and cfg.name != cfg.entity_id:
-        return f"{cfg.name} ({cfg.entity_id})"
+    label = display_name(hass, cfg.entity_id, cfg.name)
+    if label != cfg.entity_id:
+        return f"{label} ({cfg.entity_id})"
     return cfg.entity_id
 
 
@@ -209,12 +211,12 @@ async def _async_compile_and_notify(
                 hours = await compiler.async_compile_incremental(cfg)
     except Exception as err:  # noqa: BLE001 - reported, not swallowed
         _LOGGER.exception("Compiling %s failed", cfg.entity_id)
-        message = f"Could not compile statistics for {_describe(cfg)}: {err}"
+        message = f"Could not compile statistics for {_describe(hass, cfg)}: {err}"
     else:
         message = (
-            f"Compiled {hours} hour(s) of statistics for {_describe(cfg)}."
+            f"Compiled {hours} hour(s) of statistics for {_describe(hass, cfg)}."
             if hours
-            else f"No history to compile yet for {_describe(cfg)}."
+            else f"No history to compile yet for {_describe(hass, cfg)}."
         )
         _LOGGER.info("%s", message)
 
@@ -259,7 +261,7 @@ async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
     # instead of looping or recompiling a second time. Do not remove the
     # equality check while this call stays - it looks unrelated but it is
     # what stops the recursion.
-    title = cfg.name or cfg.entity_id
+    title = display_name(hass, cfg.entity_id, cfg.name)
     if title != entry.title:
         hass.config_entries.async_update_entry(entry, title=title)
 

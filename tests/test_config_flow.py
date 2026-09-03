@@ -456,3 +456,55 @@ async def test_a_binary_sensor_is_still_accepted(recorder):
 
     result = await _submit(hass, ENTITY)
     assert result["type"] is FlowResultType.CREATE_ENTRY
+
+
+async def test_the_helper_is_titled_with_the_entitys_name(recorder, entity_registry):
+    """The Helpers list shows this, and an entity ID is not what people read."""
+    hass = recorder
+    assert await async_setup_component(hass, DOMAIN, {})
+    entity_registry.async_get_or_create(
+        "binary_sensor", "demo", "title-1",
+        suggested_object_id="grid_status",
+        original_name="Mains Power",
+    )
+
+    result = await _submit(hass, ENTITY)
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == "Mains Power"
+
+
+async def test_a_typed_name_still_titles_the_helper(recorder, entity_registry):
+    hass = recorder
+    assert await async_setup_component(hass, DOMAIN, {})
+    entity_registry.async_get_or_create(
+        "binary_sensor", "demo", "title-2",
+        suggested_object_id="grid_status",
+        original_name="Mains Power",
+    )
+
+    flow = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow["flow_id"],
+        {
+            CONF_ENTITY_ID: ENTITY,
+            CONF_NAME: "Grid",
+            CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
+            CONF_BLANK: STATE_UNKNOWN,
+        },
+    )
+
+    assert result["title"] == "Grid"
+
+
+async def test_the_entity_id_titles_it_only_as_a_last_resort(recorder):
+    """No registry entry and no friendly name."""
+    hass = recorder
+    assert await async_setup_component(hass, DOMAIN, {})
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+
+    result = await _submit(hass, ENTITY)
+    assert result["title"] == ENTITY

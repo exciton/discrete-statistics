@@ -27,6 +27,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 
 from .config import CONF_BLANK, CONF_DEFAULT, blank_error, is_configured
+from .naming import display_name
 from .const import (
     DEFAULT_RECORD,
     DEFAULT_RECORD_KNOWN,
@@ -154,7 +155,9 @@ class DiscreteStatisticsConfigFlow(ConfigFlow, domain=DOMAIN):
 
         name = user_input.get(CONF_NAME) or None
         return self.async_create_entry(
-            title=name or entity_id,
+            # The entity's own name, not its ID: it is what the Helpers
+            # list shows and what people recognise.
+            title=display_name(self.hass, entity_id, name),
             data={CONF_ENTITY_ID: entity_id},
             options={
                 CONF_NAME: name,

@@ -15,7 +15,7 @@ from homeassistant.components.recorder.statistics import (
     get_metadata,
     statistics_during_period,
 )
-from homeassistant.const import ATTR_DEVICE_CLASS, ATTR_FRIENDLY_NAME
+from homeassistant.const import ATTR_DEVICE_CLASS
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.translation import (
@@ -28,6 +28,7 @@ from .bucketer import bucket, hour_start
 from .canonicalise import canonicalise
 from .config import EntityConfig
 from .const import DOMAIN, HOUR
+from .naming import display_name
 from .payload import build_payloads
 from .statistic_ids import belongs_to
 
@@ -71,27 +72,6 @@ class Compiler:
 
     def __init__(self, hass: HomeAssistant) -> None:
         self._hass = hass
-
-    def _display_name(self, cfg: EntityConfig) -> str:
-        """What labels this entity's charts.
-
-        A name typed into the helper wins. Otherwise the entity's own name.
-
-        The registry is consulted at all because attributes are stripped while
-        an entity is unavailable, and falling back to the ID there would
-        rename every statistic and rename it back when it returned. It is
-        consulted *first* because it holds what the user asked for: the two
-        disagree only after a rename the integration has not yet republished.
-        """
-        if cfg.name:
-            return cfg.name
-        entry = er.async_get(self._hass).async_get(cfg.entity_id)
-        if entry is not None and (name := entry.name or entry.original_name):
-            return name
-        state = self._hass.states.get(cfg.entity_id)
-        if state is not None and (name := state.attributes.get(ATTR_FRIENDLY_NAME)):
-            return name
-        return cfg.entity_id
 
     def _state_translator(self, cfg: EntityConfig) -> Callable[[str], str]:
         """Render canonical states the way Home Assistant renders them.
@@ -281,7 +261,7 @@ class Compiler:
             window_end,
             base_sums,
             existing,
-            display=self._display_name(cfg),
+            display=display_name(self._hass, cfg.entity_id, cfg.name),
             translate=self._state_translator(cfg),
         )
 

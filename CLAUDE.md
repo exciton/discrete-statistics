@@ -51,6 +51,7 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
        ├─ config ── canonicalise   pure: recorder rows -> canonical transitions
        │   │    └─ config_flow    HA UI: entity -> EntityConfig, as a helper
        │   └─ statistic_ids       for the reserved-token comparison
+       ├─ naming            HA: entity -> the name a person recognises
        └─ payload           pure: buckets -> cumulative StatisticData rows
                 │
             compiler        the only module that touches the recorder
@@ -58,8 +59,8 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
             __init__        setup, hourly schedule, recompute service
 ```
 
-Everything except `compiler` and `config_flow` is pure and testable without
-a `hass` instance. Keep it that way: if a change needs recorder access in a
+Everything except `compiler`, `config_flow` and `naming` is pure and testable
+without a `hass` instance. Keep it that way: if a change needs recorder access in a
 lower module, the design is drifting.
 
 States in a statistic's name are rendered through `async_translate_state`, so
@@ -72,13 +73,13 @@ the frontend translates per user — so the stored name is in one language for
 everyone. That is a known limitation of putting a rendered string in metadata,
 not something to fix here.
 
-Statistic display names are resolved in `compiler._display_name`, not in
-`payload`: a typed name, then the entity registry, then the live state's
-`friendly_name`, then the entity ID. The registry comes before the state
-because attributes are stripped while an entity is unavailable — reading the
-state first would rename every statistic to the ID for the duration and back
-afterwards — and because it holds what the user asked for when the two
-disagree.
+`naming.display_name` is the one answer to "what is this entity called": a
+typed name, then the entity registry, then the live state's `friendly_name`,
+then the entity ID. It backs the chart labels, the helper's title in the
+Helpers list, and the notifications — those disagreeing is what the entity ID
+leaking into a title looked like. The registry comes before the state because
+attributes are stripped while an entity is unavailable, and because it holds
+what the user asked for when the two disagree.
 
 `Compiler` is a class built from `(hass,)`; the entry points are its methods,
 not module-level functions.
