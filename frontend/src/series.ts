@@ -2,13 +2,6 @@ import { bucketHours, type ResolvedUnit } from "./period";
 import type { StateStatistic } from "./statistic-ids";
 import type { StatisticValue, Statistics } from "./types";
 
-export interface SeriesPoint {
-  time: number;
-  value: number;
-  start: number;
-  end: number;
-}
-
 export interface ChartSeries {
   // subset of echarts BarSeriesOption the card sets
   id: string;
