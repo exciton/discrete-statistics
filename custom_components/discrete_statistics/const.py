@@ -21,6 +21,9 @@ DEFAULT_RECORD = "record"
 DEFAULT_RECORD_KNOWN = "record_known"
 DEFAULT_IGNORE = "ignore"
 DEFAULT_IGNORE_SHORT = "ignore_short"
+# `record_known`, except that `unavailable` and `unknown` are recorded when
+# they last `min_duration`.
+DEFAULT_IGNORE_SHORT_UNKNOWN = "ignore_short_unknown"
 
 # The longest `min_duration`. The compiler reads one extra hour before a
 # window to find the state carried into it, and that has to be enough to

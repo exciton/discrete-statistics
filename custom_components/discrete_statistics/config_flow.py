@@ -39,6 +39,7 @@ from .config import (
 from .naming import describe, display_name
 from .const import (
     DEFAULT_IGNORE_SHORT,
+    DEFAULT_IGNORE_SHORT_UNKNOWN,
     DEFAULT_RECORD,
     DEFAULT_RECORD_KNOWN,
     DISPOSITION_IGNORE,
@@ -50,7 +51,12 @@ from homeassistant.const import STATE_UNKNOWN
 # exceptions it makes resolve() return None for every state, so nothing is
 # ever recordable and the entity never compiles an hour.
 # It stays valid in YAML, where `states:` supplies those exceptions.
-UI_DEFAULTS = [DEFAULT_RECORD, DEFAULT_RECORD_KNOWN, DEFAULT_IGNORE_SHORT]
+UI_DEFAULTS = [
+    DEFAULT_RECORD,
+    DEFAULT_RECORD_KNOWN,
+    DEFAULT_IGNORE_SHORT_UNKNOWN,
+    DEFAULT_IGNORE_SHORT,
+]
 
 # Offered, not exhaustive: `blank` takes any state name, and mapping to a
 # real one is the point for a text sensor whose blank means "no error".

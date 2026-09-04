@@ -25,6 +25,7 @@ from custom_components.discrete_statistics.config import (
 from custom_components.discrete_statistics.const import (
     DEFAULT_IGNORE,
     DEFAULT_IGNORE_SHORT,
+    DEFAULT_IGNORE_SHORT_UNKNOWN,
     DEFAULT_RECORD,
     DEFAULT_RECORD_KNOWN,
     DOMAIN,
@@ -738,3 +739,35 @@ async def test_the_options_flow_refuses_ignore_short_without_a_duration(recorder
     )
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {CONF_MIN_DURATION: "min_duration_required"}
+
+
+async def test_ignore_short_unknown_is_offered_and_needs_a_duration(recorder):
+    hass = recorder
+    assert await async_setup_component(hass, DOMAIN, {})
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_USER}
+    )
+    user_input = {
+        CONF_ENTITY_ID: ENTITY,
+        CONF_DEFAULT: DEFAULT_IGNORE_SHORT_UNKNOWN,
+        CONF_BLANK: STATE_UNKNOWN,
+    }
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], user_input
+    )
+    assert result["errors"] == {CONF_MIN_DURATION: "min_duration_required"}
+
+    with patch(
+        "custom_components.discrete_statistics.Compiler.async_compile_incremental",
+        return_value=0,
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {**user_input, CONF_MIN_DURATION: {"hours": 0, "minutes": 0, "seconds": 20}},
+        )
+        await hass.async_block_till_done()
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    cfg = hass.data[DOMAIN]["entry_configs"][result["result"].entry_id]
+    assert cfg.classify("on") == ("on", False)
+    assert cfg.classify("unavailable") == ("unavailable", True)

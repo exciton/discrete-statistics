@@ -13,6 +13,7 @@ from .statistic_ids import is_blank
 from .const import (
     DEFAULT_IGNORE,
     DEFAULT_IGNORE_SHORT,
+    DEFAULT_IGNORE_SHORT_UNKNOWN,
     DEFAULT_RECORD,
     DEFAULT_RECORD_KNOWN,
     DISPOSITION_IGNORE,
@@ -28,7 +29,14 @@ CONF_STATES = "states"
 CONF_BLANK = "blank"
 CONF_MIN_DURATION = "min_duration"
 
-DEFAULTS = (DEFAULT_RECORD, DEFAULT_RECORD_KNOWN, DEFAULT_IGNORE, DEFAULT_IGNORE_SHORT)
+DEFAULTS = (
+    DEFAULT_RECORD,
+    DEFAULT_RECORD_KNOWN,
+    DEFAULT_IGNORE,
+    DEFAULT_IGNORE_SHORT,
+    DEFAULT_IGNORE_SHORT_UNKNOWN,
+)
+SHORT_DEFAULTS = (DEFAULT_IGNORE_SHORT, DEFAULT_IGNORE_SHORT_UNKNOWN)
 DISPOSITIONS = (DISPOSITION_RECORD, DISPOSITION_IGNORE, DISPOSITION_IGNORE_SHORT)
 
 
@@ -115,6 +123,8 @@ class EntityConfig:
             return (None, False) if raw_state in UNKNOWN_STATES else (raw_state, False)
         if self.default == DEFAULT_IGNORE_SHORT:
             return raw_state, True
+        if self.default == DEFAULT_IGNORE_SHORT_UNKNOWN:
+            return raw_state, raw_state in UNKNOWN_STATES
         return None, False  # DEFAULT_IGNORE
 
 
@@ -174,7 +184,7 @@ def _usable_map_targets(states: dict[str, str]) -> dict[str, str]:
 
 def uses_ignore_short(default: str, states: Mapping[str, str]) -> bool:
     """Whether any state is `ignore_short`, so `min_duration` is needed."""
-    return default == DEFAULT_IGNORE_SHORT or DISPOSITION_IGNORE_SHORT in states.values()
+    return default in SHORT_DEFAULTS or DISPOSITION_IGNORE_SHORT in states.values()
 
 
 def min_duration_error(

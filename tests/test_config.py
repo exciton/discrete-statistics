@@ -467,3 +467,22 @@ def test_entity_config_from_entry_reads_the_minimum_duration():
     assert cfg.min_duration == 20.0
     assert cfg.classify("on") == ("on", True)
     assert entity_config_from_entry({CONF_ENTITY_ID: "binary_sensor.a"}, {}).min_duration == 0.0
+
+
+def test_ignore_short_unknown_is_conditional_only_for_unavailable_and_unknown():
+    cfg = parse(
+        [{
+            "entity_id": "sensor.x",
+            "default": "ignore_short_unknown",
+            "min_duration": {"minutes": 1},
+        }]
+    )[0]
+    assert cfg.classify("on") == ("on", False)
+    assert cfg.classify("unavailable") == ("unavailable", True)
+    assert cfg.classify("unknown") == ("unknown", True)
+    assert cfg.classify("") == ("unknown", True)
+
+
+def test_ignore_short_unknown_requires_a_threshold_too():
+    with pytest.raises(vol.Invalid, match="min_duration"):
+        parse([{"entity_id": "sensor.x", "default": "ignore_short_unknown"}])

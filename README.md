@@ -53,7 +53,7 @@ change.
 | `default` | `record_known` | disposition for states not listed |
 | `states` | `{}` | per-state overrides |
 | `blank` | `unknown` | what to do with a state that has no letters or digits |
-| `min_duration` | — | how long a spell of an `ignore_short` state must last to be recorded |
+| `min_duration` | — | how long a spell of a conditionally recorded state must last |
 
 `default`, `blank` and `min_duration` are available in the UI as well;
 per-state mappings are still YAML-only.
@@ -65,6 +65,8 @@ per-state mappings are still YAML-only.
 - `ignore` — only states listed in `states:` are recorded
 - `ignore_short` — every state, but a spell shorter than `min_duration`
   carries the previous state forward
+- `ignore_short_unknown` — every real state; `unavailable`/`unknown` only
+  when the spell lasts `min_duration`
 
 Each entry in `states:` is one of:
 
@@ -108,7 +110,7 @@ last seen.
 ### Short spells
 
 `ignore_short` records a state only when the entity stays in it for at least
-`min_duration`. A shorter spell is carried across as though the entity had
+`min_duration`, whether as a `states:` entry or as the `default`. A shorter spell is carried across as though the entity had
 never left the state before it: no transition is counted, and the time goes
 to the state it interrupted. `min_duration` takes a duration — `00:00:30`,
 `{minutes: 5}` — and can be at most one hour.
@@ -119,14 +121,15 @@ router reboot, but whose real outages are worth a band on the chart:
 ```yaml
 discrete_statistics:
   - entity_id: binary_sensor.grid_status
-    states:
-      unavailable: ignore_short
+    default: ignore_short_unknown
     min_duration: "00:05:00"
 ```
 
-A five-minute outage is recorded as five minutes of `unavailable` and one
-transition; a twenty-second blip is twenty more seconds of `on`, and no
-transition at all.
+`on` and `off` are recorded as they come. A five-minute outage is recorded
+as five minutes of `unavailable` and one transition; a twenty-second blip is
+twenty more seconds of `on`, and no transition at all. The same for one
+state only is a `states:` entry — `unavailable: ignore_short` with the
+`default` left alone.
 
 And a contact that bounces — a door that reads `off`, `on`, `off` in the
 half-second it takes to close:
@@ -173,8 +176,8 @@ discrete_statistics:
 
 Settings → Devices & Services → **Add integration** → **Discrete
 Statistics**. Pick an entity, optionally name it, and choose which states
-to record; the last choice, recording only states that last a minimum
-duration, reads the duration field below it. Compiling starts in the
+to record; the two choices that mention a minimum duration read the
+duration field below them. Compiling starts in the
 background as soon as you press Submit,
 and a notification reports how many hours were compiled: the entity's full
 retained history for a genuinely new entity, or just the trailing window if
