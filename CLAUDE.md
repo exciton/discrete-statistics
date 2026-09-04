@@ -43,6 +43,13 @@ docker run --rm -v "$PWD:/workspace" -v /home/bonne/Code/home_assistant_core:/co
 hassfest needs `ruff`, which the test image does not carry. The HACS check
 still has no local equivalent.
 
+The card lives in `frontend/` and is built into
+`custom_components/discrete_statistics/frontend/discrete-statistics-card.js`,
+which is committed; `script/release` rebuilds it and refuses to release
+when the committed file is stale. `cd frontend && npm test` runs the
+vitest suite for the pure modules; `npm run check` type-checks; `npm run
+build` bundles.
+
 ## Architecture
 
 A pure pipeline with a single I/O boundary. Dependencies point one way:
@@ -141,6 +148,15 @@ is static; `["entry_configs"]` holds one `EntityConfig` per config entry;
 the `recompute` service iterate. The compiler, lock and hourly timer stay
 singletons built in `async_setup` — a per-entry timer would let
 two entities compile concurrently and defeat the lock.
+
+`frontend.py` serves the built card as a static path and registers it as a
+frontend module URL, skipped when the `frontend` component is not loaded.
+The card itself (`frontend/src/`) mirrors the ID rules of `statistic_ids`
+in `statistic-ids.ts` — an ID is parsed from the right, the state is one
+token — and renders through the frontend's `<ha-chart-base>`, an internal
+element with no stability promise. `series.ts` holds the ratio maths:
+`change / hours(end - start)` per row, never divided by the sum over
+states, so any subset of states and a DST day both come out right.
 
 ## Invariants
 

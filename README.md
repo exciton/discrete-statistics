@@ -389,6 +389,61 @@ entities:
 A state that appears later accumulates immediately but must be added to the
 card's `entities` list to be drawn.
 
+## The card
+
+The integration ships its own card, so nothing needs adding under
+Resources. It draws one entity's states as stacked bars and is configured
+by entity rather than by statistic ID:
+
+```yaml
+type: custom:discrete-statistics-card
+entity: climate.living_room
+title: Heat pump
+metric: duration        # duration (time in state) or count (transitions)
+unit: percent           # auto, h, d or percent; only for duration
+period: month           # auto, hour, day, week, month or year
+days_to_show: 365
+```
+
+Every state the entity has statistics for is drawn, in the names the
+statistics carry. `states:` narrows and orders them; `ignore_states:`
+drops some and keeps the rest:
+
+```yaml
+states:          # only these, in this order
+  - heat
+  - cool
+```
+
+```yaml
+ignore_states:   # everything but these, alphabetically
+  - unavailable
+```
+
+Together they order the front and leave the list open: the states in
+`states:` come first, then every other state alphabetically, so a state
+the entity gains later still shows up, at the end:
+
+```yaml
+states:
+  - heat
+  - cool
+ignore_states:
+  - unavailable
+```
+
+`unit: percent` is the share of each bar's span spent in the state, so a
+bar whose states are all drawn is always full height. `auto` picks hours
+for hourly and daily bars and days for coarser ones.
+
+`energy_date_selection: true` makes the card follow a dashboard's
+`energy-date-selection` card instead of `days_to_show`; `collection_key`
+names the picker when a dashboard has more than one.
+
+The card renders through Home Assistant's own chart component. Because
+that component is internal to the frontend, a Home Assistant release can
+change it; the integration's minimum version is raised when that happens.
+
 ## Backfilling
 
 An entity that has not changed within the recorder's window has no history at

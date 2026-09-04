@@ -24,6 +24,13 @@ git fetch -q origin main
 [[ "$(git rev-parse HEAD)" == "$(git rev-parse origin/main)" ]] || { echo "main is not in sync with origin" >&2; exit 1; }
 ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || { echo "$TAG already exists" >&2; exit 1; }
 
+echo "Building the card..." >&2
+(cd "$REPO_ROOT/frontend" && npm ci --silent && npm run --silent check && npm test --silent && npm run --silent build)
+if ! git diff --quiet -- custom_components/discrete_statistics/frontend; then
+  echo "the built card was out of date; commit custom_components/discrete_statistics/frontend and rerun" >&2
+  exit 1
+fi
+
 python3 - "$MANIFEST" "$VERSION" <<'PY'
 import json, sys
 path, version = sys.argv[1:]
