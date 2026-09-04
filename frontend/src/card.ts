@@ -49,8 +49,8 @@ export class DiscreteStatisticsCard extends LitElement {
 
   private _subscribed = false;
 
-  // The range the in-flight or last refresh read, so the update cycle that
-  // follows _subscribeRange's own assignment does not fetch it twice.
+  // The range the in-flight or last refresh is serving; a _range write of
+  // the same object needs no fetch.
   private _refreshedRange?: Range;
 
   public static getStubConfig(): Partial<CardConfig> {
@@ -136,6 +136,7 @@ export class DiscreteStatisticsCard extends LitElement {
     this._statsFor = undefined;
     this._error = undefined;
     this._subscribed = false;
+    this._chartOptions = this._options();
   }
 
   public getCardSize(): number {
@@ -151,7 +152,9 @@ export class DiscreteStatisticsCard extends LitElement {
 
   public connectedCallback(): void {
     super.connectedCallback();
-    if (this.hass && this._config) {
+    // Before the first update there is one pending, and its _config branch
+    // subscribes; this handles re-attach.
+    if (this.hasUpdated && this.hass && this._config && !this._subscribed) {
       this._subscribeRange();
     }
   }
