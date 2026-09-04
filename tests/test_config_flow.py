@@ -17,9 +17,14 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.const import STATE_UNKNOWN
 
-from custom_components.discrete_statistics.config import CONF_BLANK, CONF_DEFAULT
+from custom_components.discrete_statistics.config import (
+    CONF_BLANK,
+    CONF_DEFAULT,
+    CONF_MIN_DURATION,
+)
 from custom_components.discrete_statistics.const import (
     DEFAULT_IGNORE,
+    DEFAULT_IGNORE_SHORT,
     DEFAULT_RECORD,
     DEFAULT_RECORD_KNOWN,
     DOMAIN,
@@ -541,3 +546,195 @@ async def test_the_name_box_is_not_prefilled_with_the_default(recorder, entity_r
         if key.description
     }
     assert suggested.get(CONF_NAME) in (None, "")
+
+
+async def test_ignore_short_stores_the_minimum_duration_in_seconds(recorder):
+    hass = recorder
+    assert await async_setup_component(hass, DOMAIN, {})
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_USER}
+    )
+    with patch(
+        "custom_components.discrete_statistics.Compiler.async_compile_incremental",
+        return_value=0,
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {
+                CONF_ENTITY_ID: ENTITY,
+                CONF_DEFAULT: DEFAULT_IGNORE_SHORT,
+                CONF_BLANK: STATE_UNKNOWN,
+                CONF_MIN_DURATION: {"hours": 0, "minutes": 5, "seconds": 0},
+            },
+        )
+        await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["options"] == {
+        CONF_NAME: None,
+        CONF_DEFAULT: DEFAULT_IGNORE_SHORT,
+        CONF_BLANK: STATE_UNKNOWN,
+        CONF_MIN_DURATION: 300.0,
+    }
+    cfg = hass.data[DOMAIN]["entry_configs"][result["result"].entry_id]
+    assert cfg.min_duration == 300.0
+    assert cfg.classify("unavailable") == ("unavailable", True)
+
+
+async def test_the_duration_is_optional_under_the_other_defaults(recorder):
+    hass = recorder
+    assert await async_setup_component(hass, DOMAIN, {})
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_USER}
+    )
+    with patch(
+        "custom_components.discrete_statistics.Compiler.async_compile_incremental",
+        return_value=0,
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {
+                CONF_ENTITY_ID: ENTITY,
+                CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
+                CONF_BLANK: STATE_UNKNOWN,
+            },
+        )
+        await hass.async_block_till_done()
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert CONF_MIN_DURATION not in result["options"]
+
+
+@pytest.mark.parametrize(
+    ("duration", "error"),
+    [
+        (None, "min_duration_required"),
+        ({"hours": 0, "minutes": 0, "seconds": 0}, "min_duration_required"),
+        ({"hours": 1, "minutes": 0, "seconds": 1}, "min_duration_too_long"),
+    ],
+)
+async def test_an_unusable_duration_keeps_the_form_open(recorder, duration, error):
+    hass = recorder
+    assert await async_setup_component(hass, DOMAIN, {})
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_USER}
+    )
+    user_input = {
+        CONF_ENTITY_ID: ENTITY,
+        CONF_DEFAULT: DEFAULT_IGNORE_SHORT,
+        CONF_BLANK: STATE_UNKNOWN,
+    }
+    if duration is not None:
+        user_input[CONF_MIN_DURATION] = duration
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], user_input
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "user"
+    assert result["errors"] == {CONF_MIN_DURATION: error}
+
+
+async def test_a_long_duration_is_fine_when_nothing_reads_it(recorder):
+    hass = recorder
+    assert await async_setup_component(hass, DOMAIN, {})
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_USER}
+    )
+    with patch(
+        "custom_components.discrete_statistics.Compiler.async_compile_incremental",
+        return_value=0,
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {
+                CONF_ENTITY_ID: ENTITY,
+                CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
+                CONF_BLANK: STATE_UNKNOWN,
+                CONF_MIN_DURATION: {"hours": 2, "minutes": 0, "seconds": 0},
+            },
+        )
+        await hass.async_block_till_done()
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["options"][CONF_MIN_DURATION] == 7200.0
+
+
+async def _entry_with(hass, options):
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENTITY_ID: ENTITY},
+        options={CONF_NAME: "Grid Status", CONF_BLANK: STATE_UNKNOWN, **options},
+        unique_id=ENTITY,
+    )
+    entry.add_to_hass(hass)
+    assert await async_setup_component(hass, DOMAIN, {})
+    await hass.async_block_till_done()
+    return entry
+
+
+async def test_the_options_flow_offers_the_stored_duration_back(recorder):
+    hass = recorder
+    entry = await _entry_with(
+        hass, {CONF_DEFAULT: DEFAULT_IGNORE_SHORT, CONF_MIN_DURATION: 3661.0}
+    )
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    [key] = [k for k in result["data_schema"].schema if k == CONF_MIN_DURATION]
+    assert key.description == {
+        "suggested_value": {"hours": 1, "minutes": 1, "seconds": 1}
+    }
+
+
+async def test_the_options_flow_suggests_nothing_when_no_duration_is_stored(recorder):
+    hass = recorder
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    [key] = [k for k in result["data_schema"].schema if k == CONF_MIN_DURATION]
+    assert key.description is None
+
+
+async def test_changing_only_the_duration_recompiles_the_whole_history(recorder):
+    hass = recorder
+    entry = await _entry_with(
+        hass, {CONF_DEFAULT: DEFAULT_IGNORE_SHORT, CONF_MIN_DURATION: 30.0}
+    )
+
+    with patch(
+        "custom_components.discrete_statistics.Compiler.async_compile",
+        return_value=0,
+    ) as full:
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {
+                CONF_NAME: "Grid Status",
+                CONF_DEFAULT: DEFAULT_IGNORE_SHORT,
+                CONF_BLANK: STATE_UNKNOWN,
+                CONF_MIN_DURATION: {"hours": 0, "minutes": 1, "seconds": 0},
+            },
+        )
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert entry.options[CONF_MIN_DURATION] == 60.0
+    assert full.called
+    assert full.call_args.args[1] is None
+
+
+async def test_the_options_flow_refuses_ignore_short_without_a_duration(recorder):
+    hass = recorder
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_NAME: "Grid Status",
+            CONF_DEFAULT: DEFAULT_IGNORE_SHORT,
+            CONF_BLANK: STATE_UNKNOWN,
+        },
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {CONF_MIN_DURATION: "min_duration_required"}

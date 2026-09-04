@@ -1948,3 +1948,161 @@ async def test_the_evidence_is_the_first_whole_hour_not_the_hour_of_the_row(
     off = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=4))
     assert on == pytest.approx([0.5, 0.5, 0.5 + 1 / 3, 0.5 + 1 / 3])
     assert off == pytest.approx([0.5, 1.5, 1.5 + 2 / 3, 2.5 + 2 / 3])
+
+
+DURATION_UNAVAILABLE = (
+    "discrete_statistics:binary_sensor_grid_status_unavailable_duration"
+)
+COUNT_UNAVAILABLE = "discrete_statistics:binary_sensor_grid_status_unavailable_count"
+
+
+def short_cfg(min_duration=300.0):
+    return EntityConfig(
+        entity_id=ENTITY,
+        name="Grid Status",
+        default="record_known",
+        states={"unavailable": "ignore_short"},
+        min_duration=min_duration,
+    )
+
+
+async def _set_states(hass, freezer, start, rows):
+    for seconds, state in rows:
+        freezer.move_to(start + timedelta(seconds=seconds))
+        hass.states.async_set(ENTITY, state)
+        await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+
+async def test_a_short_outage_is_carried_and_a_long_one_recorded(recorder, freezer):
+    """A 20 s blip under a five-minute threshold, then a ten-minute one."""
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    await _set_states(
+        hass,
+        freezer,
+        start,
+        ((0, "on"), (600, "unavailable"), (620, "on"), (5400, "unavailable"), (6000, "on")),
+    )
+
+    freezer.move_to(start + timedelta(hours=3))
+    await Compiler(hass).async_compile(short_cfg(), start.timestamp())
+
+    end = start + timedelta(hours=3)
+    assert await read_sums(hass, DURATION_ON, start, end) == pytest.approx(
+        [1.0, 2.0 - 600 / 3600, 3.0 - 600 / 3600]
+    )
+    assert await read_sums(hass, DURATION_UNAVAILABLE, start, end) == pytest.approx(
+        [0.0, 600 / 3600, 600 / 3600]
+    )
+    assert await read_sums(hass, COUNT_UNAVAILABLE, start, end) == [0, 1, 1]
+    assert await read_sums(hass, COUNT_ON, start, end) == [0, 1, 1]
+
+
+async def test_a_spell_still_running_at_compile_time_is_settled_by_the_trailing_window(
+    recorder, freezer
+):
+    """Unavailable from 0:59:50, compiled at 1:03 - too soon to know.
+
+    The hour is compiled with the spell carried across, provisionally. It
+    ends at 1:20, and the run at 2:03 recompiles hour 0 with the answer.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    await _set_states(hass, freezer, start, ((0, "on"), (3590, "unavailable")))
+
+    freezer.move_to(start + timedelta(hours=1, minutes=3))
+    compiler = Compiler(hass)
+    await compiler.async_compile_incremental(short_cfg())
+    assert await read_sums(
+        hass, DURATION_ON, start, start + timedelta(hours=1)
+    ) == [1.0]
+    assert await existing(hass) == sorted([COUNT_ON, DURATION_ON])
+
+    await _set_states(hass, freezer, start, ((4800, "on"),))
+    freezer.move_to(start + timedelta(hours=2, minutes=3))
+    await compiler.async_compile_incremental(short_cfg())
+
+    end = start + timedelta(hours=2)
+    assert await read_sums(hass, DURATION_ON, start, end) == pytest.approx(
+        [1.0 - 10 / 3600, 2.0 - 1210 / 3600]
+    )
+    assert await read_sums(hass, DURATION_UNAVAILABLE, start, end) == pytest.approx(
+        [10 / 3600, 1210 / 3600]
+    )
+    assert await read_sums(hass, COUNT_UNAVAILABLE, start, end) == [1, 1]
+
+
+async def test_a_short_spell_across_a_chunk_seam_is_no_event(
+    recorder, freezer, monkeypatch
+):
+    """The blip is dropped by both chunks and the second is handed `on`.
+
+    Its first row is then into `on` - the state it was handed - twenty
+    seconds after the seam, not on it.
+    """
+    monkeypatch.setattr(compiler_module, "CHUNK_HOURS", 1)
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    await _set_states(
+        hass, freezer, start, ((0, "on"), (3590, "unavailable"), (3620, "on"))
+    )
+
+    freezer.move_to(start + timedelta(hours=3))
+    await Compiler(hass).async_compile(short_cfg(), start.timestamp())
+
+    end = start + timedelta(hours=3)
+    assert await read_sums(hass, DURATION_ON, start, end) == [1.0, 2.0, 3.0]
+    assert await read_sums(hass, COUNT_ON, start, end) == [0, 0, 0]
+    assert await existing(hass) == sorted([COUNT_ON, DURATION_ON])
+
+
+async def test_a_long_spell_across_a_chunk_seam_is_recorded_once(
+    recorder, freezer, monkeypatch
+):
+    monkeypatch.setattr(compiler_module, "CHUNK_HOURS", 1)
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    await _set_states(
+        hass, freezer, start, ((0, "on"), (3000, "unavailable"), (3660, "on"))
+    )
+
+    freezer.move_to(start + timedelta(hours=3))
+    await Compiler(hass).async_compile(short_cfg(), start.timestamp())
+
+    end = start + timedelta(hours=3)
+    assert await read_sums(hass, DURATION_UNAVAILABLE, start, end) == pytest.approx(
+        [600 / 3600, 660 / 3600, 660 / 3600]
+    )
+    assert await read_sums(hass, COUNT_UNAVAILABLE, start, end) == [1, 1, 1]
+    assert await read_sums(hass, COUNT_ON, start, end) == [0, 1, 1]
+
+
+async def test_ignore_short_as_the_default_debounces_end_to_end(recorder, freezer):
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    debounced = EntityConfig(
+        entity_id=ENTITY, name=None, default="ignore_short", min_duration=5.0
+    )
+    await _set_states(
+        hass,
+        freezer,
+        start,
+        (
+            (0, "off"),
+            (600, "on"),
+            (600.2, "off"),
+            (600.4, "on"),
+            (600.6, "off"),
+            (1200, "on"),
+            (1800, "off"),
+        ),
+    )
+
+    freezer.move_to(start + timedelta(hours=1))
+    await Compiler(hass).async_compile(debounced, start.timestamp())
+
+    end = start + timedelta(hours=1)
+    assert await read_sums(hass, COUNT_ON, start, end) == [1]
+    assert await read_sums(hass, COUNT_OFF, start, end) == [1]
+    assert await read_sums(hass, DURATION_ON, start, end) == pytest.approx([600 / 3600])

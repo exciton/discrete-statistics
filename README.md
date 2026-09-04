@@ -53,50 +53,103 @@ change.
 | `default` | `record_known` | disposition for states not listed |
 | `states` | `{}` | per-state overrides |
 | `blank` | `unknown` | what to do with a state that has no letters or digits |
+| `min_duration` | — | how long a spell of an `ignore_short` state must last to be recorded |
 
-Both `default` and `blank` are available in the UI as well; per-state
-mappings are still YAML-only.
+`default`, `blank` and `min_duration` are available in the UI as well;
+per-state mappings are still YAML-only.
 
 `default` accepts:
 
 - `record` — every state, including `unavailable` and `unknown`
 - `record_known` — every real state; `unavailable`/`unknown` carry forward
 - `ignore` — only states listed in `states:` are recorded
+- `ignore_short` — every state, but a spell shorter than `min_duration`
+  carries the previous state forward
 
 Each entry in `states:` is one of:
 
 - `ignore` — carry the previous state forward
 - `record` — record it, overriding `default`
+- `ignore_short` — record it, unless the spell is shorter than `min_duration`
 - another state name — map onto that state
 
-Some states have no name to record under: an empty one, which Home Assistant
-produces when an entity is removed or reloaded, and the rarer state made only
-of whitespace or punctuation. `blank:` says what becomes of those. It takes
+Some states have no name to record under: empty, blank or made only
+of whitespace and punctuation. `blank:` says what becomes of those. It takes
 either:
 
 - `ignore` — carry the previous state forward
 - a state name — substitute it
 
-A name is substituted *before* `default` is applied, so the stock `unknown`
-behaves exactly like a real `unknown` — ignored by `record_known`, recorded by
-`record`. `blank: ignore` is different from that: it ignores blanks only, and
-leaves genuine `unknown` states alone.
+The substitute is resolved like any other state, so with the default
+`blank: unknown` a blank state is treated as if the entity had reported
+`unknown` — ignored by `record_known`, recorded by `record`. `blank: ignore`
+is narrower: it ignores blanks only, and leaves real `unknown` states alone.
 
-A blank state often carries real meaning, so an entry in `states:` beats the
-substitution. A text sensor that reports `""` for "no error" wants:
+A blank state often carries real meaning. A text sensor that reports `""`
+for "no error" wants that recorded as a state of its own, and `states:` is
+where to say so:
 
 ```yaml
 discrete_statistics:
   - entity_id: sensor.pump_error
-    blank: ok                # or, equivalently here:
     states:
       "": ok
       unavailable: offline
+    blank: ignore
 ```
 
-Without one of those, "no error" would be treated as `unknown` and — under
-the default `record_known` — carried forward, crediting the time to whichever
-error was last seen.
+`states:` is consulted first, so `""` maps to `ok` before `blank:` is ever
+looked at. `blank:` then applies to whatever blank states are *not* listed —
+here, anything made of whitespace or punctuation is carried forward. Without
+the mapping, `""` would be substituted with `unknown` and — under the default
+`record_known` — carried forward, crediting the time to whichever error was
+last seen.
+
+### Short spells
+
+`ignore_short` records a state only when the entity stays in it for at least
+`min_duration`. A shorter spell is carried across as though the entity had
+never left the state before it: no transition is counted, and the time goes
+to the state it interrupted. `min_duration` takes a duration — `00:00:30`,
+`{minutes: 5}` — and can be at most one hour.
+
+Two uses. A device that drops off the network for a few seconds on every
+router reboot, but whose real outages are worth a band on the chart:
+
+```yaml
+discrete_statistics:
+  - entity_id: binary_sensor.grid_status
+    states:
+      unavailable: ignore_short
+    min_duration: "00:05:00"
+```
+
+A five-minute outage is recorded as five minutes of `unavailable` and one
+transition; a twenty-second blip is twenty more seconds of `on`, and no
+transition at all.
+
+And a contact that bounces — a door that reads `off`, `on`, `off` in the
+half-second it takes to close:
+
+```yaml
+discrete_statistics:
+  - entity_id: binary_sensor.garage_door
+    default: ignore_short
+    min_duration:
+      seconds: 5
+```
+
+Every state is conditional then, so the bounce is not counted and the door
+closed once. `unavailable` and `unknown` are recorded under it whenever
+they last long enough; add `unavailable: ignore` to `states:` to carry them
+forward regardless.
+
+Each spell is judged on its own length, not on the run it sits in: `on` for
+two seconds then `unknown` for two seconds, under a five-second threshold, is
+two short spells, not one four-second one. Until a spell has ended the
+component cannot know how long it will be, so an hour compiled while one is
+running treats it as short and is compiled again once the answer is in —
+the same trailing recompile that picks up a late-committed state.
 
 ```yaml
 discrete_statistics:
@@ -120,15 +173,17 @@ discrete_statistics:
 
 Settings → Devices & Services → **Add integration** → **Discrete
 Statistics**. Pick an entity, optionally name it, and choose which states
-to record. Compiling starts in the background as soon as you press Submit,
+to record; the last choice, recording only states that last a minimum
+duration, reads the duration field below it. Compiling starts in the
+background as soon as you press Submit,
 and a notification reports how many hours were compiled: the entity's full
 retained history for a genuinely new entity, or just the trailing window if
 it was previously configured and deleted, since statistics are kept on
 removal and compiling resumes from that watermark.
 
-Changing an entry's recording rule recompiles that entity's whole history, so
-the change applies to the past as well as the future; changing only its name
-does not.
+Changing an entry's recording rule or minimum duration recompiles that
+entity's whole history, so the change applies to the past as well as the
+future; changing only its name does not.
 
 The entity itself cannot be changed after creation: it determines the
 statistic IDs, so a change would orphan the existing series. Delete the
@@ -470,8 +525,7 @@ hourly buckets, and only what Home Assistant's statistics cards can do with
 them.
 
 **An entity.** A sensor can sit on a card, gate an automation, and be read in
-a template; `history_stats` also offers a `min_state_duration` filter for
-debouncing. Statistics are only reachable through the statistics cards and
+a template. Statistics are only reachable through the statistics cards and
 the recorder's websocket API.
 
 Its `ratio` type is not on that list. Hours per hour is already a fraction:
@@ -496,7 +550,7 @@ chart under *Charts* draws.
 | State mapping | none | `states:` map, `default`, `blank` |
 | Window | any template; two of `start`/`end`/`duration` | none — hourly, and whatever the cards aggregate |
 | Share of time | `ratio` % | `mean` of a duration: hours per hour is a fraction |
-| Debounce | `min_state_duration` | no |
+| Debounce | `min_state_duration` | `ignore_short` with `min_duration`, per state or as the default |
 | Usable in automations | yes, it is a sensor | no |
 | Configuration | UI with live preview, or YAML; one sensor per state × metric × window | UI or YAML; one entry per entity |
 | Long-term statistics | of the sensor's own value (`measurement`), or `total_increasing` with reset detection | are the product |

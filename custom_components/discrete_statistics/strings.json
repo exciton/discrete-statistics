@@ -8,13 +8,15 @@
           "entity_id": "Entity",
           "name": "Name",
           "default": "States to record",
-          "blank": "Blank states"
+          "blank": "Blank states",
+          "min_duration": "Minimum duration"
         },
         "data_description": {
           "entity_id": "The binary or enum entity to track. It cannot be changed later, because it determines the statistic IDs.",
           "name": "Shown on charts. Defaults to the entity's own name.",
-          "default": "Time in an ignored state is credited to the previous recorded state - it never creates a gap, and it does not count as a transition.",
-          "blank": "Some entities report a state with no letters or digits at all - empty, or punctuation. That has no name to record under, so this says what becomes of it. Type any state name to record it as that instead."
+          "default": "Time in an ignored state is credited to the previous recorded state - it never creates a gap, and it does not count as a transition. The last choice needs a minimum duration below.",
+          "blank": "Some entities report a state with no letters or digits at all - empty, or punctuation. That has no name to record under, so this says what becomes of it. Type any state name to record it as that instead.",
+          "min_duration": "Used only by “Record every state that lasts a minimum duration”. A state the entity leaves again sooner than this is not recorded: the previous state carries on as though it had never been left, and no transition is counted. At most one hour."
         }
       }
     },
@@ -25,7 +27,9 @@
     "error": {
       "blank_record": "A blank state has no name to record it under. Choose Ignore, or type a state name to record it as.",
       "blank_unusable": "That has no letters or digits either, so it cannot name a statistic. Choose Ignore, or type a state name.",
-      "continuous_state": "That entity reports a continuous measurement. Discrete Statistics tracks entities with a fixed set of states, such as on/off or a list of modes."
+      "continuous_state": "That entity reports a continuous measurement. Discrete Statistics tracks entities with a fixed set of states, such as on/off or a list of modes.",
+      "min_duration_required": "Recording every state that lasts a minimum duration needs one longer than zero.",
+      "min_duration_too_long": "At most one hour."
     }
   },
   "options": {
@@ -35,26 +39,31 @@
         "data": {
           "name": "Name",
           "default": "States to record",
-          "blank": "Blank states"
+          "blank": "Blank states",
+          "min_duration": "Minimum duration"
         },
         "data_description": {
           "name": "Shown on charts. Leave blank to follow the entity’s own name, currently “{default_name}”.",
-          "default": "Time in an ignored state is credited to the previous recorded state - it never creates a gap, and it does not count as a transition. Changing this recompiles the entity's whole history.",
-          "blank": "Some entities report a state with no letters or digits at all - empty, or punctuation. That has no name to record under, so this says what becomes of it. Type any state name to record it as that instead."
+          "default": "Time in an ignored state is credited to the previous recorded state - it never creates a gap, and it does not count as a transition. The last choice needs a minimum duration below. Changing this recompiles the entity's whole history.",
+          "blank": "Some entities report a state with no letters or digits at all - empty, or punctuation. That has no name to record under, so this says what becomes of it. Type any state name to record it as that instead.",
+          "min_duration": "Used only by “Record every state that lasts a minimum duration”. A state the entity leaves again sooner than this is not recorded: the previous state carries on as though it had never been left, and no transition is counted. At most one hour."
         },
         "description": "Recording statistics for **{entity}**."
       }
     },
     "error": {
       "blank_record": "A blank state has no name to record it under. Choose Ignore, or type a state name to record it as.",
-      "blank_unusable": "That has no letters or digits either, so it cannot name a statistic. Choose Ignore, or type a state name."
+      "blank_unusable": "That has no letters or digits either, so it cannot name a statistic. Choose Ignore, or type a state name.",
+      "min_duration_required": "Recording every state that lasts a minimum duration needs one longer than zero.",
+      "min_duration_too_long": "At most one hour."
     }
   },
   "selector": {
     "default": {
       "options": {
         "record": "Record every state, including unavailable and unknown",
-        "record_known": "Record known states, ignoring unavailable and unknown"
+        "record_known": "Record known states, ignoring unavailable and unknown",
+        "ignore_short": "Record every state that lasts a minimum duration, including unavailable and unknown"
       }
     },
     "blank": {

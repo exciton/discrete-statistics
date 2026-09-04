@@ -334,6 +334,28 @@ not an absence of data. Letting it reach
 entity's compile — permanently, because the watermark never advanced past the
 chunk containing it.
 
+**A short spell is judged on its own length, after the rows have been read
+past the window.** `ignore_short` is answered in `canonicalise`, not
+`resolve`: `classify` only flags the state, and whether a spell of it is
+kept depends on when the *next* recordable row lands - which may be after
+`window_end`, so `_async_history` reads `min_duration` beyond it. A spell
+still open at the last row is measured to `known_until`, `min(window_end +
+min_duration, now)`, and dropped when that is too soon: a provisional
+answer, which the trailing window corrects once the spell has ended. The
+start-time row is timestamped at the query start, so a spell is measured
+from there at the earliest; `MAX_MIN_DURATION` is the hour the opening
+chunk reads back, which is what makes a long spell reaching the window
+from further back always measure long. On later chunks the same truncation
+can drop a spell that the previous chunk kept, and that is harmless: the
+dropped spell then has nothing before it, so the carry falls through to
+the state the previous chunk ended in - the verdict it reached with the
+rows to hand. Each spell is measured alone, to the next spell's start
+whether or not that one survives; measuring the run would make the run the
+whole timeline under `default: ignore_short`. The boundary dedupe in
+`_open_window` is on the *state*, not the timestamp, because a short spell
+dropped across a seam leaves the next chunk's first row into the state it
+was handed, seconds after the boundary.
+
 **A window no source can open is moved, not filled.** `_open_window`
 advances `window_start` to the first whole hour that begins in a recordable
 transition, and the hours passed over are not written. They are either

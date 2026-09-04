@@ -251,12 +251,14 @@ async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
     if title != entry.title:
         hass.config_entries.async_update_entry(entry, title=title)
 
-    # `default` and `blank` both change how past states were attributed, so
-    # either one moving means the whole history must be recompiled. A name
-    # change reaches the display on the next ordinary run with no rewrite.
-    if old_cfg is not None and (cfg.default, cfg.blank) == (
+    # `default`, `blank` and `min_duration` all change how past states were
+    # attributed, so any of them moving means the whole history must be
+    # recompiled. A name change reaches the display on the next ordinary
+    # run with no rewrite.
+    if old_cfg is not None and (cfg.default, cfg.blank, cfg.min_duration) == (
         old_cfg.default,
         old_cfg.blank,
+        old_cfg.min_duration,
     ):
         return
 

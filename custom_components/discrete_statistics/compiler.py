@@ -231,14 +231,21 @@ class Compiler:
     ) -> list:
         """Return the recorder rows for [query_start, window_end).
 
+        Plus `cfg.min_duration` beyond the end, so a short spell that ends
+        after the window can still be measured.
+
         The start-time state is included, so the first row is the state in
-        effect at query_start whatever its timestamp.
+        effect at query_start - and timestamped there, not where it
+        actually began. A spell is therefore measured from the query start
+        at the earliest, which is why `min_duration` is capped at the hour
+        the opening chunk reads back: a spell that reaches the window from
+        further back than that always measures long.
         """
         history = await get_instance(self._hass).async_add_executor_job(
             state_changes_during_period,
             self._hass,
             _as_datetime(query_start - START_MARGIN),
-            _as_datetime(window_end),
+            _as_datetime(window_end + cfg.min_duration),
             cfg.entity_id,
             True,  # no_attributes
             False,  # descending
@@ -363,7 +370,16 @@ class Compiler:
         known state are not compiled at all: they keep whatever rows they
         have, or none.
         """
-        carried, transitions = canonicalise(cfg, rows, window_start)
+        # A short spell that has not ended by the last row is measured to
+        # the end of what was read - or to now, when that is sooner. The
+        # decision is provisional then, and the trailing window revisits
+        # it once the spell has ended.
+        known_until = min(
+            window_end + cfg.min_duration, dt_util.utcnow().timestamp()
+        )
+        carried, transitions = canonicalise(
+            cfg, rows, window_start, window_end, known_until
+        )
 
         if carried is None:
             # Proof rather than inference - `last_changed` demonstrates the
@@ -378,12 +394,13 @@ class Compiler:
             # held one state throughout, which is exactly what they say.
             carried = state.carried
 
-        if transitions and transitions[0] == (window_start, carried):
-            # A row on the boundary into the state already carried is that
-            # state's beginning, not a transition into it: the state
-            # machine's `last_changed` IS this row, or an ignored row sat
-            # between two spells of it. Counting it would count a change
-            # from a state to itself.
+        if transitions and transitions[0][1] == carried:
+            # A first row into the state already carried is that state's
+            # beginning, not a transition into it: the state machine's
+            # `last_changed` IS this row, or an ignored row sat between
+            # two spells of it - on the boundary, or a short spell dropped
+            # across the seam from the chunk that carried the state.
+            # Counting it would count a change from a state to itself.
             transitions = transitions[1:]
 
         if carried is not None:
@@ -399,7 +416,9 @@ class Compiler:
         window_start = first_whole_hour(transitions[0][0])
         if window_start >= window_end:
             return None
-        carried, transitions = canonicalise(cfg, rows, window_start)
+        carried, transitions = canonicalise(
+            cfg, rows, window_start, window_end, known_until
+        )
         if transitions and transitions[0][0] == window_start:
             # Nothing transitioned INTO an entity's first known state, so
             # carry it rather than counting its birth as an event just

@@ -12,19 +12,24 @@ from homeassistant.helpers import config_validation as cv
 from .statistic_ids import is_blank
 from .const import (
     DEFAULT_IGNORE,
+    DEFAULT_IGNORE_SHORT,
     DEFAULT_RECORD,
     DEFAULT_RECORD_KNOWN,
     DISPOSITION_IGNORE,
+    DISPOSITION_IGNORE_SHORT,
     DISPOSITION_RECORD,
     DOMAIN,
+    MAX_MIN_DURATION,
     UNKNOWN_STATES,
 )
 
 CONF_DEFAULT = "default"
 CONF_STATES = "states"
 CONF_BLANK = "blank"
+CONF_MIN_DURATION = "min_duration"
 
-DEFAULTS = (DEFAULT_RECORD, DEFAULT_RECORD_KNOWN, DEFAULT_IGNORE)
+DEFAULTS = (DEFAULT_RECORD, DEFAULT_RECORD_KNOWN, DEFAULT_IGNORE, DEFAULT_IGNORE_SHORT)
+DISPOSITIONS = (DISPOSITION_RECORD, DISPOSITION_IGNORE, DISPOSITION_IGNORE_SHORT)
 
 
 @dataclass(frozen=True)
@@ -40,12 +45,23 @@ class EntityConfig:
     # default is applied - so the stock `unknown` is ignored by
     # `record_known` exactly as a real `unknown` would be.
     blank: str = STATE_UNKNOWN
+    # Seconds. A spell of an `ignore_short` state shorter than this is
+    # ignored - carried across - as though the entity had never left the
+    # state before it. Zero when nothing is `ignore_short`.
+    min_duration: float = 0.0
 
     def resolve(self, raw_state: str) -> str | None:
         """Return the canonical state for a raw state, or None to ignore it.
 
         None means carry-forward: the previous canonical state continues and
-        no transition is counted.
+        no transition is counted. An `ignore_short` state resolves to its
+        name: whether a spell of it is long enough to keep is a question
+        about a spell, not a state, and `canonicalise` answers it.
+        """
+        return self.classify(raw_state)[0]
+
+    def classify(self, raw_state: str) -> tuple[str | None, bool]:
+        """Return (canonical state or None, whether it is `ignore_short`).
 
         A blank state - no letters or digits, which is what the recorder
         stores as NULL when an entity is removed or reloaded - is handled by
@@ -60,25 +76,27 @@ class EntityConfig:
         """
         if raw_state not in self.states and is_blank(raw_state):
             if self.blank == DISPOSITION_IGNORE:
-                return None
+                return None, False
             raw_state = self.blank
 
-        canonical = self._resolve(raw_state)
+        canonical, short = self._resolve(raw_state)
         if canonical is None:
-            return None
+            return None, False
         if is_blank(canonical):
             # Named explicitly - `"": record` - but still not an ID.
-            canonical = self._resolve(self.blank)
-        return canonical
+            return self._resolve(self.blank)
+        return canonical, short
 
-    def _resolve(self, raw_state: str) -> str | None:
+    def _resolve(self, raw_state: str) -> tuple[str | None, bool]:
         """Apply the disposition table and the default."""
         if (disposition := self.states.get(raw_state)) is not None:
             if disposition == DISPOSITION_IGNORE:
-                return None
+                return None, False
             if disposition == DISPOSITION_RECORD:
-                return raw_state
-            return disposition  # a map target
+                return raw_state, False
+            if disposition == DISPOSITION_IGNORE_SHORT:
+                return raw_state, True
+            return disposition, False  # a map target
 
         # A map target is always recorded, whatever the default says. The
         # disposition keywords share the value slot with map targets, so they
@@ -86,18 +104,18 @@ class EntityConfig:
         # "ignore" would be force-recorded because some unrelated key used that
         # keyword.
         map_targets = {
-            value
-            for value in self.states.values()
-            if value not in (DISPOSITION_RECORD, DISPOSITION_IGNORE)
+            value for value in self.states.values() if value not in DISPOSITIONS
         }
         if raw_state in map_targets:
-            return raw_state
+            return raw_state, False
 
         if self.default == DEFAULT_RECORD:
-            return raw_state
+            return raw_state, False
         if self.default == DEFAULT_RECORD_KNOWN:
-            return None if raw_state in UNKNOWN_STATES else raw_state
-        return None  # DEFAULT_IGNORE
+            return (None, False) if raw_state in UNKNOWN_STATES else (raw_state, False)
+        if self.default == DEFAULT_IGNORE_SHORT:
+            return raw_state, True
+        return None, False  # DEFAULT_IGNORE
 
 
 def blank_error(value: str) -> str | None:
@@ -149,9 +167,50 @@ def _usable_map_targets(states: dict[str, str]) -> dict[str, str]:
     genuinely reports a blank could not be mapped anywhere.
     """
     for value in states.values():
-        if value not in (DISPOSITION_RECORD, DISPOSITION_IGNORE):
+        if value not in DISPOSITIONS:
             _usable_state_name(value)
     return states
+
+
+def uses_ignore_short(default: str, states: Mapping[str, str]) -> bool:
+    """Whether any state is `ignore_short`, so `min_duration` is needed."""
+    return default == DEFAULT_IGNORE_SHORT or DISPOSITION_IGNORE_SHORT in states.values()
+
+
+def min_duration_error(
+    seconds: float | None, default: str, states: Mapping[str, str]
+) -> str | None:
+    """Return a translation key when `min_duration` is wrong for this config.
+
+    It is required by `ignore_short` - a threshold of nothing would make it
+    plain `record` - and capped at an hour, the distance the compiler reads
+    back before a window to find the state carried into it. Without
+    `ignore_short` it does nothing, so any value is let through.
+
+    Shared with the config flow, so YAML and the UI cannot disagree.
+    """
+    if not uses_ignore_short(default, states):
+        return None
+    if seconds is None or seconds <= 0:
+        return "min_duration_required"
+    if seconds > MAX_MIN_DURATION:
+        return "min_duration_too_long"
+    return None
+
+
+def _usable_min_duration(raw: dict[str, Any]) -> dict[str, Any]:
+    """Validate `min_duration` against the dispositions for YAML."""
+    problem = min_duration_error(
+        raw.get(CONF_MIN_DURATION), raw[CONF_DEFAULT], raw[CONF_STATES]
+    )
+    if problem == "min_duration_required":
+        raise vol.Invalid(
+            f"{CONF_MIN_DURATION!r} must be set, and be more than zero, "
+            f"when a state is {DISPOSITION_IGNORE_SHORT!r}"
+        )
+    if problem == "min_duration_too_long":
+        raise vol.Invalid(f"{CONF_MIN_DURATION!r} cannot be longer than one hour")
+    return raw
 
 
 def _no_duplicate_entities(configs: list[EntityConfig]) -> list[EntityConfig]:
@@ -183,6 +242,9 @@ ENTITY_SCHEMA = vol.Schema(
         vol.Optional(CONF_STATES, default=dict): vol.All(
             {cv.string: cv.string}, _usable_map_targets
         ),
+        vol.Optional(CONF_MIN_DURATION): vol.All(
+            cv.time_period, lambda period: period.total_seconds()
+        ),
     }
 )
 
@@ -194,6 +256,7 @@ def _to_entity_config(raw: dict[str, Any]) -> EntityConfig:
         default=raw[CONF_DEFAULT],
         states=raw[CONF_STATES],
         blank=raw[CONF_BLANK],
+        min_duration=raw.get(CONF_MIN_DURATION, 0.0),
     )
 
 
@@ -201,7 +264,7 @@ CONFIG_SCHEMA = vol.Schema(
     {
         DOMAIN: vol.All(
             cv.ensure_list,
-            [vol.All(ENTITY_SCHEMA, _to_entity_config)],
+            [vol.All(ENTITY_SCHEMA, _usable_min_duration, _to_entity_config)],
             _no_duplicate_entities,
         )
     },
@@ -230,4 +293,5 @@ def entity_config_from_entry(
         name=options.get(CONF_NAME) or None,
         default=options.get(CONF_DEFAULT, DEFAULT_RECORD_KNOWN),
         blank=options.get(CONF_BLANK) or STATE_UNKNOWN,
+        min_duration=options.get(CONF_MIN_DURATION) or 0.0,
     )

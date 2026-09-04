@@ -6,12 +6,14 @@ import voluptuous as vol
 from homeassistant.const import CONF_ENTITY_ID, CONF_NAME
 from custom_components.discrete_statistics.config import (
     CONF_DEFAULT,
+    CONF_MIN_DURATION,
     CONFIG_SCHEMA,
     EntityConfig,
     entity_config_from_entry,
     is_configured,
 )
 from custom_components.discrete_statistics.const import (
+    DEFAULT_IGNORE_SHORT,
     DEFAULT_RECORD,
     DEFAULT_RECORD_KNOWN,
     DOMAIN,
@@ -350,3 +352,118 @@ def test_record_is_not_a_valid_blank_setting():
     """There is no name to record it under - that is the point of the option."""
     with pytest.raises(vol.Invalid, match="no name to record"):
         parse([{"entity_id": "sensor.x", "blank": "record"}])
+
+
+def test_ignore_short_resolves_to_the_state_and_flags_it():
+    """Whether a spell is long enough is a question about a spell, not a
+    state, so `resolve` records it and `classify` says it is conditional."""
+    cfg = parse(
+        [{
+            "entity_id": "sensor.x",
+            "states": {"unavailable": "ignore_short"},
+            "min_duration": {"seconds": 30},
+        }]
+    )[0]
+    assert cfg.min_duration == 30.0
+    assert cfg.resolve("unavailable") == "unavailable"
+    assert cfg.classify("unavailable") == ("unavailable", True)
+    assert cfg.classify("on") == ("on", False)
+    assert cfg.classify("unknown") == (None, False)
+
+
+def test_ignore_short_as_the_default_flags_every_unlisted_state():
+    cfg = parse(
+        [{
+            "entity_id": "binary_sensor.door",
+            "default": "ignore_short",
+            "states": {"unavailable": "ignore"},
+            "min_duration": "00:00:05",
+        }]
+    )[0]
+    assert cfg.min_duration == 5.0
+    assert cfg.classify("on") == ("on", True)
+    assert cfg.classify("off") == ("off", True)
+    assert cfg.classify("unavailable") == (None, False)
+
+
+def test_a_blank_state_inherits_ignore_short_from_its_substitute():
+    cfg = parse(
+        [{
+            "entity_id": "sensor.x",
+            "states": {"unknown": "ignore_short"},
+            "min_duration": {"minutes": 1},
+        }]
+    )[0]
+    assert cfg.classify("") == ("unknown", True)
+    assert cfg.classify("!!!") == ("unknown", True)
+
+
+def test_ignore_short_is_not_a_map_target():
+    cfg = parse(
+        [{
+            "entity_id": "sensor.x",
+            "default": "ignore",
+            "states": {"x": "ignore_short"},
+            "min_duration": {"minutes": 1},
+        }]
+    )[0]
+    assert cfg.resolve("ignore_short") is None
+
+
+def test_ignore_short_requires_a_threshold():
+    """Without one it would be plain `record`."""
+    with pytest.raises(vol.Invalid, match="min_duration"):
+        parse([{"entity_id": "sensor.x", "default": "ignore_short"}])
+    with pytest.raises(vol.Invalid, match="min_duration"):
+        parse(
+            [{"entity_id": "sensor.x", "states": {"unknown": "ignore_short"}}]
+        )
+    with pytest.raises(vol.Invalid, match="min_duration"):
+        parse(
+            [{
+                "entity_id": "sensor.x",
+                "default": "ignore_short",
+                "min_duration": {"seconds": 0},
+            }]
+        )
+
+
+def test_the_threshold_is_capped_at_an_hour():
+    """The distance the compiler reads back before a window."""
+    parse(
+        [{
+            "entity_id": "sensor.x",
+            "default": "ignore_short",
+            "min_duration": {"hours": 1},
+        }]
+    )
+    with pytest.raises(vol.Invalid, match="one hour"):
+        parse(
+            [{
+                "entity_id": "sensor.x",
+                "default": "ignore_short",
+                "min_duration": {"hours": 1, "seconds": 1},
+            }]
+        )
+
+
+def test_a_threshold_without_ignore_short_is_inert_and_never_rejected():
+    """Nothing reads it, so nothing is wrong with it - whatever it says."""
+    [cfg] = parse([{"entity_id": "sensor.x", "min_duration": {"minutes": 1}}])
+    assert cfg.min_duration == 60.0
+    [cfg] = parse([{"entity_id": "sensor.x", "min_duration": {"seconds": 0}}])
+    assert cfg.min_duration == 0.0
+    [cfg] = parse([{"entity_id": "sensor.x", "min_duration": {"hours": 2}}])
+    assert cfg.min_duration == 7200.0
+    [cfg] = parse([{"entity_id": "sensor.x"}])
+    assert cfg.min_duration == 0.0
+
+
+def test_entity_config_from_entry_reads_the_minimum_duration():
+    cfg = entity_config_from_entry(
+        {CONF_ENTITY_ID: "binary_sensor.a"},
+        {CONF_DEFAULT: DEFAULT_IGNORE_SHORT, CONF_MIN_DURATION: 20.0},
+    )
+    assert cfg.min_duration == 20.0
+    assert cfg.classify("on") == ("on", True)
+    assert entity_config_from_entry({CONF_ENTITY_ID: "binary_sensor.a"}, {}).min_duration == 0.0

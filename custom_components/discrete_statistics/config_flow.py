@@ -8,6 +8,8 @@ releases.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from datetime import timedelta
 from typing import Any
 
 import voluptuous as vol
@@ -26,9 +28,17 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 
-from .config import CONF_BLANK, CONF_DEFAULT, blank_error, is_configured
+from .config import (
+    CONF_BLANK,
+    CONF_DEFAULT,
+    CONF_MIN_DURATION,
+    blank_error,
+    is_configured,
+    min_duration_error,
+)
 from .naming import describe, display_name
 from .const import (
+    DEFAULT_IGNORE_SHORT,
     DEFAULT_RECORD,
     DEFAULT_RECORD_KNOWN,
     DISPOSITION_IGNORE,
@@ -40,7 +50,7 @@ from homeassistant.const import STATE_UNKNOWN
 # exceptions it makes resolve() return None for every state, so nothing is
 # ever recordable and the entity never compiles an hour.
 # It stays valid in YAML, where `states:` supplies those exceptions.
-UI_DEFAULTS = [DEFAULT_RECORD, DEFAULT_RECORD_KNOWN]
+UI_DEFAULTS = [DEFAULT_RECORD, DEFAULT_RECORD_KNOWN, DEFAULT_IGNORE_SHORT]
 
 # Offered, not exhaustive: `blank` takes any state name, and mapping to a
 # real one is the point for a text sensor whose blank means "no error".
@@ -65,12 +75,70 @@ OPTIONS_SCHEMA = vol.Schema(
                 custom_value=True,
             )
         ),
+        # Read only under `ignore_short`; always shown, because a form is
+        # one fixed schema and cannot grow a field on a dropdown choice.
+        vol.Optional(CONF_MIN_DURATION): selector.DurationSelector(
+            selector.DurationSelectorConfig(enable_day=False)
+        ),
     }
 )
 
 USER_SCHEMA = vol.Schema(
     {vol.Required(CONF_ENTITY_ID): selector.EntitySelector()}
 ).extend(OPTIONS_SCHEMA.schema)
+
+
+def _seconds(duration: dict[str, float] | None) -> float | None:
+    """The duration selector's value, as the seconds the config stores."""
+    if duration is None:
+        return None
+    return timedelta(**duration).total_seconds()
+
+
+def _duration(seconds: float | None) -> dict[str, float] | None:
+    """Stored seconds, as the duration selector shows them."""
+    if not seconds:
+        return None
+    whole = int(seconds)
+    return {
+        "hours": whole // 3600,
+        "minutes": whole % 3600 // 60,
+        "seconds": whole % 60,
+    }
+
+
+def _options(user_input: dict[str, Any]) -> dict[str, Any]:
+    """The options an entry stores, from a validated form."""
+    options = {
+        CONF_NAME: user_input.get(CONF_NAME) or None,
+        CONF_DEFAULT: user_input[CONF_DEFAULT],
+        CONF_BLANK: user_input[CONF_BLANK],
+    }
+    if (seconds := _seconds(user_input.get(CONF_MIN_DURATION))) is not None:
+        options[CONF_MIN_DURATION] = seconds
+    return options
+
+
+def _suggested(options: Mapping[str, Any]) -> dict[str, Any]:
+    """Stored options, in the form the fields show them."""
+    suggested = dict(options)
+    if (duration := _duration(options.get(CONF_MIN_DURATION))) is not None:
+        suggested[CONF_MIN_DURATION] = duration
+    else:
+        suggested.pop(CONF_MIN_DURATION, None)
+    return suggested
+
+
+def _errors(user_input: dict[str, Any]) -> dict[str, str]:
+    """Field errors for a submitted form, shared by both flows."""
+    errors: dict[str, str] = {}
+    if problem := blank_error(user_input[CONF_BLANK]):
+        errors[CONF_BLANK] = problem
+    if problem := min_duration_error(
+        _seconds(user_input.get(CONF_MIN_DURATION)), user_input[CONF_DEFAULT], {}
+    ):
+        errors[CONF_MIN_DURATION] = problem
+    return errors
 
 
 # Not imported from homeassistant.components.sensor: that would make sensor a
@@ -119,9 +187,7 @@ class DiscreteStatisticsConfigFlow(ConfigFlow, domain=DOMAIN):
 
         entity_id = user_input[CONF_ENTITY_ID]
 
-        errors: dict[str, str] = {}
-        if problem := blank_error(user_input[CONF_BLANK]):
-            errors[CONF_BLANK] = problem
+        errors = _errors(user_input)
         if _has_continuous_state(self.hass, entity_id):
             errors[CONF_ENTITY_ID] = "continuous_state"
         if errors:
@@ -158,11 +224,7 @@ class DiscreteStatisticsConfigFlow(ConfigFlow, domain=DOMAIN):
             # is what tells two similarly-named entities apart in a list.
             title=describe(self.hass, entity_id, name),
             data={CONF_ENTITY_ID: entity_id},
-            options={
-                CONF_NAME: name,
-                CONF_DEFAULT: user_input[CONF_DEFAULT],
-                CONF_BLANK: user_input[CONF_BLANK],
-            },
+            options=_options(user_input),
         )
 
     @staticmethod
@@ -185,16 +247,9 @@ class DiscreteStatisticsOptionsFlow(OptionsFlow):
         """Show and save the editable options."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            if problem := blank_error(user_input[CONF_BLANK]):
-                errors[CONF_BLANK] = problem
-            else:
-                return self.async_create_entry(
-                    data={
-                        CONF_NAME: user_input.get(CONF_NAME) or None,
-                        CONF_DEFAULT: user_input[CONF_DEFAULT],
-                        CONF_BLANK: user_input[CONF_BLANK],
-                    }
-                )
+            errors = _errors(user_input)
+            if not errors:
+                return self.async_create_entry(data=_options(user_input))
         # Which entity this is about, and what leaving the name blank would
         # give. NOT prefilled into the box: a suggested value comes back on
         # submit, which would freeze the name instead of letting it follow
@@ -203,7 +258,7 @@ class DiscreteStatisticsOptionsFlow(OptionsFlow):
         return self.async_show_form(
             step_id="init",
             data_schema=self.add_suggested_values_to_schema(
-                OPTIONS_SCHEMA, user_input or self.config_entry.options
+                OPTIONS_SCHEMA, user_input or _suggested(self.config_entry.options)
             ),
             errors=errors,
             description_placeholders={
