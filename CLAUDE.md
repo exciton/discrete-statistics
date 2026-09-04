@@ -25,8 +25,10 @@ script/test tests/test_compiler.py::test_name   # one test
 must stay there: declaring `pytest_plugins` in a non-rootdir conftest is an
 error in modern pytest and breaks the entire suite.
 
-CI (`.github/workflows/validate.yml`) runs the suite through the same
-`script/test`, plus HACS and hassfest. hassfest validates `manifest.json`,
+CI (`.github/workflows/validate.yml`) runs the same suite from the same
+`requirements-test.txt`, on a runner-supplied Python rather than the
+container — the interpreter is the only reason for the container, and a
+runner has a new enough one. It also runs HACS and hassfest. hassfest validates `manifest.json`,
 `strings.json` and `translations/`, and it can be run locally against a Home
 Assistant core checkout (`/home/bonne/Code/home_assistant_core`, kept on the
 pinned tag) rather than waiting for a push:

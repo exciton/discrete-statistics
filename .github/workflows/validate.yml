@@ -31,7 +31,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      # script/test builds .devcontainer/Dockerfile on first use. Home
-      # Assistant 2026.8.3 needs Python >= 3.14.2, so the suite runs in the
-      # same image used locally rather than via setup-python.
-      - run: script/test tests/ -q
+      # Locally the suite runs in a container because the host Python is
+      # too old for Home Assistant; a runner can supply the interpreter
+      # directly, which is a minute faster than building the image. Keep
+      # python-version on the same minor as .devcontainer/Dockerfile.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      - run: pip install -r requirements-test.txt
+      - run: python -m pytest tests/ -q
