@@ -16,6 +16,8 @@ MANIFEST="$REPO_ROOT/custom_components/discrete_statistics/manifest.json"
 TAG="v$VERSION"
 
 cd "$REPO_ROOT"
+command -v gh >/dev/null || { echo "gh is not installed; nothing done" >&2; exit 1; }
+gh auth status >/dev/null 2>&1 || { echo "gh is not logged in; nothing done" >&2; exit 1; }
 [[ "$(git branch --show-current)" == main ]] || { echo "release from main" >&2; exit 1; }
 [[ -z "$(git status --porcelain)" ]] || { echo "working tree not clean" >&2; exit 1; }
 git fetch -q origin main

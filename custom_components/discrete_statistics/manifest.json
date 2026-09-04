@@ -1,9 +1,13 @@
 {
   "domain": "discrete_statistics",
   "name": "Discrete Statistics",
-  "codeowners": ["@exciton"],
+  "codeowners": [
+    "@exciton"
+  ],
   "config_flow": true,
-  "dependencies": ["recorder"],
+  "dependencies": [
+    "recorder"
+  ],
   "documentation": "https://github.com/exciton/discrete-statistics",
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/exciton/discrete-statistics/issues",
