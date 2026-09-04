@@ -119,4 +119,21 @@ describe("statisticsForEntity", () => {
   it("is empty for an entity with nothing recorded", () => {
     expect(statisticsForEntity("sensor.none", "duration", all)).toEqual([]);
   });
+
+  it("matches non-Latin filter entries by label, since they have no token", () => {
+    // python-slugify transliterates "打开" to "dakai"; this approximation
+    // cannot, which is exactly why statisticsForEntity also compares
+    // against the label.
+    expect(stateToken("打开")).toBe("");
+    const withDoor = [
+      ...all,
+      meta("discrete_statistics:sensor_door_dakai_duration", "Door: 打开 (h)"),
+    ];
+    expect(
+      statisticsForEntity("sensor.door", "duration", withDoor, { states: ["打开"] }).map((s) => s.token)
+    ).toEqual(["dakai"]);
+    expect(
+      statisticsForEntity("sensor.door", "duration", withDoor, { ignore_states: ["打开"] }).map((s) => s.token)
+    ).toEqual([]);
+  });
 });

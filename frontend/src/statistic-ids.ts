@@ -12,8 +12,12 @@ export interface StateStatistic {
 
 // The integration slugifies with python-slugify. Entity IDs are already
 // [a-z0-9_.], so lower-casing and collapsing runs of anything else is the
-// same answer for them; states can hold anything, and only their token
-// form is compared, so an approximation that agrees on ASCII is enough.
+// same answer for them. States can hold anything, and this approximation
+// only agrees with python-slugify on ASCII: non-Latin text (e.g. "打开")
+// transliterates on the Python side but collapses to "" here. A filter
+// entry written in that state's own script therefore cannot be matched by
+// token at all — statisticsForEntity falls back to comparing it against
+// the statistic's label, the raw state text carried in its stored name.
 const slug = (text: string, separator: string): string => {
   const collapsed = text
     .normalize("NFKD")
@@ -93,11 +97,14 @@ export function statisticsForEntity(
   if (!filter?.states && !filter?.ignore_states) {
     return found;
   }
-  const ignored = new Set((filter.ignore_states ?? []).map(stateToken));
-  const kept = found.filter((s) => !ignored.has(s.token));
-  const byToken = new Map(kept.map((s) => [s.token, s]));
+  // A filter entry matches by token, or — since non-Latin text has no
+  // token — by the statistic's label falling back to the raw state text.
+  const matches = (entry: string, s: StateStatistic): boolean =>
+    stateToken(entry) === s.token || entry === s.label;
+  const ignoreList = filter.ignore_states ?? [];
+  const kept = found.filter((s) => !ignoreList.some((entry) => matches(entry, s)));
   const listed = (filter.states ?? [])
-    .map((state) => byToken.get(stateToken(state)))
+    .map((entry) => kept.find((s) => matches(entry, s)))
     .filter((s): s is StateStatistic => s !== undefined);
   // `states:` alone is a closed list. `ignore_states:` opens it: a state
   // the entity gains later is appended rather than silently dropped.
