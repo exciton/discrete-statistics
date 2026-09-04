@@ -9,7 +9,7 @@ jobs:
     name: Tag matches manifest
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # HACS reads the version from the release tag; Home Assistant reads it
       # from manifest.json. A release where they differ shows one version in
       # HACS and another on the integration page.
