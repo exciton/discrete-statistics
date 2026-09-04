@@ -1,5 +1,6 @@
 {
   "name": "Discrete Statistics",
   "render_readme": true,
-  "homeassistant": "2026.8.3"
+  "homeassistant": "2026.8.3",
+  "hide_default_branch": true
 }

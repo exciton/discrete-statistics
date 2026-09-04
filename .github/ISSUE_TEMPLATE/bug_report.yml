@@ -1,0 +1,39 @@
+name: Bug report
+description: Statistics that are wrong, missing, or an error in the log
+labels: [bug]
+body:
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+      placeholder: "2026.8.3"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Discrete Statistics version
+      description: Shown in HACS, or `version` in `custom_components/discrete_statistics/manifest.json`.
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: The YAML entry, or the options from the UI, for the affected entity.
+      render: yaml
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead. A screenshot of the chart helps.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: Lines mentioning `discrete_statistics` from `home-assistant.log`.
+      render: text

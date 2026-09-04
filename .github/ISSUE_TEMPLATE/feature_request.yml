@@ -1,0 +1,16 @@
+name: Feature request
+description: Something the integration should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you are trying to do
+      description: The entity, the question you want the statistics to answer, and what stops you today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: How you would expect to configure it, if you have a shape in mind.

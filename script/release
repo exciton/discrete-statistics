@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Cut a release: bump the manifest version, commit, tag and publish.
+#
+#   script/release 0.2.0
+#
+# The tag is `v<version>`; the version in manifest.json is what Home
+# Assistant reports and what HACS compares, so the two are written from the
+# same argument and release.yml refuses a release where they differ.
+set -euo pipefail
+
+VERSION="${1:?usage: script/release X.Y.Z}"
+[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a semantic version: $VERSION" >&2; exit 1; }
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MANIFEST="$REPO_ROOT/custom_components/discrete_statistics/manifest.json"
+TAG="v$VERSION"
+
+cd "$REPO_ROOT"
+[[ "$(git branch --show-current)" == main ]] || { echo "release from main" >&2; exit 1; }
+[[ -z "$(git status --porcelain)" ]] || { echo "working tree not clean" >&2; exit 1; }
+git fetch -q origin main
+[[ "$(git rev-parse HEAD)" == "$(git rev-parse origin/main)" ]] || { echo "main is not in sync with origin" >&2; exit 1; }
+! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || { echo "$TAG already exists" >&2; exit 1; }
+
+python3 - "$MANIFEST" "$VERSION" <<'PY'
+import json, sys
+path, version = sys.argv[1:]
+with open(path) as f:
+    manifest = json.load(f)
+manifest["version"] = version
+with open(path, "w") as f:
+    json.dump(manifest, f, indent=2)
+    f.write("\n")
+PY
+
+git add "$MANIFEST"
+git commit -q -m "Release $VERSION"
+git tag -s "$TAG" -m "Release $VERSION"
+git push -q origin main "$TAG"
+gh release create "$TAG" --title "$VERSION" --generate-notes
