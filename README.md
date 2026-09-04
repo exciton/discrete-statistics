@@ -11,6 +11,29 @@ as external statistics, which are never purged.
 
 ![A year of a heat pump's mode, week by week: hours in heat, cool and off](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/heat-pump-weekly.png)
 
+- Works with any entity whose state is a label: binary sensors, covers,
+  climate, `hvac_action`, enum sensors, `input_select`, `person`…
+- Records hourly long-term statistics per state: time spent in it, and the
+  number of times it was entered
+- Stored as external statistics, so they are never purged — kept forever,
+  independent of `purge_keep_days`
+- Backfills from the recorder's existing history on first run, so a new
+  entity starts with whatever the recorder still holds rather than from zero
+- Draws with the stock statistics-graph card: `change` for totals over
+  days, weeks and months; `mean`, `min` and `max` for average and peak hours
+- The `mean` of a duration over any period is the share of that period
+  spent in the state — `0.4` is 40 % — straight from the card
+- New states are picked up automatically as they appear; no per-state
+  configuration needed
+- `unavailable`, `unknown`, or any state you choose can be ignored, with
+  the previous state carried across the gap instead of a hole
+- Debounce: a state that lasts less than a minimum duration can be ignored,
+  per state or for every state
+- States can be mapped onto one another (`heat_cool` → `heating`)
+- Set up from the UI or YAML; per-state mappings are YAML-only for now
+- Recalculate any range at any time — it only rewrites what it has source
+  data for, and never deletes anything
+
 It is not a replacement for `history_stats`, which answers a different
 question; [the comparison below](#compared-with-history_stats) says which to
 reach for.
