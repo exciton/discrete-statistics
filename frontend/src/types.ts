@@ -1,0 +1,51 @@
+export type Metric = "duration" | "count";
+export type Unit = "auto" | "h" | "d" | "percent";
+export type Period = "auto" | "hour" | "day" | "week" | "month" | "year";
+export type ResolvedPeriod = Exclude<Period, "auto">;
+
+export interface CardConfig {
+  type: string;
+  entity: string;
+  metric?: Metric;
+  unit?: Unit;
+  period?: Period;
+  states?: string[];
+  ignore_states?: string[];
+  days_to_show?: number;
+  energy_date_selection?: boolean;
+  collection_key?: string;
+  title?: string;
+  hide_legend?: boolean;
+}
+
+// Shapes of what recorder/statistics_during_period and
+// recorder/list_statistic_ids return; only the fields the card reads.
+export interface StatisticValue {
+  start: number; // ms since epoch
+  end: number; // ms since epoch
+  change?: number | null;
+  sum?: number | null;
+  mean?: number | null;
+  min?: number | null;
+  max?: number | null;
+}
+
+export type Statistics = Record<string, StatisticValue[]>;
+
+export interface StatisticsMetaData {
+  statistic_id: string;
+  source: string;
+  name?: string | null;
+  statistics_unit_of_measurement: string | null;
+  has_sum: boolean;
+  unit_class: string | null;
+}
+
+// The slice of the hass object the card touches.
+export interface HassLike {
+  callWS<T>(msg: Record<string, unknown>): Promise<T>;
+  connection: Record<string, unknown>;
+  panelUrl?: string;
+  locale: { language: string };
+  localize?: (key: string, ...args: unknown[]) => string;
+}
