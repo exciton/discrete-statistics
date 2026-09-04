@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSeries, unitLabel, valueOf } from "../src/series";
+import { buildSeries, earliestStart, unitLabel, valueOf } from "../src/series";
 import type { StateStatistic } from "../src/statistic-ids";
 import type { Statistics } from "../src/types";
 
@@ -85,5 +85,23 @@ describe("buildSeries", () => {
   it("wraps the palette", () => {
     const { series } = buildSeries("climate.zone", stats, data, "h", ["#abcdef"]);
     expect(series[1].color).toBe("#abcdef7F");
+  });
+});
+
+describe("earliestStart", () => {
+  const seriesOf = (starts: number[]) =>
+    ({ data: starts.map((s) => [s, 1, s, s + H]) }) as never;
+
+  it("is the earliest bucket start across every series", () => {
+    // The recorder snaps the query outward, so the first bucket can begin
+    // before the range the card asked for.
+    expect(earliestStart([seriesOf([48 * H, 72 * H]), seriesOf([24 * H])])).toBe(
+      24 * H
+    );
+  });
+
+  it("is undefined when nothing is drawn", () => {
+    expect(earliestStart([])).toBeUndefined();
+    expect(earliestStart([seriesOf([])])).toBeUndefined();
   });
 });

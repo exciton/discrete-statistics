@@ -3,15 +3,32 @@ import { property, state } from "lit/decorators.js";
 import { ensureChartBase } from "./chart-base";
 import { fetchStatistics, listStatisticIds, subscribeEnergyRange } from "./hass-api";
 import { rangeFromDays, resolvePeriod, resolveUnit, type Range } from "./period";
-import { buildSeries, unitLabel, type ChartSeries, type LegendItem } from "./series";
+import {
+  buildSeries,
+  earliestStart,
+  unitLabel,
+  type ChartSeries,
+  type LegendItem,
+} from "./series";
 import { statisticsForEntity, type StateStatistic } from "./statistic-ids";
 import type { CardConfig, HassLike, Metric } from "./types";
 
 const DEFAULT_DAYS = 30;
+// The stock statistics-graph card refreshes hourly; a dashboard left open
+// otherwise freezes on the range it was rendered with.
+const REFRESH_INTERVAL_MS = 60 * 60 * 1000;
 const FALLBACK_COLORS = [
   "#4269d0", "#f4bd4a", "#ff725c", "#6cc5b0",
   "#a463f2", "#ff8ab7", "#9c6b4e", "#97bbf5",
 ];
+
+// What echarts hands a tooltip formatter, for the bar series this card
+// draws: value is the point, [bar time, value, bucket start, bucket end].
+interface TooltipParam {
+  seriesName?: string;
+  color?: string;
+  value: [number, number, number, number];
+}
 
 const METRIC_LABEL: Record<Metric, string> = {
   duration: "Time in State",
@@ -48,6 +65,13 @@ export class DiscreteStatisticsCard extends LitElement {
   private _pending = false;
 
   private _subscribed = false;
+
+  private _refreshTimer?: number;
+
+  // The earliest bucket start across the drawn series. The recorder snaps a
+  // query outward to whole periods, so the first bucket begins before the
+  // range and an x axis pinned to the range start would clip it.
+  private _dataStart?: number;
 
   // The range the in-flight or last refresh is serving; a _range write of
   // the same object needs no fetch.
@@ -147,6 +171,7 @@ export class DiscreteStatisticsCard extends LitElement {
     super.disconnectedCallback();
     this._unsubEnergy?.();
     this._unsubEnergy = undefined;
+    this._stopTicking();
     this._subscribed = false;
   }
 
@@ -179,6 +204,7 @@ export class DiscreteStatisticsCard extends LitElement {
   private _subscribeRange(): void {
     this._unsubEnergy?.();
     this._unsubEnergy = undefined;
+    this._stopTicking();
     if (this._config?.energy_date_selection) {
       this._unsubEnergy = subscribeEnergyRange(
         this.hass!,
@@ -191,9 +217,25 @@ export class DiscreteStatisticsCard extends LitElement {
         }
       );
     } else {
-      this._range = rangeFromDays(this._config?.days_to_show ?? DEFAULT_DAYS, new Date());
+      const days = this._config?.days_to_show ?? DEFAULT_DAYS;
+      this._range = rangeFromDays(days, new Date());
+      // A fresh range object is all it takes: updated()'s
+      // _range !== _refreshedRange guard turns it into one refresh. Dropping
+      // _statsFor with it lets a state first recorded since the last run
+      // gain its series.
+      this._refreshTimer = window.setInterval(() => {
+        this._statsFor = undefined;
+        this._range = rangeFromDays(days, new Date());
+      }, REFRESH_INTERVAL_MS);
     }
     this._subscribed = true;
+  }
+
+  private _stopTicking(): void {
+    if (this._refreshTimer !== undefined) {
+      window.clearInterval(this._refreshTimer);
+      this._refreshTimer = undefined;
+    }
   }
 
   private async _refresh(): Promise<void> {
@@ -234,6 +276,7 @@ export class DiscreteStatisticsCard extends LitElement {
         this._error = `No statistics recorded for ${config.entity}`;
         this._series = [];
         this._legend = [];
+        this._dataStart = undefined;
         this._chartOptions = this._options();
         return;
       }
@@ -243,6 +286,7 @@ export class DiscreteStatisticsCard extends LitElement {
       const { series, legend } = buildSeries(config.entity, stats, data, unit, this._colors());
       this._series = series;
       this._legend = legend;
+      this._dataStart = earliestStart(series);
       this._unit = unitLabel(unit);
       this._error = undefined;
       this._chartOptions = this._options();
@@ -255,6 +299,51 @@ export class DiscreteStatisticsCard extends LitElement {
         void this._refresh();
       }
     }
+  }
+
+  // ha-chart-base renders whatever a tooltip formatter returns as lit
+  // (lit-tooltip-formatter.ts), and suppresses the tooltip on `nothing`.
+  private _tooltip(params: TooltipParam[] | TooltipParam) {
+    const rows = Array.isArray(params) ? params : [params];
+    if (!rows.length) {
+      return nothing;
+    }
+    const [start, end] = [rows[0].value[2], rows[0].value[3]];
+    // The tooltip is rendered outside this card's shadow root, so the
+    // marker is styled inline rather than from the card's stylesheet, and
+    // it is a span rather than <ha-chart-tooltip-marker>: that element
+    // belongs to the frontend's chart chunk and need not be registered
+    // wherever ha-chart-base is.
+    return html`${this._formatSpan(start, end)}<br />${rows.map(
+      (row, i) =>
+        html`<span
+            style="display:inline-block;width:10px;height:10px;border-radius:10px;
+                   vertical-align:middle;margin-inline-end:4px;
+                   background-color:${row.color ?? ""}"
+          ></span>
+          ${row.seriesName}: ${this._formatValue(row.value[1])}${i <
+          rows.length - 1
+            ? html`<br />`
+            : nothing}`
+    )}`;
+  }
+
+  // The frontend's own date-time helpers live inside its bundle and are not
+  // reachable from a separately built card, so the language from hass.locale
+  // is what the card can honour.
+  private _formatSpan(start: number, end: number): string {
+    const language = this.hass?.locale?.language;
+    const at = (ms: number) => new Date(ms).toLocaleString(language);
+    return `${at(start)} – ${at(end)}`;
+  }
+
+  private _formatValue(value: number): string {
+    const language = this.hass?.locale?.language;
+    const shown = value.toLocaleString(language, { maximumFractionDigits: 2 });
+    if (!this._unit) {
+      return shown;
+    }
+    return this._unit === "%" ? `${shown}%` : `${shown} ${this._unit}`;
   }
 
   private _colors(): string[] {
@@ -273,7 +362,7 @@ export class DiscreteStatisticsCard extends LitElement {
     return {
       xAxis: {
         type: "time",
-        min: this._range?.start.getTime(),
+        min: this._dataStart ?? this._range?.start.getTime(),
         max: this._range?.end.getTime(),
       },
       yAxis: {
@@ -281,7 +370,10 @@ export class DiscreteStatisticsCard extends LitElement {
         name: this._unit,
         nameGap: 2,
         nameTextStyle: { align: "left" },
-        max: this._unit === "%" ? 100 : undefined,
+        // null, not undefined: ha-chart-base merges its options into the
+        // chart, and echarts ignores an undefined value on merge, so the cap
+        // would survive a switch away from percent.
+        max: this._unit === "%" ? 100 : null,
         splitLine: { show: true },
       },
       legend: {
@@ -293,6 +385,7 @@ export class DiscreteStatisticsCard extends LitElement {
       tooltip: {
         trigger: "axis",
         axisPointer: { type: "shadow" },
+        formatter: (params: TooltipParam[] | TooltipParam) => this._tooltip(params),
       },
     };
   }

@@ -3,7 +3,8 @@ import type { StateStatistic } from "./statistic-ids";
 import type { StatisticValue, Statistics } from "./types";
 
 export interface ChartSeries {
-  // subset of echarts BarSeriesOption the card sets
+  // The fields of a bar series ha-chart-base is given; it types them itself,
+  // this is only what the card sets.
   id: string;
   name: string;
   type: "bar";
@@ -17,6 +18,19 @@ export interface ChartSeries {
   // chart draws bars (statistics-chart-data.ts:198), so a tooltip can
   // name the bucket the bar represents.
   data: [number, number, number, number][];
+}
+
+// The earliest bucket start drawn, or undefined when nothing is drawn.
+export function earliestStart(series: ChartSeries[]): number | undefined {
+  let earliest: number | undefined;
+  for (const s of series) {
+    for (const point of s.data) {
+      if (earliest === undefined || point[0] < earliest) {
+        earliest = point[0];
+      }
+    }
+  }
+  return earliest;
 }
 
 export interface LegendItem {

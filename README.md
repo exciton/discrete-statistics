@@ -433,8 +433,11 @@ ignore_states:
 ```
 
 `unit: percent` is the share of each bar's span spent in the state, so a
-bar whose states are all drawn is always full height. `auto` picks hours
-for hourly and daily bars and days for coarser ones.
+bar whose states are all drawn is always full height — except the last
+bar, which is only as full as the period it covers so far. `auto` picks
+hours for hourly and daily bars and days for coarser ones.
+
+`hide_legend: true` leaves the legend off.
 
 `energy_date_selection: true` makes the card follow a dashboard's
 `energy-date-selection` card instead of `days_to_show`; `collection_key`
