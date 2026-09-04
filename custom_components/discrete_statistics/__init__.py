@@ -25,7 +25,9 @@ from homeassistant.helpers.issue_registry import (
     async_delete_issue,
 )
 from homeassistant.helpers.typing import ConfigType
+from homeassistant.loader import async_get_integration
 
+from . import frontend as card_frontend
 from .compiler import Compiler
 from .config import CONFIG_SCHEMA, EntityConfig, entity_config_from_entry, is_configured
 # CONFIG_SCHEMA is the HA hook: HA looks it up by name on this module to
@@ -75,6 +77,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         "lock": lock,
     }
     hass.data[DOMAIN] = data
+
+    integration = await async_get_integration(hass, DOMAIN)
+    await card_frontend.async_register(hass, version=str(integration.version))
 
     def _all_configs() -> list[EntityConfig]:
         """Every configured entity, YAML first, then config entries.

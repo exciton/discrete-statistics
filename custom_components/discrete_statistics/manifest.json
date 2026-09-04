@@ -1,6 +1,10 @@
 {
   "domain": "discrete_statistics",
   "name": "Discrete Statistics",
+  "after_dependencies": [
+    "frontend",
+    "http"
+  ],
   "codeowners": [
     "@exciton"
   ],
