@@ -33,6 +33,10 @@ export class DiscreteStatisticsCard extends LitElement {
 
   @state() private _error?: string;
 
+  // ha-chart-base calls setOption whenever .options is a new object, so the
+  // options are rebuilt only when what they are drawn from changes.
+  @state() private _chartOptions: Record<string, unknown> = {};
+
   private _stats?: StateStatistic[];
 
   private _statsFor?: string;
@@ -40,6 +44,14 @@ export class DiscreteStatisticsCard extends LitElement {
   private _unsubEnergy?: () => void;
 
   private _fetching = false;
+
+  private _pending = false;
+
+  private _subscribed = false;
+
+  // The range the in-flight or last refresh read, so the update cycle that
+  // follows _subscribeRange's own assignment does not fetch it twice.
+  private _refreshedRange?: Range;
 
   public static getStubConfig(): Partial<CardConfig> {
     return { metric: "duration", unit: "auto", period: "auto", days_to_show: DEFAULT_DAYS };
@@ -123,6 +135,7 @@ export class DiscreteStatisticsCard extends LitElement {
     this._stats = undefined;
     this._statsFor = undefined;
     this._error = undefined;
+    this._subscribed = false;
   }
 
   public getCardSize(): number {
@@ -133,6 +146,7 @@ export class DiscreteStatisticsCard extends LitElement {
     super.disconnectedCallback();
     this._unsubEnergy?.();
     this._unsubEnergy = undefined;
+    this._subscribed = false;
   }
 
   public connectedCallback(): void {
@@ -148,10 +162,13 @@ export class DiscreteStatisticsCard extends LitElement {
     }
     if (changed.has("_config")) {
       this._subscribeRange();
-    } else if (changed.has("hass") && !this._range) {
+    } else if (changed.has("hass") && !this._subscribed) {
       this._subscribeRange();
     }
-    if (changed.has("_range") || changed.has("_config")) {
+    if (
+      changed.has("_config") ||
+      (changed.has("_range") && this._range !== this._refreshedRange)
+    ) {
       void this._refresh();
     }
   }
@@ -173,16 +190,25 @@ export class DiscreteStatisticsCard extends LitElement {
     } else {
       this._range = rangeFromDays(this._config?.days_to_show ?? DEFAULT_DAYS, new Date());
     }
+    this._subscribed = true;
   }
 
   private async _refresh(): Promise<void> {
     const hass = this.hass;
     const config = this._config;
     const range = this._range;
-    if (!hass || !config || !range || this._fetching) {
+    if (!hass || !config || !range) {
+      return;
+    }
+    if (this._fetching) {
+      // The queued re-run will read whatever is current when it starts, so
+      // this range is already accounted for.
+      this._pending = true;
+      this._refreshedRange = range;
       return;
     }
     this._fetching = true;
+    this._refreshedRange = range;
     try {
       await ensureChartBase();
       const metric = config.metric ?? "duration";
@@ -204,6 +230,8 @@ export class DiscreteStatisticsCard extends LitElement {
       if (!stats.length) {
         this._error = `No statistics recorded for ${config.entity}`;
         this._series = [];
+        this._legend = [];
+        this._chartOptions = this._options();
         return;
       }
       const period = resolvePeriod(config.period, range);
@@ -214,10 +242,15 @@ export class DiscreteStatisticsCard extends LitElement {
       this._legend = legend;
       this._unit = unitLabel(unit);
       this._error = undefined;
+      this._chartOptions = this._options();
     } catch (err) {
       this._error = err instanceof Error ? err.message : String(err);
     } finally {
       this._fetching = false;
+      if (this._pending) {
+        this._pending = false;
+        void this._refresh();
+      }
     }
   }
 
@@ -272,7 +305,7 @@ export class DiscreteStatisticsCard extends LitElement {
           : html`<ha-chart-base
               .hass=${this.hass}
               .data=${this._series}
-              .options=${this._options()}
+              .options=${this._chartOptions}
               height="250px"
             ></ha-chart-base>`}
       </div>
