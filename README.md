@@ -9,6 +9,8 @@ the history of a binary sensor disappears when the recorder purges. This
 component derives per-state counters from recorder history and writes them
 as external statistics, which are never purged.
 
+![A year of a heat pump's mode, week by week: hours in heat, cool and off](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/heat-pump-weekly.png)
+
 It is not a replacement for `history_stats`, which answers a different
 question; [the comparison below](#compared-with-history_stats) says which to
 reach for.
@@ -184,6 +186,8 @@ retained history for a genuinely new entity, or just the trailing window if
 it was previously configured and deleted, since statistics are kept on
 removal and compiling resumes from that watermark.
 
+![The options dialog: name, the states-to-record dropdown open on its four choices, blank states, and minimum duration](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/options-dialog.png)
+
 Changing an entry's recording rule or minimum duration recompiles that
 entity's whole history, so the change applies to the past as well as the
 future; changing only its name does not.
@@ -268,25 +272,11 @@ the stretch leaves it alone too.
 
 ## Charts
 
-Outages per day for the last week:
-
-```yaml
-type: statistics-graph
-title: Grid outages per day
-chart_type: bar
-period: day
-days_to_show: 7
-stat_types:
-  - change
-entities:
-  - discrete_statistics:binary_sensor_grid_status_off_count
-```
-
 Time in each state per day, stacked:
 
 ```yaml
 type: statistics-graph
-title: Grid state
+title: Grid Status
 chart_type: bar-stack
 period: day
 days_to_show: 30
@@ -297,36 +287,75 @@ entities:
   - discrete_statistics:binary_sensor_grid_status_off_duration
 ```
 
-Weekly heat pump behaviour over three months:
+![Thirty days of grid status: a full bar of on each day, with two short bands of off](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/grid-state-daily.png)
+
+Outages per month:
 
 ```yaml
 type: statistics-graph
-title: Heat pump
-chart_type: bar-stack
-period: week
-days_to_show: 90
+title: Monthly Outages
+chart_type: bar
+period: month
+days_to_show: 365
 stat_types:
   - change
 entities:
-  - discrete_statistics:sensor_heat_pump_hvac_action_heating_duration
-  - discrete_statistics:sensor_heat_pump_hvac_action_cooling_duration
-  - discrete_statistics:sensor_heat_pump_hvac_action_idle_duration
+  - discrete_statistics:binary_sensor_grid_status_off_count
 ```
 
-Average hourly run time per day, and the busiest hour of each day:
+![A year of outages per month, none to five](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/outages-monthly.png)
+
+A year of a heat pump's mode, week by week — the chart at the top of this
+page:
 
 ```yaml
 type: statistics-graph
-title: Heat pump hourly run time
+title: Heat Pump
+chart_type: bar-stack
+period: week
+days_to_show: 365
+stat_types:
+  - change
+entities:
+  - discrete_statistics:climate_heat_pump_heat_duration
+  - discrete_statistics:climate_heat_pump_cool_duration
+  - discrete_statistics:climate_heat_pump_off_duration
+```
+
+How often a light is switched on in an average hour each week, and in the
+busiest hour:
+
+```yaml
+type: statistics-graph
+title: Mean/Max Hourly Light On
 chart_type: line
-period: day
-days_to_show: 30
+period: week
+days_to_show: 365
 stat_types:
   - mean
   - max
 entities:
-  - discrete_statistics:sensor_heat_pump_hvac_action_heating_duration
+  - discrete_statistics:light_kitchen_lights_on_count
 ```
+
+![A year of kitchen light switch-ons: the mean hovers near 0.2 an hour, the busiest hour of each week between one and four](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/light-count-mean-max.png)
+
+The share of time a light is on, as the `mean` of its duration — hours per
+hour is a fraction, so 0.12 is 12 %:
+
+```yaml
+type: statistics-graph
+title: Average Hourly Lighting
+chart_type: line
+period: week
+days_to_show: 365
+stat_types:
+  - mean
+entities:
+  - discrete_statistics:light_kitchen_lights_on_duration
+```
+
+![A year of the kitchen light's share of time on, between 3 % and 19 % week by week](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/light-share-of-time.png)
 
 A state that appears later accumulates immediately but must be added to the
 card's `entities` list to be drawn.

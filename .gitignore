@@ -9,7 +9,7 @@ __pycache__/
 docs/superpowers/
 script/verify
 
-# Stray screenshots at the repo root (brand assets are in a subdirectory)
+# Stray screenshots at the repo root (README images live in docs/images)
 /*.png
 
 # Local working notes: references specific installation detail
