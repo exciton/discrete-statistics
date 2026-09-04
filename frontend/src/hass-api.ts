@@ -20,10 +20,10 @@ export const fetchStatistics = (
   });
 
 // The energy-date-selection card keeps its collection on the connection
-// object under "_<key>"; the default key is "energy_<panel url>"
-// (frontend src/data/energy.ts, convertCollectionKeyToConnection). The
-// collection may not exist yet when this card first renders, so poll for
-// it briefly rather than assume.
+// object under "_<key>"; the default key is "energy_<panel url>", or bare
+// "energy" when there is no panel url (frontend src/data/energy.ts,
+// convertCollectionKeyToConnection). The collection may not exist yet when
+// this card first renders, so poll for it briefly rather than assume.
 interface EnergyCollection {
   subscribe(cb: (data: { start: Date; end?: Date }) => void): () => void;
 }
@@ -31,9 +31,14 @@ interface EnergyCollection {
 export function subscribeEnergyRange(
   hass: HassLike,
   collectionKey: string | undefined,
-  onRange: (range: Range) => void
+  onRange: (range: Range) => void,
+  onMissing: () => void
 ): () => void {
-  const key = `_${collectionKey ?? `energy_${hass.panelUrl ?? ""}`}`;
+  const key = collectionKey
+    ? `_${collectionKey}`
+    : hass.panelUrl
+      ? `_energy_${hass.panelUrl}`
+      : "_energy";
   let unsub: (() => void) | undefined;
   let attempts = 0;
   const timer = window.setInterval(() => {
@@ -45,6 +50,7 @@ export function subscribeEnergyRange(
       );
     } else if (++attempts > 50) {
       window.clearInterval(timer);
+      onMissing();
     }
   }, 100);
   return () => {
