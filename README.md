@@ -46,6 +46,10 @@ Requires Home Assistant 2026.8.3 or later.
 
 This is not in the HACS default store, so add it as a custom repository:
 
+[![Open this repository in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=exciton&repository=discrete-statistics&category=integration)
+
+Or by hand:
+
 1. HACS → three-dot menu → **Custom repositories**
 2. Repository: `https://github.com/exciton/discrete-statistics`
 3. Type: **Integration**
@@ -199,7 +203,9 @@ discrete_statistics:
 
 ## Configuring from the UI
 
-Settings → Devices & Services → **Add integration** → **Discrete
+[![Add Discrete Statistics](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=discrete_statistics)
+
+Or Settings → Devices & Services → **Add integration** → **Discrete
 Statistics**. Pick an entity, optionally name it, and choose which states
 to record; the two choices that mention a minimum duration read the
 duration field below them. Compiling starts in the
