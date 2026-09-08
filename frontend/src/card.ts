@@ -158,6 +158,7 @@ export class DiscreteStatisticsCard extends LitElement {
     this._config = config;
     this._stats = undefined;
     this._statsFor = undefined;
+    this._dataStart = undefined;
     this._error = undefined;
     this._subscribed = false;
     this._chartOptions = this._options();
@@ -303,12 +304,30 @@ export class DiscreteStatisticsCard extends LitElement {
 
   // ha-chart-base renders whatever a tooltip formatter returns as lit
   // (lit-tooltip-formatter.ts), and suppresses the tooltip on `nothing`.
+  // The bar's own colour is the translucent fill; the marker matches the
+  // legend swatch, which is the solid one.
+  private _solidColor(row: TooltipParam): string {
+    return (
+      this._legend.find((item) => item.name === row.seriesName)?.itemStyle
+        .color ??
+      row.color ??
+      ""
+    );
+  }
+
+  private _tooltipFormatter = (params: TooltipParam[] | TooltipParam) =>
+    this._tooltip(params);
+
   private _tooltip(params: TooltipParam[] | TooltipParam) {
     const rows = Array.isArray(params) ? params : [params];
     if (!rows.length) {
       return nothing;
     }
-    const [start, end] = [rows[0].value[2], rows[0].value[3]];
+    const point = rows.find((row) => row.value?.length >= 4);
+    if (!point) {
+      return nothing;
+    }
+    const [start, end] = [point.value[2], point.value[3]];
     // The tooltip is rendered outside this card's shadow root, so the
     // marker is styled inline rather than from the card's stylesheet, and
     // it is a span rather than <ha-chart-tooltip-marker>: that element
@@ -319,7 +338,7 @@ export class DiscreteStatisticsCard extends LitElement {
         html`<span
             style="display:inline-block;width:10px;height:10px;border-radius:10px;
                    vertical-align:middle;margin-inline-end:4px;
-                   background-color:${row.color ?? ""}"
+                   background-color:${this._solidColor(row)}"
           ></span>
           ${row.seriesName}: ${this._formatValue(row.value[1])}${i <
           rows.length - 1
@@ -385,7 +404,7 @@ export class DiscreteStatisticsCard extends LitElement {
       tooltip: {
         trigger: "axis",
         axisPointer: { type: "shadow" },
-        formatter: (params: TooltipParam[] | TooltipParam) => this._tooltip(params),
+        formatter: this._tooltipFormatter,
       },
     };
   }
