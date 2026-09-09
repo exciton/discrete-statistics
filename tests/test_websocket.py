@@ -243,3 +243,56 @@ async def test_bad_times_are_refused(hass, client):
     )
     response = await client.receive_json()
     assert response["error"]["code"] == "invalid_end_time"
+
+
+async def stock(client, ids, start, end, period):
+    """The same question put to recorder/statistics_during_period."""
+    await client.send_json_auto_id(
+        {
+            "type": "recorder/statistics_during_period",
+            "statistic_ids": ids,
+            "start_time": start.isoformat(),
+            "end_time": end.isoformat(),
+            "period": period,
+            "types": ["change"],
+        }
+    )
+    response = await client.receive_json()
+    assert response["success"]
+    return response["result"]
+
+
+# Ten weeks from a Monday that is also the first of the month, so one
+# range is aligned for every period, holding: ON running since before the
+# range with a hole straddling a day edge, then a hole spanning whole days
+# and weeks, and OFF beginning part-way through a bucket of every period.
+TEN_WEEKS = 10 * 7 * 24
+ON_SUMS: list[float | None] = [
+    None if 30 <= i < 40 or 3 * 24 * 7 + 5 <= i < 5 * 24 * 7 + 5 else 0.5 * i
+    for i in range(24 + TEN_WEEKS)
+]
+OFF_SUMS: list[float | None] = [
+    None if i < 24 + 24 * 7 + 3 * 24 + 11 else 0.25 * i for i in range(24 + TEN_WEEKS)
+]
+
+
+@pytest.mark.parametrize("period", ["hour", "day", "week", "month"])
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [
+        (local(2026, 6, 1), local(2026, 8, 10)),
+        # Hour-aligned but not period-aligned, as the card asks.
+        (local(2026, 6, 1, 9), local(2026, 8, 9, 15)),
+    ],
+)
+async def test_buckets_match_the_recorder(hass, client, period, start, end):
+    seed(hass, ON, local(2026, 5, 31), ON_SUMS)
+    seed(hass, OFF, local(2026, 5, 31), OFF_SUMS)
+    await get_instance(hass).async_block_till_done()
+
+    ours = await ask(client, [ON, OFF], start, end, period)
+    theirs = await stock(client, [ON, OFF], start, end, period)
+
+    assert ours["success"]
+    assert ours["result"] == theirs
+    assert len(ours["result"][ON]) > 2 and len(ours["result"][OFF]) > 1
