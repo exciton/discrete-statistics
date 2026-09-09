@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Put the working tree on a running instance to try it out.
+#
+#   script/deploy root@homeassistant
+#
+# Copies the integration and the built card over ssh and stamps the
+# manifest there with the next pre-release number after the one the
+# instance is running - 0.1.4b10 becomes 0.1.4b11, a plain release
+# becomes its b1 - so the card URL's `?v=` changes and browsers fetch
+# the new bundle rather than serving the old one from cache. The
+# working tree's own manifest is left alone; releases are cut from it.
+set -euo pipefail
+
+HOST="${1:?usage: script/deploy user@host}"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REMOTE=/config/custom_components/discrete_statistics
+BUNDLE=custom_components/discrete_statistics/frontend/discrete-statistics-card.js
+
+cd "$REPO_ROOT"
+if [[ -n "$(find frontend/src -newer "$BUNDLE" -type f)" ]]; then
+  echo "the built card is older than frontend/src; run (cd frontend && npm run build) first" >&2
+  exit 1
+fi
+
+current="$(ssh "$HOST" "sed -n 's/.*\"version\": \"\\([^\"]*\\)\".*/\\1/p' $REMOTE/manifest.json")"
+[[ -n "$current" ]] || { echo "no version in $HOST:$REMOTE/manifest.json" >&2; exit 1; }
+if [[ "$current" =~ ^(.*b)([0-9]+)$ ]]; then
+  next="${BASH_REMATCH[1]}$(( BASH_REMATCH[2] + 1 ))"
+else
+  next="${current}b1"
+fi
+
+echo "Deploying $current -> $next to $HOST..." >&2
+tar -C custom_components --exclude=__pycache__ -cf - discrete_statistics \
+  | ssh "$HOST" "tar -C /config/custom_components -xf - \
+      && sed -i 's/\"version\": \"[^\"]*\"/\"version\": \"$next\"/' $REMOTE/manifest.json \
+      && ha core restart"
+echo "$next is up; the card is at /discrete_statistics/discrete-statistics-card.js?v=$next" >&2
