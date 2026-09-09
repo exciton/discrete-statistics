@@ -301,6 +301,12 @@ the stretch leaves it alone too.
 
 ## Charts
 
+The statistics are ordinary long-term statistics, so the stock
+statistics-graph card draws them; the integration also ships its own card
+(below), which is configured by entity rather than by statistic ID and
+draws every state the entity has, including one it gains later. Each
+example here is given both ways.
+
 Time in each state per day, stacked:
 
 ```yaml
@@ -318,6 +324,16 @@ entities:
 
 ![Thirty days of grid status: a full bar of on each day, with two short bands of off](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/grid-state-daily.png)
 
+The same chart from the card:
+
+```yaml
+type: custom:discrete-statistics-card
+title: Grid Status
+entity: binary_sensor.grid_status
+period: day
+days_to_show: 30
+```
+
 Outages per month:
 
 ```yaml
@@ -333,6 +349,18 @@ entities:
 ```
 
 ![A year of outages per month, none to five](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/outages-monthly.png)
+
+```yaml
+type: custom:discrete-statistics-card
+title: Monthly Outages
+entity: binary_sensor.grid_status
+metric: count
+states:
+  - "off"
+chart_type: bar
+period: month
+days_to_show: 365
+```
 
 A year of a heat pump's mode, week by week — the chart at the top of this
 page:
@@ -351,8 +379,17 @@ entities:
   - discrete_statistics:climate_heat_pump_off_duration
 ```
 
+```yaml
+type: custom:discrete-statistics-card
+title: Heat Pump
+entity: climate.heat_pump
+period: week
+days_to_show: 365
+```
+
 How often a light is switched on in an average hour each week, and in the
-busiest hour:
+busiest hour — a chart only the stock card draws, since the card below
+has no `min` or `max`:
 
 ```yaml
 type: statistics-graph
@@ -386,8 +423,26 @@ entities:
 
 ![A year of the kitchen light's share of time on, between 3 % and 19 % week by week](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/light-share-of-time.png)
 
-A state that appears later accumulates immediately but must be added to the
-card's `entities` list to be drawn.
+The card draws the same share as a percentage, on an axis that fits it:
+
+```yaml
+type: custom:discrete-statistics-card
+title: Kitchen Lights
+entity: light.kitchen_lights
+unit: percent
+chart_type: line
+period: week
+days_to_show: 365
+states:
+  - "on"
+hide_legend: true
+```
+
+![A year of the kitchen light's share of time on, between 2 % and 19 % on an axis topping out at 20 %](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/lights-share-of-time-custom.png)
+
+With the stock card a state that appears later accumulates immediately
+but must be added to the card's `entities` list to be drawn; the card
+below draws it as soon as it has statistics.
 
 ## The card
 
