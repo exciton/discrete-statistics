@@ -116,7 +116,9 @@ export function buildSeries(
   }
   const starts = [...buckets.keys()].sort((a, b) => a - b);
   stats.forEach((stat, i) => {
-    const color = colors[i % colors.length];
+    // A configured colour, or the palette in order; a resolved colour
+    // is six-digit hex, which is what the alpha suffixes below need.
+    const color = stat.color ?? colors[i % colors.length];
     const rows = new Map(
       (data[stat.statisticId] ?? []).map((row) => [row.start, row])
     );

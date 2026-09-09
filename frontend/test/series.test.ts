@@ -151,6 +151,14 @@ describe("buildSeries", () => {
     expect(series[0]).toMatchObject({ type: "bar", stack: "climate.zone" });
   });
 
+  it("draws a statistic with its own colour, the rest from the palette in order", () => {
+    const coloured = [{ ...stats[0], color: "#ff0000" }, stats[1]];
+    const { series, legend } = buildSeries("climate.zone", coloured, data, "h", colors);
+    expect(series[0].color).toBe("#ff00007F");
+    expect(series[1].color).toBe("#2222227F");
+    expect(legend[0].itemStyle.color).toBe("#ff0000");
+  });
+
   it("wraps the palette", () => {
     const { series } = buildSeries("climate.zone", stats, data, "h", ["#abcdef"]);
     expect(series[1].color).toBe("#abcdef7F");

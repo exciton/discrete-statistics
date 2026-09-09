@@ -4,6 +4,10 @@ import type { HassLike, ResolvedPeriod, Statistics, StatisticsMetaData } from ".
 export const listStatisticIds = (hass: HassLike) =>
   hass.callWS<StatisticsMetaData[]>({ type: "recorder/list_statistic_ids" });
 
+// The integration's own command answers from the rows at the bucket
+// edges, so a year of months costs thirteen rows a statistic rather than
+// every hourly row in the range reduced server-side. A bucket's start and
+// end are its period's edges, which is what the ratio divides by.
 export const fetchStatistics = (
   hass: HassLike,
   ids: string[],
@@ -11,12 +15,11 @@ export const fetchStatistics = (
   period: ResolvedPeriod
 ) =>
   hass.callWS<Statistics>({
-    type: "recorder/statistics_during_period",
+    type: "discrete_statistics/buckets",
+    statistic_ids: ids,
     start_time: range.start.toISOString(),
     end_time: range.end.toISOString(),
-    statistic_ids: ids,
     period,
-    types: ["change"],
   });
 
 // The energy-date-selection card keeps its collection on the connection

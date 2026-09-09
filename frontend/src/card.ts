@@ -1,6 +1,7 @@
 import { LitElement, html, css, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { ensureChartBase } from "./chart-base";
+import { resolveColor } from "./colors";
 import { fetchStatistics, listStatisticIds, subscribeEnergyRange } from "./hass-api";
 import { rangeFromDays, resolvePeriod, resolveUnit, type Range } from "./period";
 import {
@@ -201,8 +202,8 @@ export class DiscreteStatisticsCard extends LitElement {
       const key = [
         config.entity,
         metric,
-        (config.states ?? []).join(","),
-        (config.ignore_states ?? []).join(","),
+        JSON.stringify(config.states ?? []),
+        JSON.stringify(config.ignore_states ?? []),
       ].join("|");
       if (this._statsFor !== key) {
         const metadata = await listStatisticIds(hass);
@@ -224,12 +225,14 @@ export class DiscreteStatisticsCard extends LitElement {
       const period = resolvePeriod(config.period, range);
       const unit = resolveUnit(config.unit, metric, period);
       const data = await fetchStatistics(hass, stats.map((s) => s.statisticId), range, period);
+      const style = getComputedStyle(this);
+      const cssVariable = (name: string) => style.getPropertyValue(name).trim();
       const { series, legend } = buildSeries(
         config.entity,
-        stats,
+        stats.map((s) => ({ ...s, color: resolveColor(s.color, cssVariable) })),
         data,
         unit,
-        this._colors(),
+        this._colors(cssVariable),
         config.chart_type
       );
       this._series = series;
@@ -314,11 +317,10 @@ export class DiscreteStatisticsCard extends LitElement {
     return this._unit === "%" ? `${shown}%` : `${shown} ${this._unit}`;
   }
 
-  private _colors(): string[] {
-    const style = getComputedStyle(this);
+  private _colors(cssVariable: (name: string) => string): string[] {
     const colors: string[] = [];
     for (let i = 1; i <= 8; i++) {
-      const c = style.getPropertyValue(`--graph-color-${i}`).trim();
+      const c = cssVariable(`--graph-color-${i}`);
       if (c) {
         colors.push(c);
       }

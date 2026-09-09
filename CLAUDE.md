@@ -35,13 +35,19 @@ pinned tag) rather than waiting for a push:
 
 ```bash
 docker run --rm -v "$PWD:/workspace" -v /home/bonne/Code/home_assistant_core:/core \
-  -w /core ha-discrete-stats-test bash -c \
-  "pip install -q ruff; python -m script.hassfest \
-   --integration-path /workspace/custom_components/discrete_statistics --action validate"
+  -w /core ha-discrete-stats-test \
+  python -m script.hassfest \
+   --integration-path /workspace/custom_components/discrete_statistics --action validate
 ```
 
-hassfest needs `ruff`, which the test image does not carry. The HACS check
-still has no local equivalent.
+The image carries `ruff` for hassfest and for linting the same way:
+
+```bash
+docker run --rm -v "$PWD:/workspace" -w /workspace ha-discrete-stats-test \
+  ruff check custom_components tests
+```
+
+The HACS check still has no local equivalent.
 
 The card lives in `frontend/` and is built into
 `custom_components/discrete_statistics/frontend/discrete-statistics-card.js`,
@@ -61,19 +67,25 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
        │   │    └─ config_flow    HA UI: entity -> EntityConfig, per entry
        │   └─ statistic_ids       for the blank-state test
        ├─ naming            HA: entity, state -> the names a person recognises
-       └─ payload           pure: buckets -> cumulative StatisticData rows
+       ├─ payload           pure: buckets -> cumulative StatisticData rows
+       │        │
+       │    compiler        writes the recorder: the only module that does
+       │        │
+       └─ buckets           pure: edge rows -> per-period {start, end, change}
                 │
-            compiler        the only module that touches the recorder
+            websocket       reads the recorder, for the card
                 │
-            __init__        setup, hourly schedule, recompute service
+            __init__        setup, hourly schedule, recompute service, the command
 ```
 
-Everything except `compiler`, `config_flow` and `naming` is pure and testable
-without a `hass` instance. Keep it that way: if a change needs recorder access in a
-lower module, the design is drifting. Two recorder boundaries: `compiler`
-is the only module that writes, and `config_flow` reads once per options
-dialog, the entity's distinct states, to draw a mapping row for each; so
-the invariants below are the compiler's alone.
+Everything except `compiler`, `websocket`, `config_flow` and `naming` is
+pure and testable without a `hass` instance. Keep it that way: if a change
+needs recorder access in a lower module, the design is drifting. Three
+recorder boundaries: `compiler` is the only module that writes;
+`websocket` reads — `session_scope(read_only=True)`, one `IN` query on
+`(metadata_id, start_ts)` plus `LIMIT 1` lookups — and `config_flow` reads
+once per options dialog, the entity's distinct states, to draw a mapping
+row for each; so the invariants below are the compiler's alone.
 
 States in a statistic's name are rendered by `naming.state_translator`,
 which wraps `async_translate_state`, so
@@ -154,12 +166,49 @@ two entities compile concurrently and defeat the lock.
 
 `frontend.py` serves the built card as a static path and registers it as a
 frontend module URL, skipped when the `frontend` component is not loaded.
+The card fetches through `discrete_statistics/buckets`, not
+`recorder/statistics_during_period`: the sums are cumulative and dense, so
+a bucket's `change` is the difference between the rows at its two edges,
+and `websocket` reads only those rows — thirteen for a year of months.
+`buckets.edges` aligns them as the recorder does (local midnight, Monday
+weeks, `dt_util.get_default_time_zone()`), so the two commands draw the
+same periods inside the range asked for — `tests/test_websocket.py`
+holds them to that against the recorder's own reduction. They differ at
+the ends: ours snaps every period outward, the recorder only a day or
+longer, and the recorder answers an end sitting on an edge with the
+period after it too. `buckets.cut` resolves every edge to the newest row
+before it — `row_before`: the row starting the hour before, whose sum is
+the sum at the edge, or the row running through the edge in a zone half
+an hour off UTC, where every edge is at half past — so the `IN` query is
+one row per edge (a range query when the edges are hours, since then
+every row is wanted). `MAX_BUCKETS` bounds a request before the edges
+are walked, since they and the query grow with the range asked for and
+the work runs on the recorder's thread. A bucket's `start` and `end` are
+always its edges — every statistic cut on the same edges shares them,
+which is what lets the card stack the statistics on one bar — and the
+period's length is what a ratio divides by: a state has no time in it
+before its series begins, so a new state's first bucket starts from a
+base of zero, and a hole is time in no state, so with one straddling an
+edge the bucket on the left has the change up to the last row before it
+and the one on the right the change after it, both shorter by the hole's
+time. A bucket with no row inside is left out, and the card draws the
+gap. The `LIMIT 1` lookup is only for edges the `IN` query left blank,
+and one answer is reused for every edge it also precedes, so a long hole
+or a late-arriving state costs one query, not one per edge.
 The card itself (`frontend/src/`) mirrors the ID rules of `statistic_ids`
 in `statistic-ids.ts` — an ID is parsed from the right, the state is one
 token — and renders through the frontend's `<ha-chart-base>`, an internal
 element with no stability promise. `series.ts` holds the ratio maths:
 `change / hours(end - start)` per row, never divided by the sum over
 states, so any subset of states and a DST day both come out right.
+`state-list.ts` is the editor's model of `states:` and `ignore_states:`
+— rows in draw order, ticked or not, and one "ignore new states" tick
+that decides which key the unticked rows are written to; `colors.ts`
+resolves a configured colour (a theme name through its CSS variable, or
+hex) to the six-digit hex `series.ts` adds alpha to, and anything else
+falls back to the palette. The list element itself
+(`state-list-element.ts`) leans on the frontend's `ha-sortable` and the
+`ui_color` selector, both internal like `<ha-chart-base>`.
 
 ## Invariants
 

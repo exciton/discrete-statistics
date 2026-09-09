@@ -6,6 +6,13 @@ export type ResolvedPeriod = Exclude<Period, "auto">;
 // ports between the two cards.
 export type ChartType = "line" | "line-stack" | "bar" | "bar-stack";
 
+// An entry of `states:`: the state alone, or with the name it is drawn
+// under and the colour it draws in — a theme colour name as the stock
+// card takes (`red`, `light-blue`) or a hex value.
+export type StateSetting =
+  | string
+  | { state: string; name?: string; color?: string };
+
 export interface CardConfig {
   type: string;
   entity: string;
@@ -13,7 +20,7 @@ export interface CardConfig {
   unit?: Unit;
   period?: Period;
   chart_type?: ChartType;
-  states?: string[];
+  states?: StateSetting[];
   ignore_states?: string[];
   days_to_show?: number;
   energy_date_selection?: boolean;
@@ -25,20 +32,17 @@ export interface CardConfig {
   grid_options?: { rows?: number | "auto"; columns?: number | "full" };
 }
 
-// Shapes of what recorder/statistics_during_period and
-// recorder/list_statistic_ids return; only the fields the card reads.
+// A bucket as discrete_statistics/buckets answers it: its period's edges
+// in ms since epoch and the change across it.
 export interface StatisticValue {
-  start: number; // ms since epoch
-  end: number; // ms since epoch
+  start: number;
+  end: number;
   change?: number | null;
-  sum?: number | null;
-  mean?: number | null;
-  min?: number | null;
-  max?: number | null;
 }
 
 export type Statistics = Record<string, StatisticValue[]>;
 
+// What recorder/list_statistic_ids returns; only the fields the card reads.
 export interface StatisticsMetaData {
   statistic_id: string;
   source: string;
