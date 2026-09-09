@@ -167,7 +167,8 @@ and `websocket` reads only those rows — thirteen for a year of months.
 weeks, `dt_util.get_default_time_zone()`), so the two commands draw the
 same periods. `buckets.cut` resolves every edge to the newest row before
 it — the row starting the hour before, whose sum is the sum at the edge,
-so the `IN` query is one row per edge; with a hole straddling an edge the
+so the `IN` query is one row per edge (a range query when the edges are
+hours, since then every row is wanted); with a hole straddling an edge the
 bucket on the left ends at the last row before the hole and the one on
 the right starts at the first row after, so the hole's time lands in
 neither and `change / hours(end - start)` stays right on both sides. A

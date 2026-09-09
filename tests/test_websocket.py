@@ -171,6 +171,38 @@ async def test_a_month_of_daily_rows_is_one_bucket(hass, client):
     }
 
 
+async def test_hours_are_the_rows_themselves(hass, client):
+    # Hourly buckets read every row in the range; the range's ends land
+    # mid-hour and the buckets still cover whole hours, a hole among them
+    # left out.
+    seed(hass, ON, local(2026, 3, 2), [1.0, 2.0, None, 3.0, 4.0])
+    await get_instance(hass).async_block_till_done()
+
+    response = await ask(
+        client, [ON], local(2026, 3, 2, 0, 30), local(2026, 3, 2, 3, 30), "hour"
+    )
+
+    assert response["result"] == {
+        ON: [
+            {
+                "start": ms(local(2026, 3, 2, 0)),
+                "end": ms(local(2026, 3, 2, 1)),
+                "change": 1.0,
+            },
+            {
+                "start": ms(local(2026, 3, 2, 1)),
+                "end": ms(local(2026, 3, 2, 2)),
+                "change": 1.0,
+            },
+            {
+                "start": ms(local(2026, 3, 2, 3)),
+                "end": ms(local(2026, 3, 2, 4)),
+                "change": 1.0,
+            },
+        ]
+    }
+
+
 async def test_an_unknown_statistic_is_absent(hass, client):
     response = await ask(client, [ON], local(2026, 3, 2), local(2026, 3, 3))
 

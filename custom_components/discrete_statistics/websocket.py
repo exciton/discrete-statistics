@@ -3,7 +3,8 @@
 `recorder/statistics_during_period` reads every hourly row in the range
 and reduces them in Python whatever the period is asked for. Our sums are
 cumulative and dense, so the card's buckets need only one row per edge:
-one `start_ts IN (...)` query for every statistic at once, then a
+one `start_ts IN (...)` query for every statistic at once - a range query
+when the edges are hours, since then every row is wanted - then a
 `LIMIT 1` lookup either side of any edge that query left blank. The
 arithmetic is in `buckets`; this module is the recorder boundary, and it
 only reads.
@@ -26,7 +27,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .buckets import Bucket, Period, Row, cut, edges, hours_wanted
-from .const import DOMAIN
+from .const import DOMAIN, HOUR
 
 COMMAND = f"{DOMAIN}/buckets"
 
@@ -98,7 +99,13 @@ def _buckets(
             metadata_id: statistic_id
             for statistic_id, (metadata_id, _) in metadata.items()
         }
-        at = _rows_at(session, set(ids), hours_wanted(edges_))
+        # Hourly edges want every row in the range, which a range asks
+        # for better than a list of every hour in it.
+        at = (
+            _rows_between(session, set(ids), edges_[0] - HOUR, edges_[-1])
+            if period == "hour"
+            else _rows_at(session, set(ids), hours_wanted(edges_))
+        )
         return {
             statistic_id: [
                 _serialise(b)
@@ -126,11 +133,29 @@ def _rows_at(
     session: Session, metadata_ids: set[int], hours: set[float]
 ) -> dict[int, dict[float, Row]]:
     """Every statistic's rows at the wanted hours, in one query."""
+    return _rows(session, metadata_ids, Statistics.start_ts.in_(hours))
+
+
+def _rows_between(
+    session: Session, metadata_ids: set[int], start: float, end: float
+) -> dict[int, dict[float, Row]]:
+    """Every statistic's rows in [start, end), in one query."""
+    return _rows(
+        session,
+        metadata_ids,
+        Statistics.start_ts >= start,
+        Statistics.start_ts < end,
+    )
+
+
+def _rows(
+    session: Session, metadata_ids: set[int], *where: Any
+) -> dict[int, dict[float, Row]]:
     rows = session.execute(
         select(Statistics.metadata_id, Statistics.start_ts, Statistics.sum).where(
             Statistics.metadata_id.in_(metadata_ids),
-            Statistics.start_ts.in_(hours),
             Statistics.sum.is_not(None),
+            *where,
         )
     )
     result: dict[int, dict[float, Row]] = {}
