@@ -208,37 +208,59 @@ def _disposition_field(state: str, known: list[str]) -> selector.SelectSelector:
     )
 
 
-def _options_schema(known: list[str], mapped: bool) -> vol.Schema:
-    """The options form, with a mapping row for each known state.
+def _rows_schema(known: list[str]) -> vol.Schema:
+    """A mapping row for each known state.
 
     Built per request: the rows are the entity's states, which a fixed
-    schema cannot know. The section opens when something is mapped, and
-    stays folded away otherwise, since most entities need no mapping.
+    schema cannot know.
+    """
+    return vol.Schema(
+        {
+            vol.Required(state, default=DISPOSITION_DEFAULT): _disposition_field(
+                state, known
+            )
+            for state in known
+        }
+    )
+
+
+def _options_schema(known: list[str], mapped: bool) -> vol.Schema:
+    """The options form, with the rows in a section.
+
+    The section opens when something is mapped, and stays folded away
+    otherwise, since most entities need no mapping.
     """
     if not known:
         return OPTIONS_SCHEMA
-    rows = {
-        vol.Required(state, default=DISPOSITION_DEFAULT): _disposition_field(
-            state, known
-        )
-        for state in known
-    }
     return OPTIONS_SCHEMA.extend(
         {
             vol.Required(CONF_STATES): section(
-                vol.Schema(rows), {"collapsed": not mapped}
+                _rows_schema(known), {"collapsed": not mapped}
             )
         }
     )
 
 
-def _mapping(user_input: Mapping[str, Any]) -> dict[str, str]:
-    """The `states` map a submitted form describes."""
+def _mapping(rows: Mapping[str, str]) -> dict[str, str]:
+    """The `states` map the submitted rows describe."""
     return {
         state: disposition
-        for state, disposition in user_input.get(CONF_STATES, {}).items()
+        for state, disposition in rows.items()
         if disposition and disposition != DISPOSITION_DEFAULT
     }
+
+
+def _mapping_errors(mapping: Mapping[str, str]) -> dict[str, str]:
+    """Form errors for a submitted mapping.
+
+    Form errors, not field ones: the frontend does not carry errors into a
+    section's fields (ha-form-expandable.ts).
+    """
+    if any(
+        target not in DISPOSITIONS and is_blank(target) for target in mapping.values()
+    ):
+        return {"base": "target_unusable"}
+    return {}
 
 
 def _options(user_input: dict[str, Any]) -> dict[str, Any]:
@@ -250,7 +272,7 @@ def _options(user_input: dict[str, Any]) -> dict[str, Any]:
     }
     if (seconds := _seconds(user_input.get(CONF_MIN_DURATION))) is not None:
         options[CONF_MIN_DURATION] = seconds
-    if mapping := _mapping(user_input):
+    if mapping := _mapping(user_input.get(CONF_STATES, {})):
         options[CONF_STATES] = mapping
     return options
 
@@ -270,18 +292,12 @@ def _errors(user_input: dict[str, Any]) -> dict[str, str]:
     errors: dict[str, str] = {}
     if problem := blank_error(user_input[CONF_BLANK]):
         errors[CONF_BLANK] = problem
-    mapping = _mapping(user_input)
+    mapping = _mapping(user_input.get(CONF_STATES, {}))
     if problem := min_duration_error(
         _seconds(user_input.get(CONF_MIN_DURATION)), user_input[CONF_DEFAULT], mapping
     ):
         errors[CONF_MIN_DURATION] = problem
-    # A form error, not a field one: the frontend does not carry errors
-    # into a section's fields (ha-form-expandable.ts).
-    if any(
-        target not in DISPOSITIONS and is_blank(target) for target in mapping.values()
-    ):
-        errors["base"] = "target_unusable"
-    return errors
+    return errors | _mapping_errors(mapping)
 
 
 def _has_continuous_state(hass: HomeAssistant, entity_id: str) -> bool:
@@ -312,9 +328,21 @@ def _has_continuous_state(hass: HomeAssistant, entity_id: str) -> bool:
 
 
 class DiscreteStatisticsConfigFlow(ConfigFlow, domain=DOMAIN):
-    """Create one tracked entity."""
+    """Create one tracked entity.
+
+    Two steps: the entity and its recording rule, then a row per state the
+    entity is known to report. The rows cannot be on the first form, since
+    which states there are is only known once an entity is picked, and
+    creating the entry only to reopen it for the mapping would make every
+    mapped entity a two-visit job.
+    """
 
     VERSION = 1
+
+    def __init__(self) -> None:
+        """Hold the first step's answers while the second is shown."""
+        self._user_input: dict[str, Any] = {}
+        self._known: list[str] = []
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -356,13 +384,51 @@ class DiscreteStatisticsConfigFlow(ConfigFlow, domain=DOMAIN):
         if data is not None and is_configured(data["yaml_configs"], entity_id):
             return self.async_abort(reason="yaml_configured")
 
-        name = user_input.get(CONF_NAME) or None
+        self._user_input = user_input
+        self._known = await async_known_states(self.hass, entity_id, {})
+        if self._known:
+            return await self.async_step_states()
+        return self._create()
+
+    async def async_step_states(
+        self, user_input: dict[str, str] | None = None
+    ) -> ConfigFlowResult:
+        """Say how each known state is recorded. Every row starts on default."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            mapping = _mapping(user_input)
+            errors = _mapping_errors(mapping)
+            if problem := min_duration_error(
+                _seconds(self._user_input.get(CONF_MIN_DURATION)),
+                self._user_input[CONF_DEFAULT],
+                mapping,
+            ):
+                # The duration is on the step before, so this is a form
+                # error here; the row that needs it is the one just set.
+                errors["base"] = problem
+            if not errors:
+                self._user_input[CONF_STATES] = user_input
+                return self._create()
+        return self.async_show_form(
+            step_id="states",
+            data_schema=self.add_suggested_values_to_schema(
+                _rows_schema(self._known), user_input
+            ),
+            errors=errors,
+            description_placeholders={
+                "entity": describe(self.hass, self._user_input[CONF_ENTITY_ID])
+            },
+        )
+
+    def _create(self) -> ConfigFlowResult:
+        entity_id = self._user_input[CONF_ENTITY_ID]
+        name = self._user_input.get(CONF_NAME) or None
         return self.async_create_entry(
             # Name and ID both: the name is what people recognise, the ID
             # is what tells two similarly-named entities apart in a list.
             title=describe(self.hass, entity_id, name),
             data={CONF_ENTITY_ID: entity_id},
-            options=_options(user_input),
+            options=_options(self._user_input),
         )
 
     @staticmethod
@@ -394,7 +460,7 @@ class DiscreteStatisticsOptionsFlow(OptionsFlow):
         # the entity.
         entity_id = self.config_entry.data[CONF_ENTITY_ID]
         stored = self.config_entry.options.get(CONF_STATES) or {}
-        mapping = _mapping(user_input) if user_input else stored
+        mapping = _mapping(user_input.get(CONF_STATES, {})) if user_input else stored
         known = await async_known_states(self.hass, entity_id, mapping)
         return self.async_show_form(
             step_id="init",
