@@ -210,12 +210,12 @@ discrete_statistics:
 [![Add Discrete Statistics](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=discrete_statistics)
 
 Or Settings → Devices & Services → **Add integration** → **Discrete
-Statistics**. Pick an entity, optionally name it, and choose which states
-to record; the two choices that mention a minimum duration read the
-duration field below them. If the entity has reported any states, a second
-step lists them, each with the choices described under **States** below;
-leaving them all as they are records every state the same way. Compiling
-starts in the background as soon as the entry is created,
+Statistics**. Pick an entity, then fill in the dialog shown below: a name
+if the entity's own will not do, and which states to record - the two
+choices that mention a minimum duration read the duration field below
+them. The same dialog is the entry's options dialog afterwards, so nothing
+is set on creation that cannot be changed later. Compiling starts in the
+background as soon as the entry is created,
 and a notification reports how many hours were compiled: the entity's full
 retained history for a genuinely new entity, or just the trailing window if
 it was previously configured and deleted, since statistics are kept on
@@ -223,7 +223,7 @@ removal and compiling resumes from that watermark.
 
 ![The options dialog: name, the states-to-record dropdown open on its four choices, blank states, and minimum duration](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/options-dialog.png)
 
-The options dialog has a **States** section with a row for every state the
+The dialog has a **States** section with a row for every state the
 entity has reported — its history, its current state and, for an enum
 sensor, its `options` — folded away until something in it is set. Each row
 is the `states:` entry for that state: leave it following the recording

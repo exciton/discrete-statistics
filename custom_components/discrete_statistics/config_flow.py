@@ -100,9 +100,7 @@ OPTIONS_SCHEMA = vol.Schema(
     }
 )
 
-USER_SCHEMA = vol.Schema(
-    {vol.Required(CONF_ENTITY_ID): selector.EntitySelector()}
-).extend(OPTIONS_SCHEMA.schema)
+USER_SCHEMA = vol.Schema({vol.Required(CONF_ENTITY_ID): selector.EntitySelector()})
 
 
 def _seconds(duration: dict[str, float] | None) -> float | None:
@@ -327,36 +325,70 @@ def _has_continuous_state(hass: HomeAssistant, entity_id: str) -> bool:
     return False
 
 
+async def _async_options_form(
+    flow: ConfigFlow | OptionsFlow,
+    step_id: str,
+    entity_id: str,
+    user_input: dict[str, Any] | None,
+    stored: Mapping[str, Any],
+    errors: dict[str, str],
+) -> ConfigFlowResult:
+    """The one form both flows edit an entity's options on.
+
+    Which entity this is about, and what leaving the name blank would give,
+    are in the description. The name is NOT prefilled into its box: a
+    suggested value comes back on submit, which would freeze the name
+    instead of letting it follow the entity.
+    """
+    mapping = (
+        _mapping(user_input.get(CONF_STATES, {}))
+        if user_input
+        else stored.get(CONF_STATES) or {}
+    )
+    known = await async_known_states(flow.hass, entity_id, mapping)
+    return flow.async_show_form(
+        step_id=step_id,
+        data_schema=flow.add_suggested_values_to_schema(
+            _options_schema(known, bool(mapping)), user_input or _suggested(stored)
+        ),
+        errors=errors,
+        description_placeholders={
+            # A markdown link: the dialog description is rendered by
+            # ha-markdown, which leaves same-host anchors alone so they
+            # navigate in-app (ha-markdown-element.ts:114). The entry
+            # row's own menu is fixed by the frontend and cannot be
+            # added to, so this is the only place to offer the link.
+            "entity": (
+                f"[{describe(flow.hass, entity_id)}](/history?entity_id={entity_id})"
+            ),
+            "default_name": display_name(flow.hass, entity_id),
+        },
+    )
+
+
 class DiscreteStatisticsConfigFlow(ConfigFlow, domain=DOMAIN):
     """Create one tracked entity.
 
-    Two steps: the entity and its recording rule, then a row per state the
-    entity is known to report. The rows cannot be on the first form, since
-    which states there are is only known once an entity is picked, and
-    creating the entry only to reopen it for the mapping would make every
-    mapped entity a two-visit job.
+    Two steps: the entity, then the same form the options flow shows. The
+    second cannot be the first, since which states get a mapping row is
+    only known once an entity is picked.
     """
 
     VERSION = 1
 
     def __init__(self) -> None:
-        """Hold the first step's answers while the second is shown."""
-        self._user_input: dict[str, Any] = {}
-        self._known: list[str] = []
+        """Hold the picked entity while its options are shown."""
+        self._entity_id = ""
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Pick an entity and how its states are recorded."""
+        """Pick an entity."""
         if user_input is None:
             return self.async_show_form(step_id="user", data_schema=USER_SCHEMA)
 
         entity_id = user_input[CONF_ENTITY_ID]
-
-        errors = _errors(user_input)
         if _has_continuous_state(self.hass, entity_id):
-            errors[CONF_ENTITY_ID] = "continuous_state"
-        if errors:
             # A field error, not an abort: the dialog stays open so another
             # entity can be picked without starting again.
             return self.async_show_form(
@@ -364,7 +396,7 @@ class DiscreteStatisticsConfigFlow(ConfigFlow, domain=DOMAIN):
                 data_schema=self.add_suggested_values_to_schema(
                     USER_SCHEMA, user_input
                 ),
-                errors=errors,
+                errors={CONF_ENTITY_ID: "continuous_state"},
             )
 
         # entity_id is identity: it builds every statistic ID, so it is the
@@ -384,51 +416,28 @@ class DiscreteStatisticsConfigFlow(ConfigFlow, domain=DOMAIN):
         if data is not None and is_configured(data["yaml_configs"], entity_id):
             return self.async_abort(reason="yaml_configured")
 
-        self._user_input = user_input
-        self._known = await async_known_states(self.hass, entity_id, {})
-        if self._known:
-            return await self.async_step_states()
-        return self._create()
+        self._entity_id = entity_id
+        return await self.async_step_options()
 
-    async def async_step_states(
-        self, user_input: dict[str, str] | None = None
+    async def async_step_options(
+        self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Say how each known state is recorded. Every row starts on default."""
+        """Say how the entity's states are recorded."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            mapping = _mapping(user_input)
-            errors = _mapping_errors(mapping)
-            if problem := min_duration_error(
-                _seconds(self._user_input.get(CONF_MIN_DURATION)),
-                self._user_input[CONF_DEFAULT],
-                mapping,
-            ):
-                # The duration is on the step before, so this is a form
-                # error here; the row that needs it is the one just set.
-                errors["base"] = problem
+            errors = _errors(user_input)
             if not errors:
-                self._user_input[CONF_STATES] = user_input
-                return self._create()
-        return self.async_show_form(
-            step_id="states",
-            data_schema=self.add_suggested_values_to_schema(
-                _rows_schema(self._known), user_input
-            ),
-            errors=errors,
-            description_placeholders={
-                "entity": describe(self.hass, self._user_input[CONF_ENTITY_ID])
-            },
-        )
-
-    def _create(self) -> ConfigFlowResult:
-        entity_id = self._user_input[CONF_ENTITY_ID]
-        name = self._user_input.get(CONF_NAME) or None
-        return self.async_create_entry(
-            # Name and ID both: the name is what people recognise, the ID
-            # is what tells two similarly-named entities apart in a list.
-            title=describe(self.hass, entity_id, name),
-            data={CONF_ENTITY_ID: entity_id},
-            options=_options(self._user_input),
+                name = user_input.get(CONF_NAME) or None
+                return self.async_create_entry(
+                    # Name and ID both: the name is what people recognise,
+                    # the ID is what tells two similarly-named entities
+                    # apart in a list.
+                    title=describe(self.hass, self._entity_id, name),
+                    data={CONF_ENTITY_ID: self._entity_id},
+                    options=_options(user_input),
+                )
+        return await _async_options_form(
+            self, "options", self._entity_id, user_input, {}, errors
         )
 
     @staticmethod
@@ -439,7 +448,7 @@ class DiscreteStatisticsConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class DiscreteStatisticsOptionsFlow(OptionsFlow):
-    """Edit the name and the recording default.
+    """Edit everything but the entity.
 
     entity_id is absent by design: it builds every statistic ID, so
     changing it would orphan the entity's whole series.
@@ -454,31 +463,11 @@ class DiscreteStatisticsOptionsFlow(OptionsFlow):
             errors = _errors(user_input)
             if not errors:
                 return self.async_create_entry(data=_options(user_input))
-        # Which entity this is about, and what leaving the name blank would
-        # give. NOT prefilled into the box: a suggested value comes back on
-        # submit, which would freeze the name instead of letting it follow
-        # the entity.
-        entity_id = self.config_entry.data[CONF_ENTITY_ID]
-        stored = self.config_entry.options.get(CONF_STATES) or {}
-        mapping = _mapping(user_input.get(CONF_STATES, {})) if user_input else stored
-        known = await async_known_states(self.hass, entity_id, mapping)
-        return self.async_show_form(
-            step_id="init",
-            data_schema=self.add_suggested_values_to_schema(
-                _options_schema(known, bool(mapping)),
-                user_input or _suggested(self.config_entry.options),
-            ),
-            errors=errors,
-            description_placeholders={
-                # A markdown link: the dialog description is rendered by
-                # ha-markdown, which leaves same-host anchors alone so they
-                # navigate in-app (ha-markdown-element.ts:114). The entry
-                # row's own menu is fixed by the frontend and cannot be
-                # added to, so this is the only place to offer the link.
-                "entity": (
-                    f"[{describe(self.hass, entity_id)}]"
-                    f"(/history?entity_id={entity_id})"
-                ),
-                "default_name": display_name(self.hass, entity_id),
-            },
+        return await _async_options_form(
+            self,
+            "init",
+            self.config_entry.data[CONF_ENTITY_ID],
+            user_input,
+            self.config_entry.options,
+            errors,
         )
