@@ -9,3 +9,8 @@ COPY requirements-test.txt /tmp/requirements-test.txt
 # ruff is not a test requirement; it is here for linting in the container
 # and for hassfest, which needs it.
 RUN pip install --no-cache-dir -r /tmp/requirements-test.txt ruff
+
+# The repository is bind-mounted, so anything pytest or ruff writes into
+# it - caches, bytecode - is owned by whoever runs here. The image's
+# unprivileged user has uid 1000, the usual first account on the host.
+USER vscode
