@@ -19,12 +19,16 @@ as external statistics, which are never purged.
   independent of `purge_keep_days`
 - Backfills from the recorder's existing history on first run, so a new
   entity starts with whatever the recorder still holds rather than from zero
-- Draws with the stock statistics-graph card: `change` for totals over
+- Ships its own card: pick the entity and it draws every state, as
+  stacked or plain bars or lines per hour, day, week, month or year, in
+  hours, days or as a percentage of the time — following the dashboard's
+  date picker if there is one
+- Draws with the stock statistics-graph card too: `change` for totals over
   days, weeks and months; `mean`, `min` and `max` for average and peak hours
 - The `mean` of a duration over any period is the share of that period
-  spent in the state — `0.4` is 40 % — straight from the card
-- New states are picked up automatically as they appear; no per-state
-  configuration needed
+  spent in the state — `0.4` is 40 % — straight from the stock card
+- New states are picked up automatically as they appear, in the card as
+  well as the statistics; no per-state configuration needed
 - `unavailable`, `unknown`, or any state you choose can be ignored, with
   the previous state carried across the gap instead of a hole
 - Debounce: a state that lasts less than a minimum duration can be ignored,
@@ -745,8 +749,9 @@ week this year.
 - An in-progress state change is not charted until its hour closes.
 - A state committed later than the trailing window needs a manual
   `recompute`.
-- Charts name their statistics explicitly; a newly appearing state must be
-  added to the card.
+- The stock statistics-graph card names its statistics explicitly, so a
+  newly appearing state must be added to it by hand; the integration's own
+  card draws it as soon as it has statistics.
 - Hours the component was not running for, beyond the recorder's
   `purge_keep_days`, are recorded only when its own last row can vouch for
   the state; otherwise they stay empty (see *Gaps*).

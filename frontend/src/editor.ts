@@ -100,6 +100,8 @@ export function configSchema(entities?: string[], followsPicker = false) {
         },
         {
           name: "unit",
+          // A count has no time unit; the field goes with it.
+          visible: { field: "metric", operator: "not_eq", value: "count" },
           selector: dropdown([
             { value: "auto", label: "Automatic" },
             { value: "h", label: "Hours" },
@@ -131,7 +133,7 @@ export const computeHelper = (schema: { name: string }) =>
   ({
     period: "Auto suits the period to the days shown.",
     collection_key: "Names the date picker when a dashboard has more than one.",
-    unit: "Only for time in state. Automatic picks hours or days to suit the period.",
+    unit: "Automatic picks hours or days to suit the period.",
   })[schema.name];
 
 export class DiscreteStatisticsCardEditor extends LitElement {

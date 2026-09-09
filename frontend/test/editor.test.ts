@@ -56,6 +56,14 @@ describe("configSchema", () => {
     expect(field([columns[0]], "days_to_show")).toBeDefined();
   });
 
+  it("hides the time unit while the metric is a count", () => {
+    expect(field(configSchema(), "unit")!.visible).toEqual({
+      field: "metric",
+      operator: "not_eq",
+      value: "count",
+    });
+  });
+
   it("swaps days to show for the collection key while following the picker", () => {
     const following = configSchema(undefined, true);
     expect(field(following, "days_to_show")).toBeUndefined();
