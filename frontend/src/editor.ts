@@ -93,6 +93,7 @@ export function configSchema(entities?: string[], followsPicker = false) {
       schema: [
         {
           name: "metric",
+          required: true,
           selector: dropdown([
             { value: "duration", label: METRIC_LABEL.duration },
             { value: "count", label: METRIC_LABEL.count },
@@ -100,6 +101,7 @@ export function configSchema(entities?: string[], followsPicker = false) {
         },
         {
           name: "unit",
+          required: true,
           // A count has no time unit; the field goes with it.
           visible: { field: "metric", operator: "not_eq", value: "count" },
           selector: dropdown([
@@ -175,7 +177,13 @@ export class DiscreteStatisticsCardEditor extends LitElement {
     }
     // A config written before these keys existed, or by hand, shows the
     // card's defaults rather than blank fields.
-    const data = { chart_type: "bar-stack", period: "auto", ...this._config };
+    const data = {
+      ...this._config,
+      chart_type: this._config.chart_type ?? "bar-stack",
+      period: this._config.period ?? "auto",
+      metric: this._config.metric ?? "duration",
+      unit: this._config.unit ?? "auto",
+    };
     return html`<ha-form
       .hass=${this.hass}
       .data=${data}

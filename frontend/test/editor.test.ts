@@ -56,6 +56,12 @@ describe("configSchema", () => {
     expect(field([columns[0]], "days_to_show")).toBeDefined();
   });
 
+  it("never lets the metric or unit be cleared", () => {
+    const schema = configSchema();
+    expect(field(schema, "metric")!.required).toBe(true);
+    expect(field(schema, "unit")!.required).toBe(true);
+  });
+
   it("hides the time unit while the metric is a count", () => {
     expect(field(configSchema(), "unit")!.visible).toEqual({
       field: "metric",
