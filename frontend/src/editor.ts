@@ -1,8 +1,16 @@
-import { LitElement, html, nothing } from "lit";
+import { LitElement, css, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { listStatisticIds } from "./hass-api";
-import { entitiesWithStatistics } from "./statistic-ids";
-import type { CardConfig, ChartType, HassLike, Metric, Period } from "./types";
+import { stateList, stateListConfig, type StateList } from "./state-list";
+import { entitiesWithStatistics, statisticsForEntity } from "./statistic-ids";
+import type {
+  CardConfig,
+  ChartType,
+  HassLike,
+  Metric,
+  Period,
+  StatisticsMetaData,
+} from "./types";
 
 const METRIC_LABEL: Record<Metric, string> = {
   duration: "Time in State",
@@ -146,6 +154,8 @@ export class DiscreteStatisticsCardEditor extends LitElement {
   // undefined until the lookup answers; null when it failed.
   @state() private _entities?: string[] | null;
 
+  @state() private _metadata: StatisticsMetaData[] = [];
+
   private _loading = false;
 
   public setConfig(config: CardConfig): void {
@@ -162,6 +172,7 @@ export class DiscreteStatisticsCardEditor extends LitElement {
   private async _load(hass: HassLike) {
     try {
       const metadata = await listStatisticIds(hass);
+      this._metadata = metadata;
       this._entities = entitiesWithStatistics(
         Object.keys(hass.states ?? {}),
         metadata
@@ -184,27 +195,65 @@ export class DiscreteStatisticsCardEditor extends LitElement {
       metric: this._config.metric ?? "duration",
       unit: this._config.unit ?? "auto",
     };
+    // The list holds every state the entity has statistics for under the
+    // chosen metric; it is empty until an entity is picked.
+    const states = stateList(
+      statisticsForEntity(data.entity, data.metric, this._metadata),
+      this._config
+    );
     return html`<ha-form
-      .hass=${this.hass}
-      .data=${data}
-      .schema=${configSchema(
-        this._entities ?? undefined,
-        !!this._config.energy_date_selection
-      )}
-      .computeLabel=${computeLabel}
-      .computeHelper=${computeHelper}
-      @value-changed=${this._valueChanged}
-    ></ha-form>`;
+        .hass=${this.hass}
+        .data=${data}
+        .schema=${configSchema(
+          this._entities ?? undefined,
+          !!this._config.energy_date_selection
+        )}
+        .computeLabel=${computeLabel}
+        .computeHelper=${computeHelper}
+        @value-changed=${this._valueChanged}
+      ></ha-form>
+      ${states.rows.length
+        ? html`<div class="states">
+            <div class="heading">States</div>
+            <discrete-statistics-state-list
+              .hass=${this.hass}
+              .value=${states}
+              @value-changed=${this._statesChanged}
+            ></discrete-statistics-state-list>
+          </div>`
+        : nothing}`;
+  }
+
+  private _statesChanged(ev: CustomEvent<{ value: StateList }>): void {
+    ev.stopPropagation();
+    const { states: _states, ignore_states: _ignored, ...rest } = this._config!;
+    this._announce({ ...rest, ...stateListConfig(ev.detail.value) });
   }
 
   private _valueChanged(ev: CustomEvent): void {
     ev.stopPropagation();
+    this._announce(ev.detail.value);
+  }
+
+  private _announce(config: CardConfig): void {
+    this._config = config;
     this.dispatchEvent(
       new CustomEvent("config-changed", {
-        detail: { config: ev.detail.value },
+        detail: { config },
         bubbles: true,
         composed: true,
       })
     );
   }
+
+  static styles = css`
+    .states {
+      margin-top: 24px;
+    }
+    .heading {
+      font-size: 16px;
+      font-weight: 500;
+      margin-bottom: 8px;
+    }
+  `;
 }

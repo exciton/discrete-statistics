@@ -109,6 +109,17 @@ describe("statisticsForEntity", () => {
     expect(got.map((s) => s.token)).toEqual(["heatcool", "cool", "heat"]);
   });
 
+  it("carries a listed state's colour, and an entry without one has none", () => {
+    const got = statisticsForEntity("climate.zone", "duration", all, {
+      states: [{ state: "heat", color: "red" }, "cool", { state: "heat_cool" }],
+    });
+    expect(got.map((s) => [s.token, s.color])).toEqual([
+      ["heat", "red"],
+      ["cool", undefined],
+      ["heatcool", undefined],
+    ]);
+  });
+
   it("the exclude-list vetoes a listed state too", () => {
     const got = statisticsForEntity("climate.zone", "duration", all, {
       states: ["heat_cool", "heat"],

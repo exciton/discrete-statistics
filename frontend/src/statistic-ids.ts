@@ -1,4 +1,4 @@
-import type { Metric, StatisticsMetaData } from "./types";
+import type { Metric, StateSetting, StatisticsMetaData } from "./types";
 
 const DOMAIN = "discrete_statistics";
 const METRICS: readonly Metric[] = ["duration", "count"];
@@ -8,7 +8,20 @@ export interface StateStatistic {
   token: string;
   label: string;
   metric: Metric;
+  // As configured, unresolved; absent for a palette colour.
+  color?: string;
 }
+
+export const settingState = (setting: StateSetting): string =>
+  typeof setting === "string" ? setting : setting.state;
+
+// A `states:` or `ignore_states:` entry names a statistic by token, or —
+// since non-Latin text has no token — by the statistic's label, the raw
+// state text.
+export const settingMatches = (setting: StateSetting, s: StateStatistic): boolean => {
+  const entry = settingState(setting);
+  return stateToken(entry) === s.token || entry === s.label;
+};
 
 // The integration slugifies with python-slugify. Entity IDs are already
 // [a-z0-9_.], so lower-casing and collapsing runs of anything else is the
@@ -95,7 +108,7 @@ export function statisticsForEntity(
   entityId: string,
   metric: Metric,
   metadata: StatisticsMetaData[],
-  filter?: { states?: string[]; ignore_states?: string[] }
+  filter?: { states?: StateSetting[]; ignore_states?: string[] }
 ): StateStatistic[] {
   const wanted = entitySlug(entityId);
   const found: StateStatistic[] = [];
@@ -114,14 +127,14 @@ export function statisticsForEntity(
   if (!filter?.states && !filter?.ignore_states) {
     return found;
   }
-  // A filter entry matches by token, or — since non-Latin text has no
-  // token — by the statistic's label falling back to the raw state text.
-  const matches = (entry: string, s: StateStatistic): boolean =>
-    stateToken(entry) === s.token || entry === s.label;
   const ignoreList = filter.ignore_states ?? [];
-  const kept = found.filter((s) => !ignoreList.some((entry) => matches(entry, s)));
+  const kept = found.filter((s) => !ignoreList.some((entry) => settingMatches(entry, s)));
   const listed = (filter.states ?? [])
-    .map((entry) => kept.find((s) => matches(entry, s)))
+    .map((setting) => {
+      const s = kept.find((found) => settingMatches(setting, found));
+      const color = typeof setting === "string" ? undefined : setting.color;
+      return s && color ? { ...s, color } : s;
+    })
     .filter((s): s is StateStatistic => s !== undefined);
   // `states:` alone is a closed list. `ignore_states:` opens it: a state
   // the entity gains later is appended rather than silently dropped.

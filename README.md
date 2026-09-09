@@ -494,6 +494,26 @@ ignore_states:
   - unavailable
 ```
 
+A `states:` entry can carry a colour — a theme colour name as the stock
+card takes, or a hex value; the rest take the theme's graph palette in
+order:
+
+```yaml
+states:
+  - state: heat
+    color: deep-orange
+  - state: cool
+    color: "#03a9f4"
+  - "off"
+```
+
+The editor lists the entity's states with a tick, a drag handle and a
+colour each, and writes the two keys for you. Its "Ignore states that
+appear later" tick chooses which the unticked states become: with it
+on they are left out of `states:`; with it off they go in
+`ignore_states:`, which stays present — empty if need be — so the list
+stays open.
+
 `unit: percent` is the share of each period spent in the state, so a
 stacked bar whose states are all drawn is always full height — except the
 last bar, which is only as full as the period it covers so far. `auto`

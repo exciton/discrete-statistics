@@ -1,5 +1,6 @@
 import { DiscreteStatisticsCard } from "./card";
 import { DiscreteStatisticsCardEditor } from "./editor";
+import { DiscreteStatisticsStateList } from "./state-list-element";
 
 // The frontend's app bundle replaces window.customElements with the
 // scoped-custom-element-registry polyfill, whose get() and whenDefined()
@@ -13,6 +14,10 @@ customElements.whenDefined("home-assistant").then(() => {
   customElements.define(
     "discrete-statistics-card-editor",
     DiscreteStatisticsCardEditor
+  );
+  customElements.define(
+    "discrete-statistics-state-list",
+    DiscreteStatisticsStateList
   );
 });
 

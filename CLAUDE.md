@@ -200,6 +200,14 @@ token — and renders through the frontend's `<ha-chart-base>`, an internal
 element with no stability promise. `series.ts` holds the ratio maths:
 `change / hours(end - start)` per row, never divided by the sum over
 states, so any subset of states and a DST day both come out right.
+`state-list.ts` is the editor's model of `states:` and `ignore_states:`
+— rows in draw order, ticked or not, and one "ignore new states" tick
+that decides which key the unticked rows are written to; `colors.ts`
+resolves a configured colour (a theme name through its CSS variable, or
+hex) to the six-digit hex `series.ts` adds alpha to, and anything else
+falls back to the palette. The list element itself
+(`state-list-element.ts`) leans on the frontend's `ha-sortable` and the
+`ui_color` selector, both internal like `<ha-chart-base>`.
 
 ## Invariants
 
