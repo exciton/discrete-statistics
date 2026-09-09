@@ -72,14 +72,35 @@ describe("buildSeries", () => {
     ]);
   });
 
-  it("skips rows without a change and statistics without rows", () => {
+  it("gives every series every bucket, null where it has no value", () => {
+    // ECharts stacks series on a time axis by data index, not by bucket,
+    // so a series missing a bucket would stack its later bars on the
+    // wrong base. A missing row and a row without a change both become
+    // a null point in the bucket's place.
     const sparse: Statistics = {
       "discrete_statistics:climate_zone_heat_duration": [row(0, 24, null), row(24, 24, 3)],
+      "discrete_statistics:climate_zone_off_duration": [row(24, 24, 21), row(48, 24, 24)],
+    };
+    const { series } = buildSeries("climate.zone", stats, sparse, "h", colors);
+    expect(series[0].data).toEqual([
+      [0, null, 0, 24 * H],
+      [24 * H, 3, 24 * H, 48 * H],
+      [48 * H, null, 48 * H, 72 * H],
+    ]);
+    expect(series[1].data).toEqual([
+      [0, null, 0, 24 * H],
+      [24 * H, 21, 24 * H, 48 * H],
+      [48 * H, 24, 48 * H, 72 * H],
+    ]);
+  });
+
+  it("gives a statistic without rows the same buckets, all null", () => {
+    const sparse: Statistics = {
+      "discrete_statistics:climate_zone_heat_duration": [row(0, 24, 3)],
     };
     const { series } = buildSeries("climate.zone", stats, sparse, "h", colors);
     expect(series).toHaveLength(2);
-    expect(series[0].data).toEqual([[24 * H, 3, 24 * H, 48 * H]]);
-    expect(series[1].data).toEqual([]);
+    expect(series[1].data).toEqual([[0, null, 0, 24 * H]]);
   });
 
   it("wraps the palette", () => {
@@ -91,6 +112,12 @@ describe("buildSeries", () => {
 describe("earliestStart", () => {
   const seriesOf = (starts: number[]) =>
     ({ data: starts.map((s) => [s, 1, s, s + H]) }) as never;
+
+  it("ignores buckets with no value", () => {
+    expect(
+      earliestStart([{ data: [[0, null, 0, H], [H, 1, H, 2 * H]] } as never])
+    ).toBe(H);
+  });
 
   it("is the earliest bucket start across every series", () => {
     // The recorder snaps the query outward, so the first bucket can begin

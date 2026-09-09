@@ -27,7 +27,7 @@ const FALLBACK_COLORS = [
 interface TooltipParam {
   seriesName?: string;
   color?: string;
-  value: [number, number, number, number];
+  value: [number, number | null, number, number];
 }
 
 const METRIC_LABEL: Record<Metric, string> = {
@@ -331,21 +331,23 @@ export class DiscreteStatisticsCard extends LitElement {
     if (!point) {
       return nothing;
     }
+    // A series with no value in this bucket has no bar to describe.
+    const shown = rows.filter((row) => row.value?.[1] !== null);
     const [start, end] = [point.value[2], point.value[3]];
     // The tooltip is rendered outside this card's shadow root, so the
     // marker is styled inline rather than from the card's stylesheet, and
     // it is a span rather than <ha-chart-tooltip-marker>: that element
     // belongs to the frontend's chart chunk and need not be registered
     // wherever ha-chart-base is.
-    return html`${this._formatSpan(start, end)}<br />${rows.map(
+    return html`${this._formatSpan(start, end)}<br />${shown.map(
       (row, i) =>
         html`<span
             style="display:inline-block;width:10px;height:10px;border-radius:10px;
                    vertical-align:middle;margin-inline-end:4px;
                    background-color:${this._solidColor(row)}"
           ></span>
-          ${row.seriesName}: ${this._formatValue(row.value[1])}${i <
-          rows.length - 1
+          ${row.seriesName}: ${this._formatValue(row.value[1]!)}${i <
+          shown.length - 1
             ? html`<br />`
             : nothing}`
     )}`;
