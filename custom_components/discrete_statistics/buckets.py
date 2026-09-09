@@ -15,6 +15,7 @@ for a ratio to divide by whichever of those falls inside it.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, tzinfo
 from itertools import pairwise
@@ -101,6 +102,17 @@ def edges(start: float, end: float, period: Period, tz: tzinfo) -> list[float]:
     return result
 
 
+def row_before(edge: float) -> float:
+    """The start of the newest hour that ends at or before edge.
+
+    The hour before it when the edge is on the hour; otherwise the hour
+    containing it, since a zone half an hour off UTC puts every edge at
+    half past and the row holding the sum at the edge is the one running
+    through it - the row the recorder's own reduction puts in that day.
+    """
+    return (math.ceil(edge / HOUR) - 1) * HOUR
+
+
 Lookup = Callable[[float], Row | None]
 
 
@@ -111,9 +123,8 @@ def cut(
 ) -> list[Bucket]:
     """Cut the buckets between consecutive edges.
 
-    `at` holds the row starting the hour before each edge - one row per
-    edge, whose sum is the sum at the edge - and answers almost every
-    edge in one query. The lookup fills in for an edge with no row, which
+    `at` holds `row_before` each edge - one row per edge, whose sum is
+    the sum at the edge - and answers almost every edge in one query. The lookup fills in for an edge with no row, which
     is a hole or the start or end of the series, and is asked at most
     once per hole: the row found for one edge answers every edge between
     it and the next found row.
@@ -131,7 +142,7 @@ def cut(
     known: Row | None = None
     known_for: float | None = None
     for edge in reversed(edges_):
-        row = at.get(edge - HOUR)
+        row = at.get(row_before(edge))
         if row is None:
             if known_for is None or (known is not None and known.start >= edge):
                 known = newest_before(edge)
@@ -156,5 +167,5 @@ def cut(
 
 
 def hours_wanted(edges_: list[float]) -> set[float]:
-    """The hours whose rows answer the edges: the hour before each."""
-    return {edge - HOUR for edge in edges_}
+    """The hours whose rows answer the edges."""
+    return {row_before(edge) for edge in edges_}

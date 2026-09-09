@@ -165,10 +165,18 @@ a bucket's `change` is the difference between the rows at its two edges,
 and `websocket` reads only those rows — thirteen for a year of months.
 `buckets.edges` aligns them as the recorder does (local midnight, Monday
 weeks, `dt_util.get_default_time_zone()`), so the two commands draw the
-same periods. `buckets.cut` resolves every edge to the newest row before
-it — the row starting the hour before, whose sum is the sum at the edge,
-so the `IN` query is one row per edge (a range query when the edges are
-hours, since then every row is wanted). A bucket's `start` and `end` are
+same periods inside the range asked for — `tests/test_websocket.py`
+holds them to that against the recorder's own reduction. They differ at
+the ends: ours snaps every period outward, the recorder only a day or
+longer, and the recorder answers an end sitting on an edge with the
+period after it too. `buckets.cut` resolves every edge to the newest row
+before it — `row_before`: the row starting the hour before, whose sum is
+the sum at the edge, or the row running through the edge in a zone half
+an hour off UTC, where every edge is at half past — so the `IN` query is
+one row per edge (a range query when the edges are hours, since then
+every row is wanted). `MAX_BUCKETS` bounds a request before the edges
+are walked, since they and the query grow with the range asked for and
+the work runs on the recorder's thread. A bucket's `start` and `end` are
 always its edges — every statistic cut on the same edges shares them,
 which is what lets the card stack the statistics on one bar — and the
 period's length is what a ratio divides by: a state has no time in it

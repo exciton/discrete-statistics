@@ -12,6 +12,7 @@ from custom_components.discrete_statistics.buckets import (
     cut,
     edges,
     hours_wanted,
+    row_before,
 )
 from custom_components.discrete_statistics.const import HOUR
 
@@ -72,6 +73,16 @@ def test_hours_wanted_are_the_hour_before_each_edge():
     assert hours_wanted([0.0, 7200.0]) == {-3600.0, 3600.0}
 
 
+def test_an_edge_at_half_past_wants_the_hour_running_through_it():
+    # Kolkata is five and a half hours off UTC, so its midnight is half
+    # past a UTC hour and the row holding the sum at the edge starts
+    # thirty minutes before it.
+    edge = datetime(2026, 6, 1, tzinfo=ZoneInfo("Asia/Kolkata")).timestamp()
+    assert edge % HOUR == 1800
+    assert row_before(edge) == edge - 1800
+    assert row_before(0.0) == -HOUR
+
+
 def _lookup(rows: list[Row]):
     """The newest-before lookup over a sorted list of rows, counting calls."""
     calls = [0]
@@ -110,6 +121,26 @@ class TestCut:
             Bucket(0.0, 24 * HOUR, 6.0),
             Bucket(24 * HOUR, 48 * HOUR, 6.0),
         ]
+        assert calls == [0]
+
+    def test_edges_at_half_past_still_need_no_lookups(self):
+        tz = ZoneInfo("Asia/Kolkata")
+        e = edges(
+            datetime(2026, 6, 1, tzinfo=tz).timestamp(),
+            datetime(2026, 6, 3, tzinfo=tz).timestamp(),
+            "day",
+            tz,
+        )
+        # Rows start on UTC hours; the first here is the hour running
+        # through the first edge.
+        first = e[0] - 1800
+        assert first % HOUR == 0
+        rows = [Row(first + i * HOUR, float(i)) for i in range(49)]
+        before, calls = _lookup(rows)
+
+        result = cut(e, _at(rows, e), before)
+
+        assert [b.change for b in result] == [24.0, 24.0]
         assert calls == [0]
 
     def test_a_series_beginning_inside_a_bucket_starts_from_zero(self):

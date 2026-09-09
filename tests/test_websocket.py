@@ -1,6 +1,6 @@
 """The card's bucket command, end to end through the recorder."""
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -245,6 +245,19 @@ async def test_bad_times_are_refused(hass, client):
     assert response["error"]["code"] == "invalid_end_time"
 
 
+async def test_bad_ranges_are_refused(hass, client):
+    response = await ask(client, [ON], local(2026, 3, 3), local(2026, 3, 3))
+    assert response["error"]["code"] == "invalid_range"
+
+    # Two years of hours is more than any chart shows, and the edges alone
+    # would be walked on the recorder's thread.
+    response = await ask(client, [ON], local(2024, 3, 3), local(2026, 3, 3), "hour")
+    assert response["error"]["code"] == "range_too_long"
+
+    response = await ask(client, [ON], local(2024, 3, 3), local(2026, 3, 3), "day")
+    assert response["success"]
+
+
 async def stock(client, ids, start, end, period):
     """The same question put to recorder/statistics_during_period."""
     await client.send_json_auto_id(
@@ -262,37 +275,55 @@ async def stock(client, ids, start, end, period):
     return response["result"]
 
 
-# Ten weeks from a Monday that is also the first of the month, so one
+# Twenty weeks from a Monday that is also the first of the month, so one
 # range is aligned for every period, holding: ON running since before the
 # range with a hole straddling a day edge, then a hole spanning whole days
 # and weeks, and OFF beginning part-way through a bucket of every period.
-TEN_WEEKS = 10 * 7 * 24
+# Both run a day past the range's end. Sydney changes clocks inside it.
+TWENTY_WEEKS = 20 * 7 * 24
 ON_SUMS: list[float | None] = [
     None if 30 <= i < 40 or 3 * 24 * 7 + 5 <= i < 5 * 24 * 7 + 5 else 0.5 * i
-    for i in range(24 + TEN_WEEKS)
+    for i in range(48 + TWENTY_WEEKS)
 ]
 OFF_SUMS: list[float | None] = [
-    None if i < 24 + 24 * 7 + 3 * 24 + 11 else 0.25 * i for i in range(24 + TEN_WEEKS)
+    None if i < 24 + 24 * 7 + 3 * 24 + 11 else 0.25 * i
+    for i in range(48 + TWENTY_WEEKS)
 ]
 
 
-@pytest.mark.parametrize("period", ["hour", "day", "week", "month"])
-@pytest.mark.parametrize(
-    ("start", "end"),
-    [
-        (local(2026, 6, 1), local(2026, 8, 10)),
-        # Hour-aligned but not period-aligned, as the card asks.
-        (local(2026, 6, 1, 9), local(2026, 8, 9, 15)),
-    ],
-)
-async def test_buckets_match_the_recorder(hass, client, period, start, end):
-    seed(hass, ON, local(2026, 5, 31), ON_SUMS)
-    seed(hass, OFF, local(2026, 5, 31), OFF_SUMS)
+ALIGNED = ((2026, 6, 1), (2026, 10, 19))
+# Hour-aligned but not period-aligned, as the card asks.
+MID_DAY = ((2026, 6, 1, 9), (2026, 10, 18, 15))
+
+
+@pytest.mark.parametrize("span", [ALIGNED, MID_DAY])
+# Kolkata is five and a half hours off UTC: every edge is at half past,
+# so no row starts the hour before one.
+@pytest.mark.parametrize("zone", ["Australia/Sydney", "Asia/Kolkata"])
+async def test_buckets_match_the_recorder(hass, client, zone, span):
+    await hass.config.async_set_time_zone(zone)
+    tz = ZoneInfo(zone)
+    start, end = (datetime(*when, tzinfo=tz) for when in span)
+    # Rows start on UTC hours whatever the zone.
+    first = datetime(2026, 5, 31, tzinfo=tz).astimezone(UTC).replace(minute=0)
+    seed(hass, ON, first, ON_SUMS)
+    seed(hass, OFF, first, OFF_SUMS)
     await get_instance(hass).async_block_till_done()
 
-    ours = await ask(client, [ON, OFF], start, end, period)
-    theirs = await stock(client, [ON, OFF], start, end, period)
+    # Compared inside the range: both snap the first period outward, but
+    # the recorder only for a day or longer, and it answers an end on an
+    # edge with the period after it too, where ours stays inside.
+    def inside(result):
+        return {
+            statistic_id: [b for b in buckets if ms(start) <= b["start"] < ms(end)]
+            for statistic_id, buckets in result.items()
+        }
 
-    assert ours["success"]
-    assert ours["result"] == theirs
-    assert len(ours["result"][ON]) > 2 and len(ours["result"][OFF]) > 1
+    for period in ("hour", "day", "week", "month", "year"):
+        ours = await ask(client, [ON, OFF], start, end, period)
+        theirs = await stock(client, [ON, OFF], start, end, period)
+
+        assert ours["success"], period
+        assert inside(ours["result"]) == inside(theirs), period
+        assert len(ours["result"][ON]) > 2 or period == "year"
+        assert len(ours["result"][OFF]) > 1 or period == "year"

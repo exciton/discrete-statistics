@@ -29,6 +29,20 @@ from sqlalchemy.orm import Session
 from .buckets import Bucket, Period, Row, cut, edges, hours_wanted
 from .const import DOMAIN, HOUR
 
+# The most buckets one request may ask for. A chart cannot show more, and
+# the edges, the `IN` list and the rows all grow with the count, so a
+# range of centuries must be refused rather than walked on the
+# recorder's thread.
+MAX_BUCKETS = 10_000
+# The shortest a period can be, for bounding the count before walking it.
+_SHORTEST: dict[Period, float] = {
+    "hour": HOUR,
+    "day": 23 * HOUR,
+    "week": 7 * 23 * HOUR,
+    "month": 28 * 24 * HOUR,
+    "year": 365 * 24 * HOUR,
+}
+
 COMMAND = f"{DOMAIN}/buckets"
 
 BUCKETS_SCHEMA = {
@@ -66,13 +80,22 @@ async def ws_buckets(
     if end is None:
         connection.send_error(msg["id"], "invalid_end_time", "Invalid end_time")
         return
+    period: Period = msg["period"]
+    if end <= start:
+        connection.send_error(msg["id"], "invalid_range", "end_time is not after start_time")
+        return
+    if (end - start).total_seconds() / _SHORTEST[period] > MAX_BUCKETS:
+        connection.send_error(
+            msg["id"], "range_too_long", f"More than {MAX_BUCKETS} buckets asked for"
+        )
+        return
     result = await get_instance(hass).async_add_executor_job(
         _buckets,
         hass,
         set(msg["statistic_ids"]),
         start.timestamp(),
         end.timestamp(),
-        msg["period"],
+        period,
     )
     connection.send_result(msg["id"], result)
 
@@ -122,8 +145,8 @@ def _buckets(
 def _serialise(bucket: Bucket) -> dict[str, float]:
     # Milliseconds, as the frontend's own statistics arrive.
     return {
-        "start": bucket.start * 1000,
-        "end": bucket.end * 1000,
+        "start": int(bucket.start * 1000),
+        "end": int(bucket.end * 1000),
         "change": bucket.change,
     }
 
