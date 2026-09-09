@@ -302,6 +302,7 @@ def entity_config_from_entry(
         entity_id=data[CONF_ENTITY_ID],
         name=options.get(CONF_NAME) or None,
         default=options.get(CONF_DEFAULT, DEFAULT_RECORD_KNOWN),
+        states=options.get(CONF_STATES) or {},
         blank=options.get(CONF_BLANK) or STATE_UNKNOWN,
         min_duration=options.get(CONF_MIN_DURATION) or 0.0,
     )

@@ -14,6 +14,9 @@ from homeassistant.core import CoreState
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.components.recorder.common import (
+    async_wait_recording_done,
+)
 
 from homeassistant.const import STATE_UNKNOWN
 
@@ -21,13 +24,18 @@ from custom_components.discrete_statistics.config import (
     CONF_BLANK,
     CONF_DEFAULT,
     CONF_MIN_DURATION,
+    CONF_STATES,
 )
+from custom_components.discrete_statistics.config_flow import DISPOSITION_DEFAULT
 from custom_components.discrete_statistics.const import (
     DEFAULT_IGNORE,
     DEFAULT_IGNORE_SHORT,
     DEFAULT_IGNORE_SHORT_UNKNOWN,
     DEFAULT_RECORD,
     DEFAULT_RECORD_KNOWN,
+    DISPOSITION_IGNORE,
+    DISPOSITION_IGNORE_SHORT,
+    DISPOSITION_RECORD,
     DOMAIN,
 )
 
@@ -771,3 +779,184 @@ async def test_ignore_short_unknown_is_offered_and_needs_a_duration(recorder):
     cfg = hass.data[DOMAIN]["entry_configs"][result["result"].entry_id]
     assert cfg.classify("on") == ("on", False)
     assert cfg.classify("unavailable") == ("unavailable", True)
+
+
+async def _seen(hass, *states, attributes=None):
+    """Put the entity through each state, and wait for the recorder."""
+    for state in states:
+        hass.states.async_set(ENTITY, state, attributes)
+    await async_wait_recording_done(hass)
+
+
+def _section(result):
+    """The mapping section's schema, keyed by state, or None without one."""
+    for key, value in result["data_schema"].schema.items():
+        if key == CONF_STATES:
+            return value
+    return None
+
+
+def _rows(result):
+    return list(_section(result).schema.schema)
+
+
+def _choices(result, state):
+    [field] = [v for k, v in _section(result).schema.schema.items() if k == state]
+    return [option["value"] for option in field.config["options"]]
+
+
+async def test_the_options_form_offers_a_row_per_state_the_recorder_holds(recorder):
+    hass = recorder
+    await _seen(hass, "on", "off", "", "on")
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    # Blank states are the `blank` setting's business, not a row.
+    assert _rows(result) == ["off", "on"]
+    assert _section(result).options == {"collapsed": True}
+    for key in _rows(result):
+        assert key.default() == DISPOSITION_DEFAULT
+    assert _choices(result, "on") == [
+        DISPOSITION_DEFAULT,
+        DISPOSITION_RECORD,
+        DISPOSITION_IGNORE,
+        DISPOSITION_IGNORE_SHORT,
+        "off",
+    ]
+
+
+async def test_an_enum_sensors_options_are_rows_before_they_are_seen(recorder):
+    hass = recorder
+    hass.states.async_set(
+        ENTITY, "idle", {"options": ["idle", "Heating", "cooling"]}
+    )
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    assert _rows(result) == ["cooling", "Heating", "idle"]
+
+
+async def test_an_entity_never_seen_has_no_mapping_section(recorder):
+    hass = recorder
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    assert _section(result) is None
+
+
+async def test_a_mapping_is_stored_and_recompiles_the_whole_history(recorder):
+    hass = recorder
+    await _seen(hass, "on", "off")
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+
+    with patch(
+        "custom_components.discrete_statistics.Compiler.async_compile",
+        return_value=0,
+    ) as full:
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {
+                CONF_NAME: "Grid Status",
+                CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
+                CONF_BLANK: STATE_UNKNOWN,
+                CONF_STATES: {"on": DISPOSITION_IGNORE, "off": DISPOSITION_DEFAULT},
+            },
+        )
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    # Only a choice other than the default is an entry.
+    assert entry.options[CONF_STATES] == {"on": DISPOSITION_IGNORE}
+    assert hass.data[DOMAIN]["entry_configs"][entry.entry_id].resolve("on") is None
+    assert full.called
+    assert full.call_args.args[1] is None
+
+
+async def test_leaving_every_row_on_default_stores_no_mapping(recorder):
+    hass = recorder
+    await _seen(hass, "on", "off")
+    entry = await _entry_with(
+        hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN, CONF_STATES: {"on": "off"}}
+    )
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_NAME: "Grid Status",
+            CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
+            CONF_BLANK: STATE_UNKNOWN,
+            CONF_STATES: {"on": DISPOSITION_DEFAULT, "off": DISPOSITION_DEFAULT},
+        },
+    )
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert CONF_STATES not in entry.options
+
+
+async def test_the_stored_mapping_is_offered_back_with_the_section_open(recorder):
+    hass = recorder
+    # Nothing in the recorder: the rows come from the mapping itself, its
+    # target included, so a purged state can still be unmapped.
+    entry = await _entry_with(
+        hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN, CONF_STATES: {"on": "closed"}}
+    )
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    assert _rows(result) == ["closed", "on"]
+    assert _section(result).options == {"collapsed": False}
+    suggested = {
+        key.schema: key.description["suggested_value"]
+        for key in _rows(result)
+        if key.description
+    }
+    assert suggested == {"on": "closed"}
+    assert "closed" in _choices(result, "on")
+    assert "on" in _choices(result, "closed")
+
+
+async def test_a_blank_target_keeps_the_form_open(recorder):
+    hass = recorder
+    await _seen(hass, "on")
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_NAME: "Grid Status",
+            CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
+            CONF_BLANK: STATE_UNKNOWN,
+            CONF_STATES: {"on": "---"},
+        },
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "target_unusable"}
+    [row] = _rows(result)
+    assert row.description == {"suggested_value": "---"}
+
+
+async def test_a_short_state_in_the_mapping_needs_a_duration(recorder):
+    hass = recorder
+    await _seen(hass, "on")
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_NAME: "Grid Status",
+            CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
+            CONF_BLANK: STATE_UNKNOWN,
+            CONF_STATES: {"on": DISPOSITION_IGNORE_SHORT},
+        },
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {CONF_MIN_DURATION: "min_duration_required"}

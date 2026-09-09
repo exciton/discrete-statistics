@@ -48,14 +48,21 @@
           "blank": "Some entities report a state with no letters or digits at all - empty, or punctuation. That has no name to record under, so this says what becomes of it. Type any state name to record it as that instead.",
           "min_duration": "Used only by the choices that mention it. A state the entity leaves again sooner than this is not recorded: the previous state carries on as though it had never been left, and no transition is counted. At most one hour."
         },
-        "description": "Recording statistics for **{entity}**."
+        "description": "Recording statistics for **{entity}**.",
+        "sections": {
+          "states": {
+            "name": "States",
+            "description": "How each state is recorded, overriding the choice above. Pick another state to record it as that state instead - two states the entity reports for the same thing become one - or type a name the entity has never reported. A state that appears later follows the choice above."
+          }
+        }
       }
     },
     "error": {
       "blank_record": "A blank state has no name to record it under. Choose Ignore, or type a state name to record it as.",
       "blank_unusable": "That has no letters or digits either, so it cannot name a statistic. Choose Ignore, or type a state name.",
       "min_duration_required": "That choice needs a minimum duration longer than zero.",
-      "min_duration_too_long": "At most one hour."
+      "min_duration_too_long": "At most one hour.",
+      "target_unusable": "A state name typed here needs letters or digits, so it can name a statistic."
     }
   },
   "selector": {
@@ -71,6 +78,14 @@
       "options": {
         "unknown": "Record as unknown (ignored unless you record unknown states)",
         "ignore": "Ignore - carry the previous state forward"
+      }
+    },
+    "disposition": {
+      "options": {
+        "default": "Follow the choice above",
+        "record": "Record",
+        "ignore": "Ignore - carry the previous state forward",
+        "ignore_short": "Record only when it lasts the minimum duration"
       }
     }
   },

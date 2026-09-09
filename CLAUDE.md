@@ -70,7 +70,10 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
 
 Everything except `compiler`, `config_flow` and `naming` is pure and testable
 without a `hass` instance. Keep it that way: if a change needs recorder access in a
-lower module, the design is drifting.
+lower module, the design is drifting. Two recorder boundaries: `compiler`
+is the only module that writes, and `config_flow` reads once per options
+dialog, the entity's distinct states, to draw a mapping row for each; so
+the invariants below are the compiler's alone.
 
 States in a statistic's name are rendered by `naming.state_translator`,
 which wraps `async_translate_state`, so
