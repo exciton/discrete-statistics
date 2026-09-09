@@ -6,6 +6,7 @@ const METRICS: readonly Metric[] = ["duration", "count"];
 export interface StateStatistic {
   statisticId: string;
   token: string;
+  // The stored name, or the configured one in its place.
   label: string;
   metric: Metric;
   // As configured, unresolved; absent for a palette colour.
@@ -132,8 +133,14 @@ export function statisticsForEntity(
   const listed = (filter.states ?? [])
     .map((setting) => {
       const s = kept.find((found) => settingMatches(setting, found));
-      const color = typeof setting === "string" ? undefined : setting.color;
-      return s && color ? { ...s, color } : s;
+      if (!s || typeof setting === "string") {
+        return s;
+      }
+      return {
+        ...s,
+        ...(setting.name ? { label: setting.name } : {}),
+        ...(setting.color ? { color: setting.color } : {}),
+      };
     })
     .filter((s): s is StateStatistic => s !== undefined);
   // `states:` alone is a closed list. `ignore_states:` opens it: a state

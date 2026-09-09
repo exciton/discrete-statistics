@@ -6,10 +6,12 @@ export type ResolvedPeriod = Exclude<Period, "auto">;
 // ports between the two cards.
 export type ChartType = "line" | "line-stack" | "bar" | "bar-stack";
 
-// An entry of `states:`: the state alone, or with the colour it draws
-// in — a theme colour name as the stock card takes (`red`, `light-blue`)
-// or a hex value.
-export type StateSetting = string | { state: string; color?: string };
+// An entry of `states:`: the state alone, or with the name it is drawn
+// under and the colour it draws in — a theme colour name as the stock
+// card takes (`red`, `light-blue`) or a hex value.
+export type StateSetting =
+  | string
+  | { state: string; name?: string; color?: string };
 
 export interface CardConfig {
   type: string;

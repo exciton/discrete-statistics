@@ -24,13 +24,15 @@ describe("stateList", () => {
   });
 
   it("states: alone leads with the listed order and unticks the rest", () => {
-    const list = stateList(all, { states: [{ state: "heat", color: "red" }, "off"] });
+    const list = stateList(all, {
+      states: [{ state: "heat", name: "Heating", color: "red" }, "off"],
+    });
     expect(list.ignoreNew).toBe(true);
-    expect(list.rows.map((r) => [r.token, r.shown, r.color])).toEqual([
-      ["heat", true, "red"],
-      ["off", true, undefined],
-      ["cool", false, undefined],
-      ["", false, undefined],
+    expect(list.rows).toEqual([
+      { token: "heat", label: "heat", shown: true, name: "Heating", color: "red" },
+      { token: "off", label: "off", shown: true },
+      { token: "cool", label: "cool", shown: false },
+      { token: "", label: "打开", shown: false },
     ]);
   });
 
@@ -53,21 +55,27 @@ describe("stateList", () => {
 
 describe("stateListConfig", () => {
   const rows = [
-    { token: "heat", label: "heat", shown: true, color: "red" },
-    { token: "off", label: "off", shown: true },
+    { token: "heat", label: "heat", shown: true, name: "Heating", color: "red" },
+    { token: "off", label: "off", shown: true, color: "blue" },
     { token: "cool", label: "cool", shown: false },
     { token: "", label: "打开", shown: false },
   ];
 
   it("ignoring new states writes the ticked rows as states: alone", () => {
     expect(stateListConfig({ rows, ignoreNew: true })).toEqual({
-      states: [{ state: "heat", color: "red" }, "off"],
+      states: [
+        { state: "heat", name: "Heating", color: "red" },
+        { state: "off", color: "blue" },
+      ],
     });
   });
 
   it("allowing new states writes the unticked rows as ignore_states:", () => {
     expect(stateListConfig({ rows, ignoreNew: false })).toEqual({
-      states: [{ state: "heat", color: "red" }, "off"],
+      states: [
+        { state: "heat", name: "Heating", color: "red" },
+        { state: "off", color: "blue" },
+      ],
       ignore_states: ["cool", "打开"],
     });
   });
@@ -76,7 +84,12 @@ describe("stateListConfig", () => {
     // The key's presence is what opens the list.
     const shown = rows.map((r) => ({ ...r, shown: true }));
     expect(stateListConfig({ rows: shown, ignoreNew: false })).toEqual({
-      states: [{ state: "heat", color: "red" }, "off", "cool", "打开"],
+      states: [
+        { state: "heat", name: "Heating", color: "red" },
+        { state: "off", color: "blue" },
+        "cool",
+        "打开",
+      ],
       ignore_states: [],
     });
   });

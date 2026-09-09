@@ -14,8 +14,10 @@ import type { StateSetting } from "./types";
 
 export interface StateRow {
   token: string;
+  // The stored name; `name` is the configured one drawn in its place.
   label: string;
   shown: boolean;
+  name?: string;
   color?: string;
 }
 
@@ -43,8 +45,16 @@ export function stateList(all: StateStatistic[], filter: StateFilter): StateList
       continue;
     }
     seen.add(s);
-    const color = typeof setting === "string" ? undefined : setting.color;
-    listed.push({ token: s.token, label: s.label, shown: !ignored(s), color });
+    const row: StateRow = { token: s.token, label: s.label, shown: !ignored(s) };
+    if (typeof setting !== "string") {
+      if (setting.name) {
+        row.name = setting.name;
+      }
+      if (setting.color) {
+        row.color = setting.color;
+      }
+    }
+    listed.push(row);
   }
   const rest = all
     .filter((s) => !seen.has(s))
@@ -60,7 +70,15 @@ const nameOf = (row: StateRow): string => row.token || row.label;
 export function stateListConfig(list: StateList): StateFilter {
   const states: StateSetting[] = list.rows
     .filter((row) => row.shown)
-    .map((row) => (row.color ? { state: nameOf(row), color: row.color } : nameOf(row)));
+    .map((row) =>
+      row.name || row.color
+        ? {
+            state: nameOf(row),
+            ...(row.name ? { name: row.name } : {}),
+            ...(row.color ? { color: row.color } : {}),
+          }
+        : nameOf(row)
+    );
   if (list.ignoreNew) {
     return { states };
   }

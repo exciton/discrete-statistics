@@ -109,14 +109,14 @@ describe("statisticsForEntity", () => {
     expect(got.map((s) => s.token)).toEqual(["heatcool", "cool", "heat"]);
   });
 
-  it("carries a listed state's colour, and an entry without one has none", () => {
+  it("carries a listed state's name and colour, and an entry without them has none", () => {
     const got = statisticsForEntity("climate.zone", "duration", all, {
-      states: [{ state: "heat", color: "red" }, "cool", { state: "heat_cool" }],
+      states: [{ state: "heat", name: "Heating", color: "red" }, "cool", { state: "heat_cool" }],
     });
-    expect(got.map((s) => [s.token, s.color])).toEqual([
-      ["heat", "red"],
-      ["cool", undefined],
-      ["heatcool", undefined],
+    expect(got.map((s) => [s.token, s.label, s.color])).toEqual([
+      ["heat", "Heating", "red"],
+      ["cool", "cool", undefined],
+      ["heatcool", "heat_cool", undefined],
     ]);
   });
 
@@ -147,6 +147,13 @@ describe("statisticsForEntity", () => {
     expect(
       statisticsForEntity("sensor.door", "duration", withDoor, { ignore_states: ["打开"] }).map((s) => s.token)
     ).toEqual([]);
+    // A configured name is drawn, not matched on: the stored name still
+    // names the state.
+    expect(
+      statisticsForEntity("sensor.door", "duration", withDoor, {
+        states: [{ state: "打开", name: "Open" }],
+      }).map((s) => s.label)
+    ).toEqual(["Open"]);
   });
 });
 

@@ -494,21 +494,23 @@ ignore_states:
   - unavailable
 ```
 
-A `states:` entry can carry a colour — a theme colour name as the stock
-card takes, or a hex value; the rest take the theme's graph palette in
-order:
+A `states:` entry can carry a name to draw the state under and a colour
+— a theme colour name as the stock card takes, or a hex value; the rest
+keep the names the statistics carry and take the theme's graph palette
+in order:
 
 ```yaml
 states:
   - state: heat
+    name: Heating
     color: deep-orange
   - state: cool
     color: "#03a9f4"
   - "off"
 ```
 
-The editor lists the entity's states with a tick, a drag handle and a
-colour each, and writes the two keys for you. Its "Ignore states that
+The editor lists the entity's states with a tick, a drag handle, a name
+and a colour each, and writes the two keys for you. Its "Ignore states that
 appear later" tick chooses which the unticked states become: with it
 on they are left out of `states:`; with it off they go in
 `ignore_states:`, which stays present — empty if need be — so the list

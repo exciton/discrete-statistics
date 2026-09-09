@@ -17,7 +17,8 @@ const COLOR_SELECTOR = {
 };
 
 // One row per state: a drag handle, a tick for whether it is drawn, its
-// label and a colour. `ha-sortable` is the frontend's own, which every
+// name — the stored one as the placeholder, so a row reads the same
+// until it is renamed — and a colour. `ha-sortable` is the frontend's own, which every
 // dashboard view loads; a ui_color selector is fetched by `ha-selector`
 // on first use, so neither needs importing here. Changes are announced
 // as a whole new list through `value-changed`; the editor turns it into
@@ -45,7 +46,13 @@ export class DiscreteStatisticsStateList extends LitElement {
                   .index=${index}
                   @change=${this._shownChanged}
                 ></ha-checkbox>
-                <div class="label">${row.label}</div>
+                <ha-textfield
+                  class="name"
+                  .placeholder=${row.label}
+                  .value=${row.name ?? ""}
+                  .index=${index}
+                  @change=${this._nameChanged}
+                ></ha-textfield>
                 <ha-selector
                   .hass=${this.hass}
                   .selector=${COLOR_SELECTOR}
@@ -77,6 +84,12 @@ export class DiscreteStatisticsStateList extends LitElement {
   private _shownChanged(ev: Event) {
     const target = ev.currentTarget as HTMLElement & { index: number; checked: boolean };
     this._updateRow(target.index, { shown: target.checked });
+  }
+
+  private _nameChanged(ev: Event) {
+    const target = ev.currentTarget as HTMLElement & { index: number; value: string };
+    const name = target.value.trim();
+    this._updateRow(target.index, { name: name || undefined });
   }
 
   private _colorChanged(ev: CustomEvent<{ value?: string }>) {
@@ -129,12 +142,9 @@ export class DiscreteStatisticsStateList extends LitElement {
     .handle > * {
       pointer-events: none;
     }
-    .label {
+    .name {
       flex: 1;
       min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
     }
     ha-selector {
       width: 180px;
