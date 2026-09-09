@@ -465,6 +465,8 @@ chart_type: bar-stack   # bar-stack, bar, line-stack or line
 days_to_show: 365
 ```
 
+![The card's editor: an entity picker, chart type and period radio buttons, days to show, and the metric and unit dropdowns, beside a year of a heat pump's modes as stacked percent bars](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/card-config.png)
+
 Every state the entity has statistics for is drawn, in the names the
 statistics carry. `states:` narrows and orders them; `ignore_states:`
 drops some and keeps the rest:
