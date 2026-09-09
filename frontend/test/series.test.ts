@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildSeries, earliestStart, unitLabel, valueOf } from "../src/series";
+import {
+  buildSeries,
+  earliestStart,
+  percentAxisMax,
+  unitLabel,
+  valueOf,
+} from "../src/series";
 import type { StateStatistic } from "../src/statistic-ids";
 import type { Statistics } from "../src/types";
 
@@ -106,6 +112,22 @@ describe("buildSeries", () => {
   it("wraps the palette", () => {
     const { series } = buildSeries("climate.zone", stats, data, "h", ["#abcdef"]);
     expect(series[1].color).toBe("#abcdef7F");
+  });
+});
+
+describe("percentAxisMax", () => {
+  it("caps a full stack at 100 whatever rounding left it", () => {
+    expect(percentAxisMax({ min: 0, max: 100 })).toBe(100);
+    expect(percentAxisMax({ min: 0, max: 100.00000001 })).toBe(100);
+  });
+
+  it("rounds the tallest visible stack up at its own order of magnitude", () => {
+    expect(percentAxisMax({ min: 0, max: 37 })).toBe(40);
+    expect(percentAxisMax({ min: 0, max: 3.2 })).toBe(4);
+    expect(percentAxisMax({ min: 0, max: 0.32 })).toBe(0.4);
+    expect(percentAxisMax({ min: 0, max: 0.0032 })).toBe(0.004);
+    expect(percentAxisMax({ min: 0, max: 0.3 })).toBe(0.3);
+    expect(percentAxisMax({ min: 0, max: 0 })).toBe(1);
   });
 });
 

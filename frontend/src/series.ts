@@ -64,6 +64,23 @@ export function valueOf(
   }
 }
 
+// The top of a percent axis: 100 when the visible stack fills the bucket,
+// otherwise the tallest visible stack rounded up to its own order of
+// magnitude — 37 reads to 40, 3.2 to 4, 0.032 to 0.04 — so the axis
+// follows what the legend leaves showing however small that is. Capped
+// rather than rounded at the top because a full stack's float sum can
+// land a hair over 100, which would push the axis out to 110.
+export function percentAxisMax({ max }: { min: number; max: number }): number {
+  if (max >= 100) {
+    return 100;
+  }
+  if (max <= 0) {
+    return 1;
+  }
+  const step = 10 ** Math.floor(Math.log10(max));
+  return Number((Math.ceil(max / step) * step).toPrecision(12));
+}
+
 export function unitLabel(unit: ResolvedUnit): string {
   switch (unit) {
     case "percent":

@@ -6,6 +6,7 @@ import { rangeFromDays, resolvePeriod, resolveUnit, type Range } from "./period"
 import {
   buildSeries,
   earliestStart,
+  percentAxisMax,
   unitLabel,
   type ChartSeries,
   type LegendItem,
@@ -397,8 +398,10 @@ export class DiscreteStatisticsCard extends LitElement {
         nameTextStyle: { align: "left" },
         // null, not undefined: ha-chart-base merges its options into the
         // chart, and echarts ignores an undefined value on merge, so the cap
-        // would survive a switch away from percent.
-        max: this._unit === "%" ? 100 : null,
+        // would survive a switch away from percent. A function is evaluated
+        // on the series the legend leaves visible, so hiding a state lets
+        // the axis close in on what remains.
+        max: this._unit === "%" ? percentAxisMax : null,
         splitLine: { show: true },
       },
       legend: {
