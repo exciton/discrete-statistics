@@ -16,6 +16,9 @@ export interface CardConfig {
   collection_key?: string;
   title?: string;
   hide_legend?: boolean;
+  // Set by the dashboard, not the user: present when a sections view has
+  // given the card a fixed number of rows.
+  grid_options?: { rows?: number | "auto"; columns?: number | "full" };
 }
 
 // Shapes of what recorder/statistics_during_period and

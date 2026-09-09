@@ -164,6 +164,10 @@ export class DiscreteStatisticsCard extends LitElement {
     this._chartOptions = this._options();
   }
 
+  public getGridOptions() {
+    return { columns: 12, min_columns: 6, min_rows: 4, rows: 6 };
+  }
+
   public getCardSize(): number {
     return 5;
   }
@@ -413,23 +417,46 @@ export class DiscreteStatisticsCard extends LitElement {
     if (!this._config) {
       return nothing;
     }
-    return html`<ha-card .header=${this._config.title ?? ""}>
-      <div class="content">
+    // In a sections view with a fixed row count the chart fills the card
+    // and the legend shares that height; otherwise the chart picks its own
+    // height and the legend flows below it, as the stock statistics card
+    // does.
+    const fixedHeight = typeof this._config.grid_options?.rows === "number";
+    return html`<ha-card
+      .header=${this._config.title ?? ""}
+      class=${fixedHeight ? "fixed-height" : ""}
+    >
+      <div class="content ${this._config.title ? "has-header" : ""}">
         ${this._error
           ? html`<div class="error">${this._error}</div>`
           : html`<ha-chart-base
               .hass=${this.hass}
               .data=${this._series}
               .options=${this._chartOptions}
-              height="250px"
+              .height=${fixedHeight ? "100%" : undefined}
             ></ha-chart-base>`}
       </div>
     </ha-card>`;
   }
 
   static styles = css`
+    ha-card {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+    }
     .content {
       padding: 16px;
+      flex: 1;
+    }
+    .has-header {
+      padding-top: 0;
+    }
+    ha-chart-base {
+      height: 100%;
+    }
+    .fixed-height {
+      --chart-max-height: 100%;
     }
     .error {
       color: var(--error-color);
