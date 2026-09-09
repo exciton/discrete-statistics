@@ -18,8 +18,33 @@ script/test tests/test_compiler.py::test_name   # one test
 Do not run `pytest` directly: it will fail, or run against a different
 Home Assistant version and pass for the wrong reasons.
 
-CI runs the same suite, plus the HACS and hassfest validators. hassfest can
-be run locally too; see `CLAUDE.md`.
+CI runs the same suite, plus the HACS and hassfest validators and the
+card's checks below. hassfest can be run locally too; see `CLAUDE.md`.
+
+## Working on the card
+
+The card is TypeScript under `frontend/`, and the built bundle is
+committed at
+`custom_components/discrete_statistics/frontend/discrete-statistics-card.js`,
+so a change to the card is two things: the source and the bundle built
+from it. `script/release` refuses to release when the committed bundle
+is older than the source.
+
+```bash
+cd frontend
+npm install          # first time
+npm run check        # type-check
+npm test             # the pure modules: IDs, series maths, the state list
+npm run build        # rebuild the committed bundle
+```
+
+The card renders through `<ha-chart-base>`, `ha-sortable` and the
+`ui_color` selector, which are internal to the Home Assistant frontend
+and have no stability promise; a frontend release can move them, so try
+a card change in a real dashboard, not only in the tests. `script/deploy
+user@host` copies the integration and the built card onto a running
+instance over ssh and bumps the version there so browsers fetch the new
+bundle instead of the cached one.
 
 ## What a pull request needs
 
@@ -27,7 +52,10 @@ be run locally too; see `CLAUDE.md`.
   the change.** Revert the fix, watch the test fail, restore it. A test that
   passes either way proves nothing, and that is what a reviewer will check.
 - **README changes for anything a user can see:** a new option, a changed
-  default, a different result on a chart.
+  default, a different result on a chart, a card option or editor control.
+- **The rebuilt bundle, when the card's source changes.** CI type-checks,
+  tests and builds the card and fails if the build differs from the
+  committed file.
 - **CLAUDE.md changes for anything a maintainer must know:** it is the
   architecture document, and its *Invariants* section lists the properties
   that produced wrong data when they were broken. A change that adds one,
