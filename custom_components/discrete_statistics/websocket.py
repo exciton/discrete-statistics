@@ -2,8 +2,8 @@
 
 `recorder/statistics_during_period` reads every hourly row in the range
 and reduces them in Python whatever the period is asked for. Our sums are
-cumulative and dense, so the card's buckets need only the rows at the
-edges: one `start_ts IN (...)` query for every statistic at once, then a
+cumulative and dense, so the card's buckets need only one row per edge:
+one `start_ts IN (...)` query for every statistic at once, then a
 `LIMIT 1` lookup either side of any edge that query left blank. The
 arithmetic is in `buckets`; this module is the recorder boundary, and it
 only reads.

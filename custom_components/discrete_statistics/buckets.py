@@ -5,11 +5,11 @@ difference between the rows at its two edges - thirteen rows for a year of
 months, not eight thousand hourly ones reduced in Python. This module is
 the arithmetic; `websocket` fetches the rows.
 
-Every edge resolves to two rows: the newest at or before it and the oldest
-at or after it. With a row on the edge both are that row and adjacent
-buckets share it; with a hole straddling the edge the bucket on the left
-ends at the last row before the hole and the one on the right starts at
-the first row after it, so the hole's time lands in neither. A bucket's
+Every edge resolves to the newest row before it, whose sum is the sum at
+the edge, and adjacent buckets share it; with a hole straddling the edge
+the bucket on the left ends at the last row before the hole and the one
+on the right starts at the first row after it, so the hole's time lands
+in neither. A bucket's
 `change` is `sum(left of its end) - sum(left of its start)` and its span is
 from its first row to its last, so a ratio of change over span is right
 whichever way the edges fell.
@@ -110,12 +110,15 @@ def cut(
 ) -> list[Bucket]:
     """Cut the buckets between consecutive edges.
 
-    `at` holds the rows found at the edges' hours - the row starting at an
-    edge and the row starting the hour before it - and answers almost
-    every edge in one query. The lookups fill in for an edge with no row
-    on either side, which is a hole or the start or end of the series,
-    and each is asked at most once per hole: a row found for one edge
-    answers every edge between it and the next found row.
+    `at` holds the row starting the hour before each edge - one row per
+    edge, whose sum is the sum at the edge - and answers almost every
+    edge in one query. An edge with that row is the start of the bucket
+    after it: the sums are dense, so the next hour has a row too unless
+    a hole begins exactly there, and a hole inside a bucket stays in its
+    span. The lookups fill in for an edge with no row, which is a hole
+    or the start or end of the series, and each is asked at most once
+    per hole: a row found for one edge answers every edge between it and
+    the next found row.
 
     A bucket with no row inside it is left out; the card draws that as a
     gap. The sum before a statistic's first row is zero, which is where
@@ -124,19 +127,13 @@ def cut(
     if len(edges_) < 2:
         return []
 
-    def left(edge: float) -> Row | None:
-        return at.get(edge - HOUR)
-
-    def right(edge: float) -> Row | None:
-        return at.get(edge)
-
     # Newest row before each edge, walked from the last edge back so that
     # one lookup's answer covers the edges it also precedes.
     lefts: dict[float, Row | None] = {}
     known: Row | None = None
     known_for: float | None = None
     for edge in reversed(edges_):
-        row = left(edge)
+        row = at.get(edge - HOUR)
         if row is None:
             if known_for is None or (known is not None and known.start >= edge):
                 known = newest_before(edge)
@@ -144,29 +141,30 @@ def cut(
             row = known
         lefts[edge] = row
 
-    # Oldest row at or after each edge but the last, walked forward.
-    rights: dict[float, Row | None] = {}
+    # Where the bucket after each edge starts: the edge itself, or the
+    # first row after a hole there, walked forward.
+    starts: dict[float, float | None] = {}
     known = None
     known_for = None
     for edge in edges_[:-1]:
-        row = right(edge)
-        if row is None:
-            if known_for is None or (known is not None and known.start < edge):
-                known = oldest_at_or_after(edge)
-                known_for = edge
-            row = known
-        rights[edge] = row
+        if edge - HOUR in at:
+            starts[edge] = edge
+            continue
+        if known_for is None or (known is not None and known.start < edge):
+            known = oldest_at_or_after(edge)
+            known_for = edge
+        starts[edge] = None if known is None else known.start
 
     buckets: list[Bucket] = []
     for a, b in pairwise(edges_):
-        first = rights[a]
+        start = starts[a]
         last = lefts[b]
-        if first is None or last is None or first.start >= b or last.start < a:
+        if start is None or last is None or start >= b or last.start < a:
             continue
         base = lefts[a]
         buckets.append(
             Bucket(
-                start=first.start,
+                start=start,
                 end=last.start + HOUR,
                 change=last.sum - (base.sum if base is not None else 0.0),
             )
@@ -175,9 +173,5 @@ def cut(
 
 
 def hours_wanted(edges_: list[float]) -> set[float]:
-    """The hours whose rows answer the edges: each edge and the hour before."""
-    wanted: set[float] = set()
-    for edge in edges_:
-        wanted.add(edge)
-        wanted.add(edge - HOUR)
-    return wanted
+    """The hours whose rows answer the edges: the hour before each."""
+    return {edge - HOUR for edge in edges_}

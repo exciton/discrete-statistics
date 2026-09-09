@@ -68,8 +68,8 @@ class TestEdges:
         ]
 
 
-def test_hours_wanted_are_each_edge_and_the_hour_before():
-    assert hours_wanted([0.0, 7200.0]) == {-3600.0, 0.0, 3600.0, 7200.0}
+def test_hours_wanted_are_the_hour_before_each_edge():
+    assert hours_wanted([0.0, 7200.0]) == {-3600.0, 3600.0}
 
 
 def _lookups(rows: list[Row]):
@@ -93,6 +93,11 @@ def _dense(hours: range, per_hour: float = 0.25) -> list[Row]:
     return [Row(h * HOUR, per_hour * (i + 1)) for i, h in enumerate(hours)]
 
 
+def _running(rows: list[Row]) -> list[Row]:
+    """The rows of a series already running when the range opens."""
+    return [Row(rows[0].start - HOUR, 0.0), *rows]
+
+
 def _at(rows: list[Row], edges_: list[float]) -> dict[float, Row]:
     wanted = hours_wanted(edges_)
     return {r.start: r for r in rows if r.start in wanted}
@@ -100,7 +105,7 @@ def _at(rows: list[Row], edges_: list[float]) -> dict[float, Row]:
 
 class TestCut:
     def test_dense_rows_need_no_lookups(self):
-        rows = _dense(range(48))
+        rows = _running(_dense(range(48)))
         e = [0.0, 24 * HOUR, 48 * HOUR]
         before, after, calls = _lookups(rows)
 
@@ -110,11 +115,11 @@ class TestCut:
             Bucket(0.0, 24 * HOUR, 6.0),
             Bucket(24 * HOUR, 48 * HOUR, 6.0),
         ]
-        assert calls == {"before": 1, "after": 0}
+        assert calls == {"before": 0, "after": 0}
 
     def test_the_first_bucket_starts_from_zero(self):
-        # The one lookup above is for the sum before the first edge; here
-        # the series begins later than that, so the base is zero.
+        # A series that begins inside the range has no row before its
+        # first edge, so the base is zero and the lookups place its start.
         rows = _dense(range(10, 48))
         e = [0.0, 24 * HOUR, 48 * HOUR]
         before, after, _ = _lookups(rows)
@@ -140,9 +145,10 @@ class TestCut:
         # Rows for hours 0-19 and 30-47: the hole 20-29 crosses the edge at
         # 24. The left bucket ends at hour 20, the right starts at 30, and
         # the change across the hole is zero because the sum carried.
-        rows = [Row(h * HOUR, float(h + 1)) for h in range(20)] + [
-            Row(h * HOUR, 20.0 + (h - 29)) for h in range(30, 48)
-        ]
+        rows = _running(
+            [Row(h * HOUR, float(h + 1)) for h in range(20)]
+            + [Row(h * HOUR, 20.0 + (h - 29)) for h in range(30, 48)]
+        )
         e = [0.0, 24 * HOUR, 48 * HOUR]
         before, after, calls = _lookups(rows)
 
@@ -152,7 +158,7 @@ class TestCut:
             Bucket(0.0, 20 * HOUR, 20.0),
             Bucket(30 * HOUR, 48 * HOUR, 18.0),
         ]
-        assert calls == {"before": 2, "after": 1}
+        assert calls == {"before": 1, "after": 1}
 
     def test_a_hole_inside_a_bucket_stays_in_its_span(self):
         rows = [Row(h * HOUR, float(h + 1)) for h in range(10)] + [
@@ -162,6 +168,25 @@ class TestCut:
         before, after, _ = _lookups(rows)
 
         assert cut(e, _at(rows, e), before, after) == [Bucket(0.0, 24 * HOUR, 20.0)]
+
+    def test_a_hole_starting_on_an_edge_stays_in_the_bucket_after_it(self):
+        # Rows for hours 0-23 and 30-47: the row before the edge at 24 is
+        # there, so the second bucket starts on the edge and the hole is
+        # inside it - shorter change, full span, as any inner hole.
+        rows = _running(
+            [Row(h * HOUR, float(h + 1)) for h in range(24)]
+            + [Row(h * HOUR, 24.0 + (h - 29)) for h in range(30, 48)]
+        )
+        e = [0.0, 24 * HOUR, 48 * HOUR]
+        before, after, calls = _lookups(rows)
+
+        result = cut(e, _at(rows, e), before, after)
+
+        assert result == [
+            Bucket(0.0, 24 * HOUR, 24.0),
+            Bucket(24 * HOUR, 48 * HOUR, 18.0),
+        ]
+        assert calls == {"before": 0, "after": 0}
 
     def test_an_empty_bucket_is_left_out(self):
         rows = _dense(range(24)) + [
