@@ -2,6 +2,9 @@ export type Metric = "duration" | "count";
 export type Unit = "auto" | "h" | "d" | "percent";
 export type Period = "auto" | "hour" | "day" | "week" | "month" | "year";
 export type ResolvedPeriod = Exclude<Period, "auto">;
+// The stock statistics-graph card's four, under the same key, so a config
+// ports between the two cards.
+export type ChartType = "line" | "line-stack" | "bar" | "bar-stack";
 
 export interface CardConfig {
   type: string;
@@ -9,6 +12,7 @@ export interface CardConfig {
   metric?: Metric;
   unit?: Unit;
   period?: Period;
+  chart_type?: ChartType;
   states?: string[];
   ignore_states?: string[];
   days_to_show?: number;

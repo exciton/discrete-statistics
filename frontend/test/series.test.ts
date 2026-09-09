@@ -109,6 +109,48 @@ describe("buildSeries", () => {
     expect(series[1].data).toEqual([[0, null, 0, 24 * H]]);
   });
 
+  it("draws bars side by side when not stacked", () => {
+    const { series } = buildSeries("climate.zone", stats, data, "h", colors, "bar");
+    expect(series[0].type).toBe("bar");
+    expect(series[0].stack).toBeUndefined();
+    expect(series[0].stackStrategy).toBeUndefined();
+    expect(series[0].data).toHaveLength(2);
+  });
+
+  it("draws a line through the bucket starts and closes it at the last end", () => {
+    const { series } = buildSeries("climate.zone", stats, data, "h", colors, "line");
+    expect(series[0]).toMatchObject({
+      type: "line",
+      color: "#111111",
+      lineStyle: { width: 1.5 },
+      smooth: 0.4,
+      symbol: "none",
+    });
+    expect(series[0].stack).toBeUndefined();
+    expect(series[0].areaStyle).toBeUndefined();
+    expect(series[0].itemStyle).toBeUndefined();
+    expect(series[0].data).toEqual([
+      [0, 6, 0, 24 * H],
+      [24 * H, 12, 24 * H, 48 * H],
+      [48 * H, 12, 24 * H, 48 * H],
+    ]);
+  });
+
+  it("stacks lines with a translucent area", () => {
+    const { series } = buildSeries("climate.zone", stats, data, "h", colors, "line-stack");
+    expect(series[1]).toMatchObject({
+      type: "line",
+      stack: "climate.zone",
+      stackStrategy: "samesign",
+      areaStyle: { color: "#2222223F" },
+    });
+  });
+
+  it("stacks bars by default", () => {
+    const { series } = buildSeries("climate.zone", stats, data, "h", colors);
+    expect(series[0]).toMatchObject({ type: "bar", stack: "climate.zone" });
+  });
+
   it("wraps the palette", () => {
     const { series } = buildSeries("climate.zone", stats, data, "h", ["#abcdef"]);
     expect(series[1].color).toBe("#abcdef7F");

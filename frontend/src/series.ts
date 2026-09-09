@@ -1,22 +1,26 @@
 import { bucketHours, type ResolvedUnit } from "./period";
 import type { StateStatistic } from "./statistic-ids";
-import type { StatisticValue, Statistics } from "./types";
+import type { ChartType, StatisticValue, Statistics } from "./types";
 
 export interface ChartSeries {
-  // The fields of a bar series ha-chart-base is given; it types them itself,
+  // The fields of a series ha-chart-base is given; it types them itself,
   // this is only what the card sets.
   id: string;
   name: string;
-  type: "bar";
-  stack: string;
-  stackStrategy: "samesign";
+  type: "bar" | "line";
+  stack?: string;
+  stackStrategy?: "samesign";
   color: string;
-  itemStyle: { borderColor: string; borderWidth: number };
+  itemStyle?: { borderColor: string; borderWidth: number };
+  lineStyle?: { width: number };
+  areaStyle?: { color: string };
+  smooth?: number;
+  symbol?: "none";
   cursor: "default";
   animationDurationUpdate: 0;
-  // [bar time, value, bucket start, bucket end], as the stock statistics
+  // [point time, value, bucket start, bucket end], as the stock statistics
   // chart draws bars (statistics-chart-data.ts:198), so a tooltip can
-  // name the bucket the bar represents. Every series holds every bucket
+  // name the bucket the point represents. Every series holds every bucket
   // in the same order, null where it has no value: ECharts stacks series
   // on a time axis by data index, not by x value, so a series missing a
   // bucket would stack its later bars on the wrong base.
@@ -97,8 +101,11 @@ export function buildSeries(
   stats: StateStatistic[],
   data: Statistics,
   unit: ResolvedUnit,
-  colors: string[]
+  colors: string[],
+  chartType: ChartType = "bar-stack"
 ): { series: ChartSeries[]; legend: LegendItem[] } {
+  const line = chartType.startsWith("line");
+  const stacked = chartType.endsWith("stack");
   const series: ChartSeries[] = [];
   const legend: LegendItem[] = [];
   const buckets = new Map<number, number>();
@@ -118,21 +125,47 @@ export function buildSeries(
       const value = row ? valueOf(row, unit) : null;
       return [start, value, start, buckets.get(start)!];
     });
-    series.push({
-      id: stat.statisticId,
-      name: stat.label,
-      type: "bar",
-      stack: entityId,
-      stackStrategy: "samesign",
-      // Fill is translucent (alpha 7F) so overlapping stacked bars stay
-      // legible; the border is the solid colour, as the stock bar chart
-      // draws it.
-      color: color + "7F",
-      itemStyle: { borderColor: color, borderWidth: 1.5 },
-      cursor: "default",
-      animationDurationUpdate: 0,
-      data: points,
-    });
+    if (line && points.length) {
+      // A line point sits at its bucket's start, so the last bucket has
+      // no extent until a point closes it at its end, as the stock chart
+      // does (statistics-chart-data.ts:391).
+      const last = points[points.length - 1];
+      points.push([last[3], last[1], last[2], last[3]]);
+    }
+    // Fills are translucent so overlapping shapes stay legible; the bar
+    // border and the line itself are the solid colour, as the stock chart
+    // draws them.
+    const styled: ChartSeries = line
+      ? {
+          id: stat.statisticId,
+          name: stat.label,
+          type: "line",
+          color,
+          lineStyle: { width: 1.5 },
+          smooth: 0.4,
+          symbol: "none",
+          cursor: "default",
+          animationDurationUpdate: 0,
+          data: points,
+        }
+      : {
+          id: stat.statisticId,
+          name: stat.label,
+          type: "bar",
+          color: color + "7F",
+          itemStyle: { borderColor: color, borderWidth: 1.5 },
+          cursor: "default",
+          animationDurationUpdate: 0,
+          data: points,
+        };
+    if (stacked) {
+      styled.stack = entityId;
+      styled.stackStrategy = "samesign";
+      if (line) {
+        styled.areaStyle = { color: color + "3F" };
+      }
+    }
+    series.push(styled);
     legend.push({
       id: stat.statisticId,
       name: stat.label,

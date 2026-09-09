@@ -392,8 +392,8 @@ card's `entities` list to be drawn.
 ## The card
 
 The integration ships its own card, so nothing needs adding under
-Resources. It draws one entity's states as stacked bars and is configured
-by entity rather than by statistic ID:
+Resources. It draws one entity's states, stacked bars by default, and is
+configured by entity rather than by statistic ID:
 
 ```yaml
 type: custom:discrete-statistics-card
@@ -402,6 +402,7 @@ title: Heat pump
 metric: duration        # duration (time in state) or count (transitions)
 unit: percent           # auto, h, d or percent; only for duration
 period: month           # auto, hour, day, week, month or year
+chart_type: bar-stack   # bar-stack, bar, line-stack or line
 days_to_show: 365
 ```
 
@@ -432,10 +433,14 @@ ignore_states:
   - unavailable
 ```
 
-`unit: percent` is the share of each bar's span spent in the state, so a
-bar whose states are all drawn is always full height — except the last
-bar, which is only as full as the period it covers so far. `auto` picks
-hours for hourly and daily bars and days for coarser ones.
+`unit: percent` is the share of each period spent in the state, so a
+stacked bar whose states are all drawn is always full height — except the
+last bar, which is only as full as the period it covers so far. `auto`
+picks hours for hourly and daily periods and days for coarser ones.
+
+`chart_type` takes the stock statistics-graph card's four values, so a
+config moves between the two cards. A line is drawn through each period's
+start, as the stock card draws it.
 
 `hide_legend: true` leaves the legend off.
 

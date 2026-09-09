@@ -23,8 +23,8 @@ const FALLBACK_COLORS = [
   "#a463f2", "#ff8ab7", "#9c6b4e", "#97bbf5",
 ];
 
-// What echarts hands a tooltip formatter, for the bar series this card
-// draws: value is the point, [bar time, value, bucket start, bucket end].
+// What echarts hands a tooltip formatter, for the series this card
+// draws: value is the point, [point time, value, bucket start, bucket end].
 interface TooltipParam {
   seriesName?: string;
   color?: string;
@@ -74,7 +74,13 @@ export class DiscreteStatisticsCard extends LitElement {
   private _refreshedRange?: Range;
 
   public static getStubConfig(): Partial<CardConfig> {
-    return { metric: "duration", unit: "auto", period: "auto", days_to_show: DEFAULT_DAYS };
+    return {
+      metric: "duration",
+      unit: "auto",
+      period: "auto",
+      chart_type: "bar-stack",
+      days_to_show: DEFAULT_DAYS,
+    };
   }
 
   public static getConfigElement(): HTMLElement {
@@ -218,7 +224,14 @@ export class DiscreteStatisticsCard extends LitElement {
       const period = resolvePeriod(config.period, range);
       const unit = resolveUnit(config.unit, metric, period);
       const data = await fetchStatistics(hass, stats.map((s) => s.statisticId), range, period);
-      const { series, legend } = buildSeries(config.entity, stats, data, unit, this._colors());
+      const { series, legend } = buildSeries(
+        config.entity,
+        stats,
+        data,
+        unit,
+        this._colors(),
+        config.chart_type
+      );
       this._series = series;
       this._legend = legend;
       this._dataStart = earliestStart(series);
@@ -261,7 +274,7 @@ export class DiscreteStatisticsCard extends LitElement {
     if (!point) {
       return nothing;
     }
-    // A series with no value in this bucket has no bar to describe.
+    // A series with no value in this bucket has nothing to describe.
     const shown = rows.filter((row) => row.value?.[1] !== null);
     const [start, end] = [point.value[2], point.value[3]];
     // The tooltip is rendered outside this card's shadow root, so the
@@ -341,7 +354,9 @@ export class DiscreteStatisticsCard extends LitElement {
       grid: { top: 15, bottom: 0, left: 1, right: 1, containLabel: true },
       tooltip: {
         trigger: "axis",
-        axisPointer: { type: "shadow" },
+        axisPointer: {
+          type: this._config?.chart_type?.startsWith("line") ? "line" : "shadow",
+        },
         formatter: this._tooltipFormatter,
       },
     };
