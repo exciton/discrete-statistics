@@ -6,4 +6,6 @@
 FROM mcr.microsoft.com/devcontainers/python:3.14-bookworm
 
 COPY requirements-test.txt /tmp/requirements-test.txt
-RUN pip install --no-cache-dir -r /tmp/requirements-test.txt
+# ruff is not a test requirement; it is here for linting in the container
+# and for hassfest, which needs it.
+RUN pip install --no-cache-dir -r /tmp/requirements-test.txt ruff

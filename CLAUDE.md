@@ -35,13 +35,19 @@ pinned tag) rather than waiting for a push:
 
 ```bash
 docker run --rm -v "$PWD:/workspace" -v /home/bonne/Code/home_assistant_core:/core \
-  -w /core ha-discrete-stats-test bash -c \
-  "pip install -q ruff; python -m script.hassfest \
-   --integration-path /workspace/custom_components/discrete_statistics --action validate"
+  -w /core ha-discrete-stats-test \
+  python -m script.hassfest \
+   --integration-path /workspace/custom_components/discrete_statistics --action validate
 ```
 
-hassfest needs `ruff`, which the test image does not carry. The HACS check
-still has no local equivalent.
+The image carries `ruff` for hassfest and for linting the same way:
+
+```bash
+docker run --rm -v "$PWD:/workspace" -w /workspace ha-discrete-stats-test \
+  ruff check custom_components tests
+```
+
+The HACS check still has no local equivalent.
 
 The card lives in `frontend/` and is built into
 `custom_components/discrete_statistics/frontend/discrete-statistics-card.js`,
