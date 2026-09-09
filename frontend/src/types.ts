@@ -25,20 +25,17 @@ export interface CardConfig {
   grid_options?: { rows?: number | "auto"; columns?: number | "full" };
 }
 
-// Shapes of what recorder/statistics_during_period and
-// recorder/list_statistic_ids return; only the fields the card reads.
+// A bucket as discrete_statistics/buckets answers it: the span of its
+// first row to its last, in ms since epoch, and the change across it.
 export interface StatisticValue {
-  start: number; // ms since epoch
-  end: number; // ms since epoch
+  start: number;
+  end: number;
   change?: number | null;
-  sum?: number | null;
-  mean?: number | null;
-  min?: number | null;
-  max?: number | null;
 }
 
 export type Statistics = Record<string, StatisticValue[]>;
 
+// What recorder/list_statistic_ids returns; only the fields the card reads.
 export interface StatisticsMetaData {
   statistic_id: string;
   source: string;

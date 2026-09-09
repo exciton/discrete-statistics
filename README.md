@@ -509,6 +509,14 @@ start, as the stock card draws it.
 `energy-date-selection` card instead of `days_to_show`; `collection_key`
 names the picker when a dashboard has more than one.
 
+The card asks the integration for its buckets rather than the recorder.
+The sums are cumulative and dense, so a period's value is the difference
+between the rows at its two edges: a year of months is thirteen rows a
+state, not every hour of the year reduced on the server, and the card
+loads in the time it takes to draw. A gap in the statistics — downtime
+longer than the recorder keeps — shortens the periods on either side of
+it and belongs to neither, so a percent bar stays honest across it.
+
 The card renders through Home Assistant's own chart component. Because
 that component is internal to the frontend, a Home Assistant release can
 change it; the integration's minimum version is raised when that happens.

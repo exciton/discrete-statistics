@@ -10,7 +10,8 @@
   ],
   "config_flow": true,
   "dependencies": [
-    "recorder"
+    "recorder",
+    "websocket_api"
   ],
   "documentation": "https://github.com/exciton/discrete-statistics",
   "iot_class": "calculated",

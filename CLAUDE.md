@@ -61,16 +61,24 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
        │   │    └─ config_flow    HA UI: entity -> EntityConfig, per entry
        │   └─ statistic_ids       for the blank-state test
        ├─ naming            HA: entity, state -> the names a person recognises
-       └─ payload           pure: buckets -> cumulative StatisticData rows
+       ├─ payload           pure: buckets -> cumulative StatisticData rows
+       │        │
+       │    compiler        writes the recorder: the only module that does
+       │        │
+       └─ buckets           pure: edge rows -> per-period {start, end, change}
                 │
-            compiler        the only module that touches the recorder
+            websocket       reads the recorder, for the card
                 │
-            __init__        setup, hourly schedule, recompute service
+            __init__        setup, hourly schedule, recompute service, the command
 ```
 
-Everything except `compiler`, `config_flow` and `naming` is pure and testable
-without a `hass` instance. Keep it that way: if a change needs recorder access in a
-lower module, the design is drifting.
+Everything except `compiler`, `websocket`, `config_flow` and `naming` is
+pure and testable without a `hass` instance. Keep it that way: if a change
+needs recorder access in a lower module, the design is drifting. Two
+recorder boundaries, not one: `compiler` is the only module that writes,
+and `websocket` only reads — `session_scope(read_only=True)`, one `IN`
+query on `(metadata_id, start_ts)` plus `LIMIT 1` lookups — so the
+invariants below are the compiler's alone.
 
 States in a statistic's name are rendered by `naming.state_translator`,
 which wraps `async_translate_state`, so
@@ -151,6 +159,21 @@ two entities compile concurrently and defeat the lock.
 
 `frontend.py` serves the built card as a static path and registers it as a
 frontend module URL, skipped when the `frontend` component is not loaded.
+The card fetches through `discrete_statistics/buckets`, not
+`recorder/statistics_during_period`: the sums are cumulative and dense, so
+a bucket's `change` is the difference between the rows at its two edges,
+and `websocket` reads only those rows — thirteen for a year of months.
+`buckets.edges` aligns them as the recorder does (local midnight, Monday
+weeks, `dt_util.get_default_time_zone()`), so the two commands draw the
+same periods. `buckets.cut` resolves every edge to the newest row before
+it and the oldest at or after it; with a hole straddling an edge the
+bucket on the left ends at the last row before the hole and the one on
+the right starts at the first row after, so the hole's time lands in
+neither and `change / hours(end - start)` stays right on both sides. A
+bucket with no row inside is left out, and the card draws the gap. The
+`LIMIT 1` lookups are only for edges the `IN` query left blank, and one
+answer is reused for every edge it also covers, so a long hole costs two
+queries, not two per edge.
 The card itself (`frontend/src/`) mirrors the ID rules of `statistic_ids`
 in `statistic-ids.ts` — an ID is parsed from the right, the state is one
 token — and renders through the frontend's `<ha-chart-base>`, an internal
