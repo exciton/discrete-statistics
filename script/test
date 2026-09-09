@@ -16,7 +16,11 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   docker build -q -t "$IMAGE" -f "$REPO_ROOT/.devcontainer/Dockerfile" "$REPO_ROOT" >&2
 fi
 
+# As the host user, so what pytest writes into the bind mount is theirs.
+# VS Code maps the image's user onto the host's when it starts the
+# container; a plain docker run does not.
 exec docker run --rm \
+  --user "$(id -u):$(id -g)" \
   -v "$REPO_ROOT:/workspace" \
   -w /workspace \
   "$IMAGE" \
