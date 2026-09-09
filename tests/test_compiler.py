@@ -6,17 +6,20 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.statistics import (
+    async_add_external_statistics,
     get_metadata,
     statistics_during_period,
 )
 from homeassistant.setup import async_setup_component
 
-from homeassistant.components.recorder.statistics import async_add_external_statistics
-
 from custom_components.discrete_statistics import compiler as compiler_module
 from custom_components.discrete_statistics.compiler import TRAILING_HOURS, Compiler
 from custom_components.discrete_statistics.config import EntityConfig
-from custom_components.discrete_statistics.const import HOUR, METRIC_COUNT, METRIC_DURATION
+from custom_components.discrete_statistics.const import (
+    HOUR,
+    METRIC_COUNT,
+    METRIC_DURATION,
+)
 from custom_components.discrete_statistics.payload import metadata_for
 from custom_components.discrete_statistics.statistic_ids import belongs_to, parse
 

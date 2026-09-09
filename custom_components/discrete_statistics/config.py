@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 import voluptuous as vol
 from homeassistant.const import CONF_ENTITY_ID, CONF_NAME, STATE_UNKNOWN
 from homeassistant.helpers import config_validation as cv
 
-from .statistic_ids import is_blank
 from .const import (
     DEFAULT_IGNORE,
     DEFAULT_IGNORE_SHORT,
@@ -23,6 +23,7 @@ from .const import (
     MAX_MIN_DURATION,
     UNKNOWN_STATES,
 )
+from .statistic_ids import is_blank
 
 CONF_DEFAULT = "default"
 CONF_STATES = "states"

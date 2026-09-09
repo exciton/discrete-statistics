@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
-from typing import Any, Mapping, NamedTuple
+from typing import Any, NamedTuple
 
 from homeassistant.components.recorder.models import StatisticMeanType
 

@@ -26,6 +26,7 @@ from homeassistant.const import (
     ATTR_UNIT_OF_MEASUREMENT,
     CONF_ENTITY_ID,
     CONF_NAME,
+    STATE_UNKNOWN,
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import section
@@ -44,7 +45,6 @@ from .config import (
     is_configured,
     min_duration_error,
 )
-from .naming import describe, display_name
 from .const import (
     DEFAULT_IGNORE_SHORT,
     DEFAULT_IGNORE_SHORT_UNKNOWN,
@@ -55,8 +55,8 @@ from .const import (
     DISPOSITION_RECORD,
     DOMAIN,
 )
+from .naming import describe, display_name
 from .statistic_ids import is_blank
-from homeassistant.const import STATE_UNKNOWN
 
 # `ignore` is deliberately absent. With no per-state mapping to supply
 # exceptions it makes resolve() return None for every state, so nothing is

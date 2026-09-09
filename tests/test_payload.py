@@ -3,7 +3,6 @@
 from datetime import datetime, timezone
 
 import pytest
-
 from homeassistant.components.recorder.models import StatisticMeanType
 
 from custom_components.discrete_statistics.config import EntityConfig

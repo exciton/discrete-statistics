@@ -9,6 +9,7 @@ from homeassistant.const import (
     ATTR_UNIT_OF_MEASUREMENT,
     CONF_ENTITY_ID,
     CONF_NAME,
+    STATE_UNKNOWN,
 )
 from homeassistant.core import CoreState
 from homeassistant.data_entry_flow import FlowResultType
@@ -17,8 +18,6 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.components.recorder.common import (
     async_wait_recording_done,
 )
-
-from homeassistant.const import STATE_UNKNOWN
 
 from custom_components.discrete_statistics.config import (
     CONF_BLANK,

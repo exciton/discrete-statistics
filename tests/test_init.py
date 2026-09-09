@@ -9,9 +9,12 @@ from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
-from custom_components.discrete_statistics.const import BACKLOG_THRESHOLD
 from custom_components.discrete_statistics.config import EntityConfig
-from custom_components.discrete_statistics.const import DEFAULT_RECORD_KNOWN, DOMAIN
+from custom_components.discrete_statistics.const import (
+    BACKLOG_THRESHOLD,
+    DEFAULT_RECORD_KNOWN,
+    DOMAIN,
+)
 
 ENTITY = "binary_sensor.grid_status"
 OTHER_ENTITY = "binary_sensor.water_pump"

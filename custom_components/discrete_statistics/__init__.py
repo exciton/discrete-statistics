@@ -31,10 +31,11 @@ from homeassistant.loader import async_get_integration
 from . import frontend as card_frontend
 from . import websocket
 from .compiler import Compiler
-from .config import CONFIG_SCHEMA, EntityConfig, entity_config_from_entry, is_configured
+
 # CONFIG_SCHEMA is the HA hook: HA looks it up by name on this module to
 # validate the YAML block, so it must stay imported even though nothing here
 # calls it directly.
+from .config import CONFIG_SCHEMA, EntityConfig, entity_config_from_entry, is_configured
 from .const import BACKLOG_THRESHOLD, DOMAIN
 from .naming import describe
 
@@ -42,10 +43,10 @@ _LOGGER = logging.getLogger(__name__)
 
 __all__ = [
     "CONFIG_SCHEMA",
+    "async_remove_entry",
     "async_setup",
     "async_setup_entry",
     "async_unload_entry",
-    "async_remove_entry",
 ]
 
 SERVICE_RECOMPUTE = "recompute"
@@ -110,7 +111,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             for cfg in data["all_configs"]():
                 try:
                     hours = await compiler.async_compile_incremental(cfg)
-                except Exception:  # noqa: BLE001 - a bad entity must not stop the rest
+                except Exception:  # a bad entity must not stop the rest
                     _LOGGER.exception("Compiling %s failed", cfg.entity_id)
                 else:
                     if hours:
@@ -203,7 +204,7 @@ async def _async_compile_and_notify(
                 hours = await compiler.async_compile(cfg, None)
             else:
                 hours = await compiler.async_compile_incremental(cfg)
-    except Exception as err:  # noqa: BLE001 - reported, not swallowed
+    except Exception as err:  # reported, not swallowed
         _LOGGER.exception("Compiling %s failed", cfg.entity_id)
         message = f"Could not compile statistics for {describe(hass, cfg.entity_id, cfg.name)}: {err}"
     else:

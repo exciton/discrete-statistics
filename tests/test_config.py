@@ -2,8 +2,8 @@
 
 import pytest
 import voluptuous as vol
-
 from homeassistant.const import CONF_ENTITY_ID, CONF_NAME
+
 from custom_components.discrete_statistics.config import (
     CONF_DEFAULT,
     CONF_MIN_DURATION,
