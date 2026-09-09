@@ -14,6 +14,9 @@ from homeassistant.core import CoreState
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.components.recorder.common import (
+    async_wait_recording_done,
+)
 
 from homeassistant.const import STATE_UNKNOWN
 
@@ -21,13 +24,18 @@ from custom_components.discrete_statistics.config import (
     CONF_BLANK,
     CONF_DEFAULT,
     CONF_MIN_DURATION,
+    CONF_STATES,
 )
+from custom_components.discrete_statistics.config_flow import DISPOSITION_DEFAULT
 from custom_components.discrete_statistics.const import (
     DEFAULT_IGNORE,
     DEFAULT_IGNORE_SHORT,
     DEFAULT_IGNORE_SHORT_UNKNOWN,
     DEFAULT_RECORD,
     DEFAULT_RECORD_KNOWN,
+    DISPOSITION_IGNORE,
+    DISPOSITION_IGNORE_SHORT,
+    DISPOSITION_RECORD,
     DOMAIN,
 )
 
@@ -52,15 +60,26 @@ async def recorder(recorder_mock, hass):
     return hass
 
 
-async def test_user_flow_creates_an_entry(recorder):
-    hass = recorder
-    assert await async_setup_component(hass, DOMAIN, {})
-
+async def _pick(hass, entity_id=ENTITY):
+    """Open a flow and pick the entity: what the first step is for."""
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": SOURCE_USER}
     )
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "user"
+    assert list(result["data_schema"].schema) == [CONF_ENTITY_ID]
+    return await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_ENTITY_ID: entity_id}
+    )
+
+
+async def test_user_flow_creates_an_entry(recorder):
+    hass = recorder
+    assert await async_setup_component(hass, DOMAIN, {})
+
+    result = await _pick(hass)
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "options"
 
     with patch(
         "custom_components.discrete_statistics.Compiler.async_compile_incremental",
@@ -69,7 +88,6 @@ async def test_user_flow_creates_an_entry(recorder):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
             {
-                CONF_ENTITY_ID: ENTITY,
                 CONF_NAME: "Grid Status",
                 CONF_DEFAULT: DEFAULT_RECORD,
                 CONF_BLANK: STATE_UNKNOWN,
@@ -94,13 +112,7 @@ async def test_flow_rejects_an_entity_already_in_an_entry(recorder):
         domain=DOMAIN, data={CONF_ENTITY_ID: ENTITY}, unique_id=ENTITY
     ).add_to_hass(hass)
 
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": SOURCE_USER}
-    )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        {CONF_ENTITY_ID: ENTITY, CONF_DEFAULT: DEFAULT_RECORD_KNOWN, CONF_BLANK: STATE_UNKNOWN},
-    )
+    result = await _pick(hass)
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "already_configured"
@@ -113,13 +125,7 @@ async def test_flow_rejects_an_entity_configured_in_yaml(recorder):
     )
     await hass.async_block_till_done()
 
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": SOURCE_USER}
-    )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        {CONF_ENTITY_ID: ENTITY, CONF_DEFAULT: DEFAULT_RECORD_KNOWN, CONF_BLANK: STATE_UNKNOWN},
-    )
+    result = await _pick(hass)
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "yaml_configured"
@@ -132,13 +138,9 @@ async def test_flow_does_not_offer_ignore(recorder):
     hass = recorder
     assert await async_setup_component(hass, DOMAIN, {})
 
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": SOURCE_USER}
-    )
+    result = await _pick(hass)
     with pytest.raises(vol.Invalid):
-        result["data_schema"](
-            {CONF_ENTITY_ID: ENTITY, CONF_DEFAULT: DEFAULT_IGNORE, CONF_BLANK: STATE_UNKNOWN}
-        )
+        result["data_schema"]({CONF_DEFAULT: DEFAULT_IGNORE, CONF_BLANK: STATE_UNKNOWN})
 
 
 async def test_options_flow_updates_and_recompiles(recorder):
@@ -243,16 +245,9 @@ async def test_the_blank_setting_is_carried_into_the_entry(recorder):
     """A text sensor whose blank means "no error" needs a name, not a preset."""
     hass = recorder
     assert await async_setup_component(hass, DOMAIN, {})
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": SOURCE_USER}
-    )
+    result = await _pick(hass)
     result = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        {
-            CONF_ENTITY_ID: ENTITY,
-            CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
-            CONF_BLANK: "ok",
-        },
+        result["flow_id"], {CONF_DEFAULT: DEFAULT_RECORD_KNOWN, CONF_BLANK: "ok"}
     )
     await hass.async_block_till_done()
 
@@ -268,12 +263,9 @@ async def test_an_unusable_blank_keeps_the_form_open(recorder, value, error):
     """An error on the field, not an abort: the dialog is still fillable."""
     hass = recorder
     assert await async_setup_component(hass, DOMAIN, {})
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": SOURCE_USER}
-    )
+    result = await _pick(hass)
     result = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        {CONF_ENTITY_ID: ENTITY, CONF_DEFAULT: DEFAULT_RECORD_KNOWN, CONF_BLANK: value},
+        result["flow_id"], {CONF_DEFAULT: DEFAULT_RECORD_KNOWN, CONF_BLANK: value}
     )
 
     assert result["type"] is FlowResultType.FORM
@@ -322,17 +314,16 @@ ENUM = "sensor.washing_machine_status"
 
 
 async def _submit(hass, entity_id):
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": SOURCE_USER}
-    )
-    return await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        {
-            CONF_ENTITY_ID: entity_id,
-            CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
-            CONF_BLANK: STATE_UNKNOWN,
-        },
-    )
+    """Pick the entity and, if it is let through, take the options as offered."""
+    result = await _pick(hass, entity_id)
+    if result["type"] is FlowResultType.FORM and result["step_id"] == "options":
+        user_input = {CONF_DEFAULT: DEFAULT_RECORD_KNOWN, CONF_BLANK: STATE_UNKNOWN}
+        if CONF_STATES in result["data_schema"].schema:
+            user_input[CONF_STATES] = {}
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], user_input
+        )
+    return result
 
 
 async def test_a_measuring_entity_is_refused(recorder, entity_registry):
@@ -457,13 +448,10 @@ async def test_a_typed_name_still_leads_the_title(recorder, entity_registry):
         original_name="Mains Power",
     )
 
-    flow = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": SOURCE_USER}
-    )
+    flow = await _pick(hass)
     result = await hass.config_entries.flow.async_configure(
         flow["flow_id"],
         {
-            CONF_ENTITY_ID: ENTITY,
             CONF_NAME: "Grid",
             CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
             CONF_BLANK: STATE_UNKNOWN,
@@ -553,9 +541,7 @@ async def test_ignore_short_stores_the_minimum_duration_in_seconds(recorder):
     hass = recorder
     assert await async_setup_component(hass, DOMAIN, {})
 
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": SOURCE_USER}
-    )
+    result = await _pick(hass)
     with patch(
         "custom_components.discrete_statistics.Compiler.async_compile_incremental",
         return_value=0,
@@ -563,7 +549,6 @@ async def test_ignore_short_stores_the_minimum_duration_in_seconds(recorder):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
             {
-                CONF_ENTITY_ID: ENTITY,
                 CONF_DEFAULT: DEFAULT_IGNORE_SHORT,
                 CONF_BLANK: STATE_UNKNOWN,
                 CONF_MIN_DURATION: {"hours": 0, "minutes": 5, "seconds": 0},
@@ -587,9 +572,7 @@ async def test_the_duration_is_optional_under_the_other_defaults(recorder):
     hass = recorder
     assert await async_setup_component(hass, DOMAIN, {})
 
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": SOURCE_USER}
-    )
+    result = await _pick(hass)
     with patch(
         "custom_components.discrete_statistics.Compiler.async_compile_incremental",
         return_value=0,
@@ -597,7 +580,6 @@ async def test_the_duration_is_optional_under_the_other_defaults(recorder):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
             {
-                CONF_ENTITY_ID: ENTITY,
                 CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
                 CONF_BLANK: STATE_UNKNOWN,
             },
@@ -619,11 +601,8 @@ async def test_an_unusable_duration_keeps_the_form_open(recorder, duration, erro
     hass = recorder
     assert await async_setup_component(hass, DOMAIN, {})
 
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": SOURCE_USER}
-    )
+    result = await _pick(hass)
     user_input = {
-        CONF_ENTITY_ID: ENTITY,
         CONF_DEFAULT: DEFAULT_IGNORE_SHORT,
         CONF_BLANK: STATE_UNKNOWN,
     }
@@ -633,7 +612,7 @@ async def test_an_unusable_duration_keeps_the_form_open(recorder, duration, erro
         result["flow_id"], user_input
     )
     assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "user"
+    assert result["step_id"] == "options"
     assert result["errors"] == {CONF_MIN_DURATION: error}
 
 
@@ -641,9 +620,7 @@ async def test_a_long_duration_is_fine_when_nothing_reads_it(recorder):
     hass = recorder
     assert await async_setup_component(hass, DOMAIN, {})
 
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": SOURCE_USER}
-    )
+    result = await _pick(hass)
     with patch(
         "custom_components.discrete_statistics.Compiler.async_compile_incremental",
         return_value=0,
@@ -651,7 +628,6 @@ async def test_a_long_duration_is_fine_when_nothing_reads_it(recorder):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
             {
-                CONF_ENTITY_ID: ENTITY,
                 CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
                 CONF_BLANK: STATE_UNKNOWN,
                 CONF_MIN_DURATION: {"hours": 2, "minutes": 0, "seconds": 0},
@@ -745,11 +721,8 @@ async def test_ignore_short_unknown_is_offered_and_needs_a_duration(recorder):
     hass = recorder
     assert await async_setup_component(hass, DOMAIN, {})
 
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": SOURCE_USER}
-    )
+    result = await _pick(hass)
     user_input = {
-        CONF_ENTITY_ID: ENTITY,
         CONF_DEFAULT: DEFAULT_IGNORE_SHORT_UNKNOWN,
         CONF_BLANK: STATE_UNKNOWN,
     }
@@ -771,3 +744,267 @@ async def test_ignore_short_unknown_is_offered_and_needs_a_duration(recorder):
     cfg = hass.data[DOMAIN]["entry_configs"][result["result"].entry_id]
     assert cfg.classify("on") == ("on", False)
     assert cfg.classify("unavailable") == ("unavailable", True)
+
+
+async def _seen(hass, *states, attributes=None):
+    """Put the entity through each state, and wait for the recorder."""
+    for state in states:
+        hass.states.async_set(ENTITY, state, attributes)
+    await async_wait_recording_done(hass)
+
+
+def _section(result):
+    """The mapping section's schema, keyed by state, or None without one."""
+    for key, value in result["data_schema"].schema.items():
+        if key == CONF_STATES:
+            return value
+    return None
+
+
+def _rows(result):
+    return list(_section(result).schema.schema)
+
+
+def _choices(result, state):
+    [field] = [v for k, v in _section(result).schema.schema.items() if k == state]
+    return [option["value"] for option in field.config["options"]]
+
+
+async def test_the_options_form_offers_a_row_per_state_the_recorder_holds(recorder):
+    hass = recorder
+    await _seen(hass, "on", "off", "", "on")
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    # Blank states are the `blank` setting's business, not a row.
+    assert _rows(result) == ["off", "on"]
+    assert _section(result).options == {"collapsed": True}
+    for key in _rows(result):
+        assert key.default() == DISPOSITION_DEFAULT
+    assert _choices(result, "on") == [
+        DISPOSITION_DEFAULT,
+        DISPOSITION_RECORD,
+        DISPOSITION_IGNORE,
+        DISPOSITION_IGNORE_SHORT,
+        "off",
+    ]
+
+
+async def test_an_enum_sensors_options_are_rows_before_they_are_seen(recorder):
+    hass = recorder
+    hass.states.async_set(
+        ENTITY, "idle", {"options": ["idle", "Heating", "cooling"]}
+    )
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    assert _rows(result) == ["cooling", "Heating", "idle"]
+
+
+async def test_an_entity_never_seen_has_no_mapping_section(recorder):
+    hass = recorder
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    assert _section(result) is None
+
+
+async def test_a_mapping_is_stored_and_recompiles_the_whole_history(recorder):
+    hass = recorder
+    await _seen(hass, "on", "off")
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+
+    with patch(
+        "custom_components.discrete_statistics.Compiler.async_compile",
+        return_value=0,
+    ) as full:
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {
+                CONF_NAME: "Grid Status",
+                CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
+                CONF_BLANK: STATE_UNKNOWN,
+                CONF_STATES: {"on": DISPOSITION_IGNORE, "off": DISPOSITION_DEFAULT},
+            },
+        )
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    # Only a choice other than the default is an entry.
+    assert entry.options[CONF_STATES] == {"on": DISPOSITION_IGNORE}
+    assert hass.data[DOMAIN]["entry_configs"][entry.entry_id].resolve("on") is None
+    assert full.called
+    assert full.call_args.args[1] is None
+
+
+async def test_leaving_every_row_on_default_stores_no_mapping(recorder):
+    hass = recorder
+    await _seen(hass, "on", "off")
+    entry = await _entry_with(
+        hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN, CONF_STATES: {"on": "off"}}
+    )
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_NAME: "Grid Status",
+            CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
+            CONF_BLANK: STATE_UNKNOWN,
+            CONF_STATES: {"on": DISPOSITION_DEFAULT, "off": DISPOSITION_DEFAULT},
+        },
+    )
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert CONF_STATES not in entry.options
+
+
+async def test_the_stored_mapping_is_offered_back_with_the_section_open(recorder):
+    hass = recorder
+    # Nothing in the recorder: the rows come from the mapping itself, its
+    # target included, so a purged state can still be unmapped.
+    entry = await _entry_with(
+        hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN, CONF_STATES: {"on": "closed"}}
+    )
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    assert _rows(result) == ["closed", "on"]
+    assert _section(result).options == {"collapsed": False}
+    suggested = {
+        key.schema: key.description["suggested_value"]
+        for key in _rows(result)
+        if key.description
+    }
+    assert suggested == {"on": "closed"}
+    assert "closed" in _choices(result, "on")
+    assert "on" in _choices(result, "closed")
+
+
+async def test_a_blank_target_keeps_the_form_open(recorder):
+    hass = recorder
+    await _seen(hass, "on")
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_NAME: "Grid Status",
+            CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
+            CONF_BLANK: STATE_UNKNOWN,
+            CONF_STATES: {"on": "---"},
+        },
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "target_unusable"}
+    [row] = _rows(result)
+    assert row.description == {"suggested_value": "---"}
+
+
+async def test_a_short_state_in_the_mapping_needs_a_duration(recorder):
+    hass = recorder
+    await _seen(hass, "on")
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_NAME: "Grid Status",
+            CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
+            CONF_BLANK: STATE_UNKNOWN,
+            CONF_STATES: {"on": DISPOSITION_IGNORE_SHORT},
+        },
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {CONF_MIN_DURATION: "min_duration_required"}
+
+
+async def test_a_new_entry_maps_the_states_it_has_seen(recorder):
+    """The second step is the options dialog, States section and all."""
+    hass = recorder
+    await _seen(hass, "on", "off")
+    assert await async_setup_component(hass, DOMAIN, {})
+
+    result = await _pick(hass)
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "options"
+    assert _rows(result) == ["off", "on"]
+    assert _section(result).options == {"collapsed": True}
+    assert result["description_placeholders"]["default_name"] == ENTITY
+
+    with patch(
+        "custom_components.discrete_statistics.Compiler.async_compile_incremental",
+        return_value=0,
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {
+                CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
+                CONF_BLANK: STATE_UNKNOWN,
+                CONF_STATES: {"on": "off", "off": DISPOSITION_DEFAULT},
+            },
+        )
+        await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["options"][CONF_STATES] == {"on": "off"}
+    assert result["options"][CONF_DEFAULT] == DEFAULT_RECORD_KNOWN
+
+
+async def test_a_new_entry_for_an_unseen_entity_has_no_mapping_section(recorder):
+    hass = recorder
+    assert await async_setup_component(hass, DOMAIN, {})
+
+    result = await _pick(hass)
+
+    assert result["step_id"] == "options"
+    assert CONF_STATES not in result["data_schema"].schema
+
+
+async def test_a_new_entrys_short_state_needs_the_duration(recorder):
+    hass = recorder
+    await _seen(hass, "on")
+    assert await async_setup_component(hass, DOMAIN, {})
+
+    result = await _pick(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
+            CONF_BLANK: STATE_UNKNOWN,
+            CONF_STATES: {"on": DISPOSITION_IGNORE_SHORT},
+        },
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "options"
+    assert result["errors"] == {CONF_MIN_DURATION: "min_duration_required"}
+    [row] = _rows(result)
+    assert row.description == {"suggested_value": DISPOSITION_IGNORE_SHORT}
+
+
+async def test_a_new_entry_refuses_a_blank_target(recorder):
+    hass = recorder
+    await _seen(hass, "on")
+    assert await async_setup_component(hass, DOMAIN, {})
+
+    result = await _pick(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_DEFAULT: DEFAULT_RECORD_KNOWN,
+            CONF_BLANK: STATE_UNKNOWN,
+            CONF_STATES: {"on": "  "},
+        },
+    )
+
+    assert result["errors"] == {"base": "target_unusable"}

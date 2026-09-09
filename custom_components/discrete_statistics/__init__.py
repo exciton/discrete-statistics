@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 from typing import Any
 
 import voluptuous as vol
@@ -228,10 +229,10 @@ async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
     options change - including a title-only rename from the entries list.
     Comparing the freshly-built EntityConfig against the one on file is what
     keeps a cosmetic rename from taking the shared lock for a full recompute
-    and raising a notification nobody asked for. Of what is left, only
-    `default` changes past attribution; `payload` rebuilds statistic metadata
-    on every compile, so a `name`-only change reaches the display name on the
-    next ordinary run with no rewrite needed.
+    and raising a notification nobody asked for. Of what is left, `name` is
+    the one that leaves attribution alone; `payload` rebuilds statistic
+    metadata on every compile, so a `name`-only change reaches the display
+    name on the next ordinary run with no rewrite needed.
 
     Deliberately not hass.config_entries.async_reload() for the recompute
     path: reload re-runs async_setup_entry, whose compile is incremental, and
@@ -258,15 +259,10 @@ async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
     if title != entry.title:
         hass.config_entries.async_update_entry(entry, title=title)
 
-    # `default`, `blank` and `min_duration` all change how past states were
-    # attributed, so any of them moving means the whole history must be
-    # recompiled. A name change reaches the display on the next ordinary
-    # run with no rewrite.
-    if old_cfg is not None and (cfg.default, cfg.blank, cfg.min_duration) == (
-        old_cfg.default,
-        old_cfg.blank,
-        old_cfg.min_duration,
-    ):
+    # Everything but the name changes how past states were attributed, so
+    # any of it moving means the whole history must be recompiled. A name
+    # change reaches the display on the next ordinary run with no rewrite.
+    if old_cfg is not None and replace(cfg, name=old_cfg.name) == old_cfg:
         return
 
     entry.async_create_background_task(

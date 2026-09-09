@@ -34,7 +34,7 @@ as external statistics, which are never purged.
 - Debounce: a state that lasts less than a minimum duration can be ignored,
   per state or for every state
 - States can be mapped onto one another (`heat_cool` → `heating`)
-- Set up from the UI or YAML; per-state mappings are YAML-only for now
+- Set up from the UI or YAML
 - Recalculate any range at any time — it only rewrites what it has source
   data for, and never deletes anything
 
@@ -88,8 +88,8 @@ change.
 | `blank` | `unknown` | what to do with a state that has no letters or digits |
 | `min_duration` | — | how long a spell of a conditionally recorded state must last |
 
-`default`, `blank` and `min_duration` are available in the UI as well;
-per-state mappings are still YAML-only.
+All four are available in the UI as well; `states` is the options dialog's
+**States** section, and the `ignore` default is YAML-only.
 
 `default` accepts:
 
@@ -210,10 +210,12 @@ discrete_statistics:
 [![Add Discrete Statistics](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=discrete_statistics)
 
 Or Settings → Devices & Services → **Add integration** → **Discrete
-Statistics**. Pick an entity, optionally name it, and choose which states
-to record; the two choices that mention a minimum duration read the
-duration field below them. Compiling starts in the
-background as soon as you press Submit,
+Statistics**. Pick an entity, then fill in the dialog shown below: a name
+if the entity's own will not do, and which states to record - the two
+choices that mention a minimum duration read the duration field below
+them. The same dialog is the entry's options dialog afterwards, so nothing
+is set on creation that cannot be changed later. Compiling starts in the
+background as soon as the entry is created,
 and a notification reports how many hours were compiled: the entity's full
 retained history for a genuinely new entity, or just the trailing window if
 it was previously configured and deleted, since statistics are kept on
@@ -221,9 +223,18 @@ removal and compiling resumes from that watermark.
 
 ![The options dialog: name, the states-to-record dropdown open on its four choices, blank states, and minimum duration](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/options-dialog.png)
 
-Changing an entry's recording rule or minimum duration recompiles that
-entity's whole history, so the change applies to the past as well as the
-future; changing only its name does not.
+The dialog has a **States** section with a row for every state the
+entity has reported — its history, its current state and, for an enum
+sensor, its `options` — folded away until something in it is set. Each row
+is the `states:` entry for that state: leave it following the recording
+rule above, record it, ignore it, record it only when it lasts the minimum
+duration, or pick another state to record it as. Typing a name the entity
+has never reported works too. A state that appears later follows the
+recording rule, as in YAML.
+
+Changing an entry's recording rule, a state's row or the minimum duration
+recompiles that entity's whole history, so the change applies to the past
+as well as the future; changing only its name does not.
 
 The entity itself cannot be changed after creation: it determines the
 statistic IDs, so a change would orphan the existing series. Delete the
@@ -245,7 +256,7 @@ filter, and a domain allowlist would exclude enum `sensor.*` entities, which
 are a main use case.
 
 YAML configuration keeps working unchanged, and is still the only way to
-set per-state dispositions and the `ignore` default.
+set the `ignore` default.
 
 ## Statistics produced
 

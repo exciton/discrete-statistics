@@ -7,6 +7,7 @@ from homeassistant.const import CONF_ENTITY_ID, CONF_NAME
 from custom_components.discrete_statistics.config import (
     CONF_DEFAULT,
     CONF_MIN_DURATION,
+    CONF_STATES,
     CONFIG_SCHEMA,
     EntityConfig,
     entity_config_from_entry,
@@ -204,6 +205,15 @@ def test_entity_config_from_entry_reads_data_and_options():
     assert cfg == EntityConfig(
         entity_id="binary_sensor.a", name="Grid", default=DEFAULT_RECORD
     )
+
+
+def test_entity_config_from_entry_carries_the_mapping():
+    cfg = entity_config_from_entry(
+        {CONF_ENTITY_ID: "binary_sensor.a"},
+        {CONF_DEFAULT: DEFAULT_RECORD, CONF_STATES: {"on": "ignore"}},
+    )
+    assert cfg.states == {"on": "ignore"}
+    assert cfg.resolve("on") is None
 
 
 def test_entity_config_from_entry_defaults_and_blank_name():
