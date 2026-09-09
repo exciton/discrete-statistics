@@ -48,6 +48,7 @@ export interface StatisticsMetaData {
 export interface HassLike {
   callWS<T>(msg: Record<string, unknown>): Promise<T>;
   connection: Record<string, unknown>;
+  states?: Record<string, unknown>;
   panelUrl?: string;
   locale: { language: string };
   localize?: (key: string, ...args: unknown[]) => string;

@@ -1,6 +1,11 @@
 import { DiscreteStatisticsCard } from "./card";
+import { DiscreteStatisticsCardEditor } from "./editor";
 
 customElements.define("discrete-statistics-card", DiscreteStatisticsCard);
+customElements.define(
+  "discrete-statistics-card-editor",
+  DiscreteStatisticsCardEditor
+);
 
 declare global {
   interface Window {

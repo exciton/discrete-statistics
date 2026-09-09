@@ -5,6 +5,7 @@ import {
   stateLabel,
   stateToken,
   statisticsForEntity,
+  entitiesWithStatistics,
 } from "../src/statistic-ids";
 import type { StatisticsMetaData } from "../src/types";
 
@@ -135,5 +136,26 @@ describe("statisticsForEntity", () => {
     expect(
       statisticsForEntity("sensor.door", "duration", withDoor, { ignore_states: ["打开"] }).map((s) => s.token)
     ).toEqual([]);
+  });
+});
+
+describe("entitiesWithStatistics", () => {
+  const meta = (id: string) =>
+    ({ statistic_id: id, source: "discrete_statistics" }) as never;
+
+  it("keeps the entities some statistic belongs to, in the order given", () => {
+    const known = [
+      "climate.zone",
+      "binary_sensor.door",
+      "sensor.unrelated",
+      "climate.zone_heat",
+    ];
+    expect(
+      entitiesWithStatistics(known, [
+        meta("discrete_statistics:climate_zone_heat_duration"),
+        meta("discrete_statistics:binary_sensor_door_on_count"),
+        meta("sensor:not_ours"),
+      ])
+    ).toEqual(["climate.zone", "binary_sensor.door"]);
   });
 });

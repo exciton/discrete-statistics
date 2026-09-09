@@ -74,6 +74,23 @@ export function stateLabel(
   return tail || token;
 }
 
+// The entities, of those given, that at least one of the integration's
+// statistics belongs to — what the editor offers, since only those can
+// draw anything. Order is the caller's.
+export function entitiesWithStatistics(
+  entityIds: string[],
+  metadata: StatisticsMetaData[]
+): string[] {
+  const slugs = new Set<string>();
+  for (const meta of metadata) {
+    const parsed = parseStatisticId(meta.statistic_id);
+    if (parsed) {
+      slugs.add(parsed.entitySlug);
+    }
+  }
+  return entityIds.filter((id) => slugs.has(entitySlug(id)));
+}
+
 export function statisticsForEntity(
   entityId: string,
   metric: Metric,

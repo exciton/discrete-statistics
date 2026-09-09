@@ -12,7 +12,7 @@ import {
   type LegendItem,
 } from "./series";
 import { statisticsForEntity, type StateStatistic } from "./statistic-ids";
-import type { CardConfig, HassLike, Metric } from "./types";
+import type { CardConfig, HassLike } from "./types";
 
 const DEFAULT_DAYS = 30;
 // The stock statistics-graph card refreshes hourly; a dashboard left open
@@ -30,11 +30,6 @@ interface TooltipParam {
   color?: string;
   value: [number, number | null, number, number];
 }
-
-const METRIC_LABEL: Record<Metric, string> = {
-  duration: "Time in State",
-  count: "Transition Count",
-};
 
 export class DiscreteStatisticsCard extends LitElement {
   @property({ attribute: false }) public hass?: HassLike;
@@ -82,74 +77,8 @@ export class DiscreteStatisticsCard extends LitElement {
     return { metric: "duration", unit: "auto", period: "auto", days_to_show: DEFAULT_DAYS };
   }
 
-  public static getConfigForm() {
-    return {
-      schema: [
-        { name: "entity", required: true, selector: { entity: {} } },
-        { name: "title", selector: { text: {} } },
-        {
-          name: "metric",
-          selector: {
-            select: {
-              mode: "dropdown",
-              options: [
-                { value: "duration", label: METRIC_LABEL.duration },
-                { value: "count", label: METRIC_LABEL.count },
-              ],
-            },
-          },
-        },
-        {
-          name: "unit",
-          selector: {
-            select: {
-              mode: "dropdown",
-              options: [
-                { value: "auto", label: "Automatic" },
-                { value: "h", label: "Hours" },
-                { value: "d", label: "Days" },
-                { value: "percent", label: "Percentage of the time" },
-              ],
-            },
-          },
-        },
-        {
-          name: "period",
-          selector: {
-            select: {
-              mode: "dropdown",
-              options: [
-                { value: "auto", label: "Automatic" },
-                { value: "hour", label: "Per hour" },
-                { value: "day", label: "Per day" },
-                { value: "week", label: "Per week" },
-                { value: "month", label: "Per month" },
-                { value: "year", label: "Per year" },
-              ],
-            },
-          },
-        },
-        { name: "days_to_show", selector: { number: { min: 1, mode: "box" } } },
-        { name: "energy_date_selection", selector: { boolean: {} } },
-        { name: "hide_legend", selector: { boolean: {} } },
-      ],
-      computeLabel: (schema: { name: string }) =>
-        ({
-          entity: "Entity",
-          title: "Title",
-          metric: "Show",
-          unit: "Time unit",
-          period: "Bars",
-          days_to_show: "Days to show",
-          energy_date_selection: "Follow the dashboard's date picker",
-          hide_legend: "Hide the legend",
-        })[schema.name] ?? schema.name,
-      computeHelper: (schema: { name: string }) =>
-        ({
-          unit: "Only for time in state. Automatic picks hours or days to suit the bars.",
-          days_to_show: "Ignored when following the date picker.",
-        })[schema.name],
-    };
+  public static getConfigElement(): HTMLElement {
+    return document.createElement("discrete-statistics-card-editor");
   }
 
   public setConfig(config: CardConfig): void {
