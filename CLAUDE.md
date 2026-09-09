@@ -168,17 +168,18 @@ weeks, `dt_util.get_default_time_zone()`), so the two commands draw the
 same periods. `buckets.cut` resolves every edge to the newest row before
 it — the row starting the hour before, whose sum is the sum at the edge,
 so the `IN` query is one row per edge (a range query when the edges are
-hours, since then every row is wanted); with a hole straddling an edge the
-bucket on the left ends at the last row before the hole and the one on
-the right starts at the first row after, so the hole's time lands in
-neither and `change / hours(end - start)` stays right on both sides. A
-hole beginning exactly on an edge is inside the bucket after it, as any
-inner hole is: the row before the edge vouches for the bucket's start,
-and fetching the edge's own row too would double the query to tell those
-apart. A bucket with no row inside is left out, and the card draws the
-gap. The `LIMIT 1` lookups are only for edges the `IN` query left blank,
-and one answer is reused for every edge it also covers, so a long hole
-costs two queries, not two per edge.
+hours, since then every row is wanted). A bucket's `start` and `end` are
+always its edges — every statistic cut on the same edges shares them,
+which is what lets the card stack the statistics on one bar — and the
+period's length is what a ratio divides by: a state has no time in it
+before its series begins, so a new state's first bucket starts from a
+base of zero, and a hole is time in no state, so with one straddling an
+edge the bucket on the left has the change up to the last row before it
+and the one on the right the change after it, both shorter by the hole's
+time. A bucket with no row inside is left out, and the card draws the
+gap. The `LIMIT 1` lookup is only for edges the `IN` query left blank,
+and one answer is reused for every edge it also precedes, so a long hole
+or a late-arriving state costs one query, not one per edge.
 The card itself (`frontend/src/`) mirrors the ID rules of `statistic_ids`
 in `statistic-ids.ts` — an ID is parsed from the right, the state is one
 token — and renders through the frontend's `<ha-chart-base>`, an internal

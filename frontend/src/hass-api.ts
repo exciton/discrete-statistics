@@ -7,7 +7,7 @@ export const listStatisticIds = (hass: HassLike) =>
 // The integration's own command answers from the rows at the bucket
 // edges, so a year of months costs thirteen rows a statistic rather than
 // every hourly row in the range reduced server-side. A bucket's start and
-// end are its first and last row, which is what the ratio divides by.
+// end are its period's edges, which is what the ratio divides by.
 export const fetchStatistics = (
   hass: HassLike,
   ids: string[],

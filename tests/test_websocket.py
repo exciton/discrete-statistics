@@ -100,7 +100,7 @@ async def test_days_in_the_instance_timezone(hass, client):
     }
 
 
-async def test_every_statistic_is_answered_and_a_hole_shortens_its_buckets(
+async def test_every_statistic_is_answered_and_a_hole_is_in_neither_bucket(
     hass, client
 ):
     seed(hass, ON, local(2026, 3, 2), [float(i + 1) for i in range(48)])
@@ -118,17 +118,25 @@ async def test_every_statistic_is_answered_and_a_hole_shortens_its_buckets(
     response = await ask(client, [ON, OFF], local(2026, 3, 2), local(2026, 3, 4))
 
     assert response["result"][ON] == [
-        {"start": ms(local(2026, 3, 2)), "end": ms(local(2026, 3, 3)), "change": 24.0},
-        {"start": ms(local(2026, 3, 3)), "end": ms(local(2026, 3, 4)), "change": 24.0},
+        {
+            "start": ms(local(2026, 3, 2)),
+            "end": ms(local(2026, 3, 3)),
+            "change": 24.0,
+        },
+        {
+            "start": ms(local(2026, 3, 3)),
+            "end": ms(local(2026, 3, 4)),
+            "change": 24.0,
+        },
     ]
     assert response["result"][OFF] == [
         {
             "start": ms(local(2026, 3, 2)),
-            "end": ms(local(2026, 3, 2, 20)),
+            "end": ms(local(2026, 3, 3)),
             "change": 20.0,
         },
         {
-            "start": ms(local(2026, 3, 3, 6)),
+            "start": ms(local(2026, 3, 3)),
             "end": ms(local(2026, 3, 4)),
             "change": 18.0,
         },

@@ -5,7 +5,7 @@ and reduces them in Python whatever the period is asked for. Our sums are
 cumulative and dense, so the card's buckets need only one row per edge:
 one `start_ts IN (...)` query for every statistic at once - a range query
 when the edges are hours, since then every row is wanted - then a
-`LIMIT 1` lookup either side of any edge that query left blank. The
+`LIMIT 1` lookup before any edge that query left blank. The
 arithmetic is in `buckets`; this module is the recorder boundary, and it
 only reads.
 """
@@ -113,7 +113,6 @@ def _buckets(
                     edges_,
                     at.get(metadata_id, {}),
                     lambda edge, m=metadata_id: _newest_before(session, m, edge),
-                    lambda edge, m=metadata_id: _oldest_at_or_after(session, m, edge),
                 )
             ]
             for metadata_id, statistic_id in ids.items()
@@ -164,27 +163,15 @@ def _rows(
     return result
 
 
-def _one(session: Session, metadata_id: int, where: Any, order: Any) -> Row | None:
+def _newest_before(session: Session, metadata_id: int, edge: float) -> Row | None:
     row = session.execute(
         select(Statistics.start_ts, Statistics.sum)
         .where(
             Statistics.metadata_id == metadata_id,
             Statistics.sum.is_not(None),
-            where,
+            Statistics.start_ts < edge,
         )
-        .order_by(order)
+        .order_by(Statistics.start_ts.desc())
         .limit(1)
     ).first()
     return None if row is None else Row(row[0], row[1])
-
-
-def _newest_before(session: Session, metadata_id: int, edge: float) -> Row | None:
-    return _one(
-        session, metadata_id, Statistics.start_ts < edge, Statistics.start_ts.desc()
-    )
-
-
-def _oldest_at_or_after(session: Session, metadata_id: int, edge: float) -> Row | None:
-    return _one(
-        session, metadata_id, Statistics.start_ts >= edge, Statistics.start_ts.asc()
-    )

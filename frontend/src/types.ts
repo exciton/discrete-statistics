@@ -25,8 +25,8 @@ export interface CardConfig {
   grid_options?: { rows?: number | "auto"; columns?: number | "full" };
 }
 
-// A bucket as discrete_statistics/buckets answers it: the span of its
-// first row to its last, in ms since epoch, and the change across it.
+// A bucket as discrete_statistics/buckets answers it: its period's edges
+// in ms since epoch and the change across it.
 export interface StatisticValue {
   start: number;
   end: number;
