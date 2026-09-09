@@ -494,6 +494,28 @@ ignore_states:
   - unavailable
 ```
 
+A `states:` entry can carry a name to draw the state under and a colour
+— a theme colour name as the stock card takes, or a hex value; the rest
+keep the names the statistics carry and take the theme's graph palette
+in order:
+
+```yaml
+states:
+  - state: heat
+    name: Heating
+    color: deep-orange
+  - state: cool
+    color: "#03a9f4"
+  - "off"
+```
+
+The editor lists the entity's states with a tick, a drag handle, a name
+and a colour each, and writes the two keys for you. Its "Ignore states that
+appear later" tick chooses which the unticked states become: with it
+on they are left out of `states:`; with it off they go in
+`ignore_states:`, which stays present — empty if need be — so the list
+stays open.
+
 `unit: percent` is the share of each period spent in the state, so a
 stacked bar whose states are all drawn is always full height — except the
 last bar, which is only as full as the period it covers so far. `auto`
@@ -508,6 +530,14 @@ start, as the stock card draws it.
 `energy_date_selection: true` makes the card follow a dashboard's
 `energy-date-selection` card instead of `days_to_show`; `collection_key`
 names the picker when a dashboard has more than one.
+
+The card asks the integration for its buckets rather than the recorder.
+The sums are cumulative and dense, so a period's value is the difference
+between the rows at its two edges: a year of months is thirteen rows a
+state, not every hour of the year reduced on the server, and the card
+loads in the time it takes to draw. A gap in the statistics — downtime
+longer than the recorder keeps — is time in no state, so the bars either
+side of it are shorter by exactly the time it took from them.
 
 The card renders through Home Assistant's own chart component. Because
 that component is internal to the frontend, a Home Assistant release can
