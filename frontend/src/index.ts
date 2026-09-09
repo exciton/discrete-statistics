@@ -1,11 +1,20 @@
 import { DiscreteStatisticsCard } from "./card";
 import { DiscreteStatisticsCardEditor } from "./editor";
 
-customElements.define("discrete-statistics-card", DiscreteStatisticsCard);
-customElements.define(
-  "discrete-statistics-card-editor",
-  DiscreteStatisticsCardEditor
-);
+// The frontend's app bundle replaces window.customElements with the
+// scoped-custom-element-registry polyfill, whose get() and whenDefined()
+// know only what was defined through it. The shell imports this module
+// in parallel with that bundle, so a definition made before the swap is
+// invisible to the dashboard afterwards. <home-assistant> is defined by
+// the app after the swap, and whenDefined() resolves for it on either
+// registry, so defining then lands on the one the app consults.
+customElements.whenDefined("home-assistant").then(() => {
+  customElements.define("discrete-statistics-card", DiscreteStatisticsCard);
+  customElements.define(
+    "discrete-statistics-card-editor",
+    DiscreteStatisticsCardEditor
+  );
+});
 
 declare global {
   interface Window {
