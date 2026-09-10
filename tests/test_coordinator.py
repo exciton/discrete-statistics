@@ -1,5 +1,6 @@
 """The refresh behind every period sensor on an entry."""
 
+import threading
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -266,14 +267,28 @@ async def test_a_compile_during_a_refresh_does_not_seed_the_new_cache(
     def compile_on_the_first_read(*args, **kwargs):
         if not fired:
             fired.append(True)
-            # `sums_at` runs in the executor; the signal is the loop's.
-            hass.loop.call_soon_threadsafe(
-                async_dispatcher_send,
-                hass,
-                compiled_signal(ENTITY),
-                T0.timestamp(),
-                (T0 + timedelta(hours=3)).timestamp(),
-            )
+            # `sums_at` runs in the executor and the signal is the loop's,
+            # so the read waits for the loop to have delivered it. The
+            # race under test is a compile landing after the frame is read
+            # and before the sums are written; a signal merely queued from
+            # here is delivered whenever the loop next looks, which under
+            # load is as easily after this refresh has written both edges
+            # - a different race, in which keeping the sum at an edge at
+            # or before the compiled range is right and one read is
+            # enough.
+            delivered = threading.Event()
+
+            def send() -> None:
+                async_dispatcher_send(
+                    hass,
+                    compiled_signal(ENTITY),
+                    T0.timestamp(),
+                    (T0 + timedelta(hours=3)).timestamp(),
+                )
+                delivered.set()
+
+            hass.loop.call_soon_threadsafe(send)
+            delivered.wait()
         return real_sums_at(*args, **kwargs)
 
     with patch(
@@ -282,9 +297,15 @@ async def test_a_compile_during_a_refresh_does_not_seed_the_new_cache(
     ) as sums_at:
         await coordinator.async_refresh()
         await hass.async_block_till_done()
-        # Two edges read by each refresh: the one racing the compile, and
-        # the one that compile scheduled, which finds an empty cache.
-        assert sums_at.call_count == 4
+        # Both edges twice: the refresh racing the compile reads them into
+        # the cache it started with, and the refresh that compile
+        # scheduled finds the cache that compile installed empty.
+        assert sorted(call.args[2] for call in sums_at.call_args_list) == [
+            T0.timestamp(),
+            T0.timestamp(),
+            (T0 + timedelta(hours=1)).timestamp(),
+            (T0 + timedelta(hours=1)).timestamp(),
+        ]
 
 
 async def test_a_refresh_before_startup_does_not_wait_for_the_recorder(
