@@ -570,6 +570,8 @@ shrink it.
 They are opt-in, one at a time. On the integration's page, open the entry
 for the entity and choose **Add sensor**:
 
+![An entry's row on the integration page, expanded to show three sensors under it — count this month, on count today, on share this month — with its menu open on Add sensor](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/add-sensor.png)
+
 - **States** — one or more, added together, from the states the entity has
   statistics for and the options of an enum sensor; any state can be typed
   in. A state the entry's own settings ignore is refused, since a sensor
@@ -589,6 +591,8 @@ for the entity and choose **Add sensor**:
   has to last a minimum duration is left out until it has. Off, the sensor
   moves once an hour and is a pure function of the statistics.
 
+![The Add a period sensor dialog: a States picker with On chosen, the Measure and Period dropdowns, the Name box showing the composed name greyed out, and the Include the current hour switch](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/sensor-dialog.png)
+
 The sensor belongs to the entry: its settings are edited from the entry's
 page and deleting it there removes the sensor. The entry itself still has
 no entities.
@@ -603,6 +607,8 @@ a sensor over all time on an entity with a month of statistics reads the
 share of that month. A sensor whose states are all ignored by the entry,
 or whose entity has no statistics yet, is `unavailable`, with the reason in
 the log.
+
+![A count sensor's details: state 38, with Period start, Period end, Compiled until and Live attributes](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/sensor-details.png)
 
 **Count.** A count is the number of changes *into* the states inside the
 period, as the statistics record them. A spell already in progress when
