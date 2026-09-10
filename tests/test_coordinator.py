@@ -65,9 +65,15 @@ async def setup_entry(hass, subentries):
         subentries_data=subentries,
     )
     entry.add_to_hass(hass)
-    with patch(
-        "custom_components.discrete_statistics.Compiler.async_compile_incremental",
-        return_value=0,
+    # Every test here drives a coordinator of its own, so the platform's is
+    # left out: it answers the same compile signal, and the reads a test
+    # counts would then be two coordinators' worth.
+    with (
+        patch("custom_components.discrete_statistics.PLATFORMS", []),
+        patch(
+            "custom_components.discrete_statistics.Compiler.async_compile_incremental",
+            return_value=0,
+        ),
     ):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()

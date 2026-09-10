@@ -15,6 +15,7 @@ from homeassistant.const import (
     CONF_ENTITY_ID,
     EVENT_HOMEASSISTANT_STARTED,
     EVENT_HOMEASSISTANT_STOP,
+    Platform,
 )
 from homeassistant.core import CoreState, Event, HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryError, ServiceValidationError
@@ -48,6 +49,8 @@ __all__ = [
     "async_setup_entry",
     "async_unload_entry",
 ]
+
+PLATFORMS = [Platform.SENSOR]
 
 SERVICE_RECOMPUTE = "recompute"
 
@@ -301,6 +304,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     data["entry_configs"][entry.entry_id] = cfg
     entry.async_on_unload(entry.add_update_listener(_async_entry_updated))
 
+    # The sensors read what the compile writes, so they are set up after
+    # the config is registered and before the compile is scheduled.
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
     # Only when Home Assistant is already running, which means a genuine
     # creation or reload. At boot the EVENT_HOMEASSISTANT_STARTED handler
     # compiles every config, and doing it here too would compile twice.
@@ -315,9 +322,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Stop compiling one entity. The shared machinery stays up."""
-    hass.data[DOMAIN]["entry_configs"].pop(entry.entry_id, None)
-    async_delete_issue(hass, DOMAIN, _clash_issue_id(entry))
-    return True
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unloaded:
+        hass.data[DOMAIN]["entry_configs"].pop(entry.entry_id, None)
+        async_delete_issue(hass, DOMAIN, _clash_issue_id(entry))
+    return unloaded
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
