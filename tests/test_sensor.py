@@ -40,6 +40,7 @@ OFF_TODAY = "sensor.discrete_binary_sensor_grid_status_off_duration_today"
 ON_COUNT = "sensor.discrete_binary_sensor_grid_status_on_count_today"
 ON_SHARE = "sensor.discrete_binary_sensor_grid_status_on_share_today"
 ON_YESTERDAY = "sensor.discrete_binary_sensor_grid_status_on_duration_yesterday"
+ON_COUNT_LAST_HOUR = "sensor.discrete_binary_sensor_grid_status_on_count_last_hour"
 
 
 @pytest.fixture(autouse=True)
@@ -56,9 +57,15 @@ async def recorder(recorder_mock, hass):
     return hass
 
 
-def sensor(title, states, metric="duration", period="today", live=True):
+def sensor(title, states, metric="duration", period="today", live=True, **data):
     return ConfigSubentryData(
-        data={"states": states, "metric": metric, "period": period, "live": live},
+        data={
+            "states": states,
+            "metric": metric,
+            "period": period,
+            "live": live,
+            **data,
+        },
         subentry_id=title,
         subentry_type=SUBENTRY_SENSOR,
         title=title,
@@ -198,6 +205,7 @@ async def test_sensors_read_the_statistics(recorder, freezer):
     assert on.attributes["period_end"] == (T0 + timedelta(days=1)).isoformat()
     assert on.attributes["compiled_until"] == (T0 + timedelta(hours=3)).isoformat()
     assert on.attributes["live"] is True
+    assert on.attributes["estimated"] is False
     assert on.name == "on today"
     assert hass.states.get(ON_SHARE).attributes["unit_of_measurement"] == "%"
     assert "unit_of_measurement" not in hass.states.get(ON_COUNT).attributes
@@ -427,3 +435,67 @@ async def test_a_reload_releases_the_old_coordinator(recorder, freezer):
     assert len(changes) == 1
     assert len(refreshes) == 2
     assert hass.states.get(ON_TODAY).state == "1.83"
+
+
+async def test_a_rolling_sensor_slides_with_the_clock(recorder, freezer):
+    """The end-to-end form of history_stats' one-hour `duration` measure."""
+    hass = recorder
+    await seeded(
+        hass, freezer, [sensor("on count last hour", ["on"], "count", "last_hour")]
+    )
+    # Three o'clock: the last hour is the third compiled hour, whole, in
+    # which the entity turned on once.
+    state = hass.states.get(ON_COUNT_LAST_HOUR)
+    assert state.state == "1"
+    assert state.attributes["period_start"] == (T0 + timedelta(hours=2)).isoformat()
+    assert state.attributes["period_end"] == (T0 + timedelta(hours=3)).isoformat()
+    assert state.attributes["estimated"] is False
+
+    # Twenty minutes and a half later: the window no longer holds that
+    # change. Forty minutes of the third hour are read exactly from the
+    # recorder, the rest from the tail; the edges are shown to the minute.
+    with no_hourly_compile():
+        freezer.move_to(T0 + timedelta(hours=3, minutes=20, seconds=30))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done(wait_background_tasks=True)
+    state = hass.states.get(ON_COUNT_LAST_HOUR)
+    assert state.state == "0"
+    assert (
+        state.attributes["period_start"]
+        == (T0 + timedelta(hours=2, minutes=20)).isoformat()
+    )
+    assert (
+        state.attributes["period_end"]
+        == (T0 + timedelta(hours=3, minutes=20)).isoformat()
+    )
+    assert state.attributes["estimated"] is False
+
+
+async def test_a_part_hour_the_recorder_has_lost_is_estimated(recorder, freezer):
+    hass = recorder
+    await seeded(
+        hass, freezer, [sensor("on count last hour", ["on"], "count", "last_hour")]
+    )
+    with no_hourly_compile():
+        freezer.move_to(T0 + timedelta(hours=3, minutes=20))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done(wait_background_tasks=True)
+    assert hass.states.get(ON_COUNT_LAST_HOUR).state == "0"
+
+    # Purge has taken everything before three o'clock: the third hour's
+    # one change, two thirds of the hour in, is estimated as a whole one.
+    with patch.object(
+        Compiler,
+        "async_earliest_state_ts",
+        return_value=(T0 + timedelta(hours=3)).timestamp(),
+    ):
+        async_dispatcher_send(
+            hass,
+            compiled_signal(ENTITY),
+            (T0 + timedelta(hours=2)).timestamp(),
+            (T0 + timedelta(hours=3)).timestamp(),
+        )
+        await hass.async_block_till_done()
+    state = hass.states.get(ON_COUNT_LAST_HOUR)
+    assert state.state == "1"
+    assert state.attributes["estimated"] is True
