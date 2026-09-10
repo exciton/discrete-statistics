@@ -550,7 +550,10 @@ Verified against 2026.8.3.
   which is before a popped `ImportStatisticsTask` has committed. A test
   that seeds statistics with `async_add_external_statistics` and then reads
   them back must wait with `async_wait_recording_done` instead —
-  `tests/test_rows.py`'s `seed` is the pattern.
+  `tests/test_rows.py`'s `seed` is the pattern. `Compiler.async_compile`'s
+  own drain has the same property, so a read scheduled straight after it
+  can still see the watermark from before the commit; the coordinator's
+  live tail covers that gap and the next compile corrects it.
 
 ## Units
 

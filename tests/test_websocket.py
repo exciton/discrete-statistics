@@ -4,9 +4,11 @@ from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
-from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.statistics import async_add_external_statistics
 from homeassistant.setup import async_setup_component
+from pytest_homeassistant_custom_component.components.recorder.common import (
+    async_wait_recording_done,
+)
 
 from custom_components.discrete_statistics.const import DOMAIN, METRIC_DURATION
 from custom_components.discrete_statistics.payload import metadata_for
@@ -79,7 +81,7 @@ async def test_days_in_the_instance_timezone(hass, client):
     # Two full local days at a quarter hour per hour; the range asked for
     # starts mid-morning and the buckets still begin at local midnight.
     seed(hass, ON, local(2026, 3, 2), [0.25 * (i + 1) for i in range(48)])
-    await get_instance(hass).async_block_till_done()
+    await async_wait_recording_done(hass)
 
     response = await ask(client, [ON], local(2026, 3, 2, 9), local(2026, 3, 3, 15))
 
@@ -113,7 +115,7 @@ async def test_every_statistic_is_answered_and_a_hole_is_in_neither_bucket(
         + [None] * 10
         + [20.0 + i for i in range(1, 19)],
     )
-    await get_instance(hass).async_block_till_done()
+    await async_wait_recording_done(hass)
 
     response = await ask(client, [ON, OFF], local(2026, 3, 2), local(2026, 3, 4))
 
@@ -147,7 +149,7 @@ async def test_the_change_is_against_the_sum_before_the_range(hass, client):
     # A series that has been running for a day before the range; the first
     # bucket's change is the difference from its last row, not from zero.
     seed(hass, ON, local(2026, 3, 1), [float(i + 1) for i in range(48)])
-    await get_instance(hass).async_block_till_done()
+    await async_wait_recording_done(hass)
 
     response = await ask(client, [ON], local(2026, 3, 2), local(2026, 3, 3))
 
@@ -164,7 +166,7 @@ async def test_the_change_is_against_the_sum_before_the_range(hass, client):
 
 async def test_a_month_of_daily_rows_is_one_bucket(hass, client):
     seed(hass, ON, local(2026, 2, 1), [0.5 * (i + 1) for i in range(28 * 24)])
-    await get_instance(hass).async_block_till_done()
+    await async_wait_recording_done(hass)
 
     response = await ask(client, [ON], local(2026, 2, 10), local(2026, 2, 20), "month")
 
@@ -184,7 +186,7 @@ async def test_hours_are_the_rows_themselves(hass, client):
     # mid-hour and the buckets still cover whole hours, a hole among them
     # left out.
     seed(hass, ON, local(2026, 3, 2), [1.0, 2.0, None, 3.0, 4.0])
-    await get_instance(hass).async_block_till_done()
+    await async_wait_recording_done(hass)
 
     response = await ask(
         client, [ON], local(2026, 3, 2, 0, 30), local(2026, 3, 2, 3, 30), "hour"
@@ -308,7 +310,7 @@ async def test_buckets_match_the_recorder(hass, client, zone, span):
     first = datetime(2026, 5, 31, tzinfo=tz).astimezone(UTC).replace(minute=0)
     seed(hass, ON, first, ON_SUMS)
     seed(hass, OFF, first, OFF_SUMS)
-    await get_instance(hass).async_block_till_done()
+    await async_wait_recording_done(hass)
 
     # Compared inside the range: both snap the first period outward, but
     # the recorder only for a day or longer, and it answers an end on an
