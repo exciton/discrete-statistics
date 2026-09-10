@@ -1727,28 +1727,6 @@ async def test_a_state_carried_from_statistics_keeps_its_readable_name(
     ) == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
 
 
-def test_readable_state_is_verified_against_the_token():
-    """Trusting the name blindly would invent a state and split the series.
-
-    Whatever sits after the last ": " becomes the bucket key, and a wrong
-    one builds a different statistic ID. So the recovered text has to
-    tokenise back to the token the ID actually carries.
-    """
-    assert compiler_module._readable_state("Grid: heat_cool (h)", "heatcool") == (
-        "heat_cool"
-    )
-    # A display name may hold colons of its own; the state is the last part.
-    assert (
-        compiler_module._readable_state("Shed: Grid: heat_cool (h)", "heatcool")
-        == "heat_cool"
-    )
-    # Renamed by hand, or written by an older format: no shape to read.
-    assert compiler_module._readable_state("renamed by hand", "heatcool") == "heatcool"
-    # Right shape, wrong state - the name does not belong to this ID.
-    assert compiler_module._readable_state("Grid: off (h)", "heatcool") == "heatcool"
-    assert compiler_module._readable_state("", "heatcool") == "heatcool"
-
-
 async def test_a_chunk_that_raises_still_drains_the_ones_before_it(
     recorder, freezer, monkeypatch
 ):

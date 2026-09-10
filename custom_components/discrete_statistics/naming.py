@@ -9,6 +9,7 @@ from `compiler`.
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from homeassistant.const import (
     ATTR_DEVICE_CLASS,
@@ -22,6 +23,12 @@ from homeassistant.helpers.translation import (
     async_get_translations,
     async_translate_state,
 )
+
+from .const import METRIC_COUNT, METRIC_DURATION, METRIC_SHARE
+
+if TYPE_CHECKING:
+    from .config import EntityConfig
+    from .reading import Spec
 
 # States `async_translate_state` cannot render. It returns `unavailable` and
 # `unknown` untouched (translation.py:469) because the frontend renders those
@@ -64,6 +71,43 @@ def describe(hass: HomeAssistant, entity_id: str, name: str | None = None) -> st
     """
     label = display_name(hass, entity_id, name)
     return f"{label} ({entity_id})" if label != entity_id else entity_id
+
+
+# How a composed sensor title reads a period and a metric. The title is a
+# sentence a person would say - "Front Door open time this month" - so
+# the words are prose, not the keys.
+_PERIOD_WORDS = {
+    "today": "today",
+    "yesterday": "yesterday",
+    "this_week": "this week",
+    "last_week": "last week",
+    "this_month": "this month",
+    "last_month": "last month",
+    "this_year": "this year",
+    "last_year": "last year",
+    "all_time": "all time",
+}
+_METRIC_WORDS = {METRIC_DURATION: "time", METRIC_SHARE: "share", METRIC_COUNT: "count"}
+
+
+def sensor_title(hass: HomeAssistant, cfg: EntityConfig, spec: Spec) -> str:
+    """What a period sensor is called when nobody has named it.
+
+    The entity's name, the states as Home Assistant renders them joined by
+    "or", the metric and the period: "Front Door open time this month",
+    "Thermostat heat or cool share this year", "Front Door count today"
+    for a count over every state. Composed on every submit rather than
+    stored, so a renamed entity or state reads right the next time the
+    dialog is saved.
+    """
+    translate = state_translator(hass, cfg.entity_id)
+    parts = [
+        display_name(hass, cfg.entity_id, cfg.name),
+        " or ".join(translate(state) for state in spec.states),
+        _METRIC_WORDS[spec.metric],
+        _PERIOD_WORDS[spec.period],
+    ]
+    return " ".join(part for part in parts if part)
 
 
 def state_translator(hass: HomeAssistant, entity_id: str) -> Callable[[str], str]:

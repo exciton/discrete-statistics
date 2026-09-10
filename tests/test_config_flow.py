@@ -1,10 +1,12 @@
 """Tests for the config flow."""
 
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
 import voluptuous as vol
-from homeassistant.config_entries import SOURCE_USER
+from homeassistant.components.recorder.statistics import async_add_external_statistics
+from homeassistant.config_entries import SOURCE_RECONFIGURE, SOURCE_USER
 from homeassistant.const import (
     ATTR_UNIT_OF_MEASUREMENT,
     CONF_ENTITY_ID,
@@ -27,6 +29,9 @@ from custom_components.discrete_statistics.config import (
 )
 from custom_components.discrete_statistics.config_flow import DISPOSITION_DEFAULT
 from custom_components.discrete_statistics.const import (
+    CONF_LIVE,
+    CONF_METRIC,
+    CONF_PERIOD,
     DEFAULT_IGNORE,
     DEFAULT_IGNORE_SHORT,
     DEFAULT_IGNORE_SHORT_UNKNOWN,
@@ -36,7 +41,13 @@ from custom_components.discrete_statistics.const import (
     DISPOSITION_IGNORE_SHORT,
     DISPOSITION_RECORD,
     DOMAIN,
+    METRIC_COUNT,
+    METRIC_DURATION,
+    METRIC_SHARE,
+    SUBENTRY_SENSOR,
 )
+from custom_components.discrete_statistics.payload import metadata_for
+from custom_components.discrete_statistics.statistic_ids import build
 
 ENTITY = "binary_sensor.grid_status"
 
@@ -1117,3 +1128,258 @@ async def test_a_new_entry_refuses_a_blank_target(recorder):
     )
 
     assert result["errors"] == {"base": "target_unusable"}
+
+
+# --- the sensor subentry flow ----------------------------------------------
+
+ON_TODAY = "sensor.discrete_binary_sensor_grid_status_on_duration_today"
+
+
+async def _recorded(hass, *states, display="Grid Status"):
+    """Give the entity a duration statistic per state, named as a compile names it.
+
+    A state given as `(state, rendered)` is one Home Assistant renders
+    differently from the state itself: the ID carries the state's token, the
+    name the rendered form, which is what a compile writes.
+    """
+    for entry in states:
+        state, rendered = entry if isinstance(entry, tuple) else (entry, entry)
+        async_add_external_statistics(
+            hass,
+            metadata_for(
+                METRIC_DURATION,
+                build(ENTITY, state, METRIC_DURATION),
+                f"{display}: {rendered} (h)",
+            ),
+            [{"start": datetime(2026, 1, 1, tzinfo=timezone.utc), "sum": 0.0}],
+        )
+    await async_wait_recording_done(hass)
+
+
+async def _sensor_form(hass, entry, subentry_id=None):
+    context = (
+        {"source": SOURCE_USER}
+        if subentry_id is None
+        else {"source": SOURCE_RECONFIGURE, "subentry_id": subentry_id}
+    )
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_SENSOR), context=context
+    )
+    assert result["type"] is FlowResultType.FORM
+    return result
+
+
+def _offered(result):
+    [field] = [v for k, v in result["data_schema"].schema.items() if k == CONF_STATES]
+    return field.config["options"]
+
+
+def _suggested_value(result, key):
+    [marker] = [k for k in result["data_schema"].schema if k == key]
+    return (marker.description or {}).get("suggested_value")
+
+
+def _sensor_input(states=("on",), metric=METRIC_DURATION, period="today", **rest):
+    return {
+        CONF_STATES: list(states),
+        CONF_METRIC: metric,
+        CONF_PERIOD: period,
+        CONF_LIVE: True,
+        **rest,
+    }
+
+
+async def test_the_sensor_flow_offers_the_recorded_states(recorder):
+    hass = recorder
+    await _recorded(hass, "off", "on")
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+
+    result = await _sensor_form(hass, entry)
+    assert [option["value"] for option in _offered(result)] == ["off", "on"]
+    assert result["description_placeholders"]["entity"].startswith("[Grid Status (")
+
+
+async def test_the_sensor_flow_labels_states_as_home_assistant_renders_them(
+    recorder, entity_registry
+):
+    hass = recorder
+    assert await async_setup_component(hass, "binary_sensor", {})
+    await hass.async_block_till_done()
+    entity_registry.async_get_or_create(
+        "binary_sensor",
+        "demo",
+        "door-1",
+        suggested_object_id="grid_status",
+        original_name="Front Door",
+        original_device_class="door",
+    )
+    # Named as the compile names a door's statistics: the state half is the
+    # rendered one, which the flow reads back to the token.
+    await _recorded(hass, ("on", "Open"), ("off", "Closed"), display="Front Door")
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+
+    result = await _sensor_form(hass, entry)
+    assert _offered(result) == [
+        {"value": "off", "label": "Closed"},
+        {"value": "on", "label": "Open"},
+    ]
+
+
+async def test_the_sensor_flow_offers_an_enums_options_resolved(recorder):
+    hass = recorder
+    hass.states.async_set(
+        ENTITY, "auto", {"options": ["auto", "eco", "off", "unknown"]}
+    )
+    entry = await _entry_with(
+        hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN, CONF_STATES: {"eco": "auto"}}
+    )
+
+    result = await _sensor_form(hass, entry)
+    # `eco` is recorded as `auto`, so it is `auto`; `unknown` is ignored
+    # under record_known and was never recorded, so it is not a choice.
+    assert [option["value"] for option in _offered(result)] == ["auto", "off"]
+
+
+async def test_the_sensor_flow_creates_a_subentry_and_its_sensor(recorder):
+    hass = recorder
+    await _recorded(hass, "on")
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+
+    result = await _sensor_form(hass, entry)
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], _sensor_input()
+    )
+    await hass.async_block_till_done()
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == "Grid Status on time today"
+    [subentry] = entry.subentries.values()
+    assert subentry.subentry_type == SUBENTRY_SENSOR
+    assert subentry.title == "Grid Status on time today"
+    assert dict(subentry.data) == {
+        CONF_STATES: ["on"],
+        CONF_METRIC: METRIC_DURATION,
+        CONF_PERIOD: "today",
+        CONF_LIVE: True,
+        CONF_NAME: None,
+    }
+    assert hass.states.get(ON_TODAY) is not None
+
+
+async def test_a_typed_name_titles_the_sensor(recorder):
+    hass = recorder
+    await _recorded(hass, "on")
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+
+    result = await _sensor_form(hass, entry)
+    assert _suggested_value(result, CONF_NAME) is None
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], _sensor_input(**{CONF_NAME: "Outage time"})
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == "Outage time"
+    [subentry] = entry.subentries.values()
+    assert subentry.data[CONF_NAME] == "Outage time"
+
+
+async def test_a_state_is_stored_as_the_entry_resolves_it(recorder):
+    hass = recorder
+    entry = await _entry_with(
+        hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN, CONF_STATES: {"eco": "auto"}}
+    )
+
+    result = await _sensor_form(hass, entry)
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], _sensor_input(states=["eco", "auto"])
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    [subentry] = entry.subentries.values()
+    assert subentry.data[CONF_STATES] == ["auto"]
+    assert result["title"] == "Grid Status auto time today"
+
+
+@pytest.mark.parametrize(
+    ("states", "error"),
+    [(["unknown"], "state_ignored"), (["  "], "state_unusable")],
+)
+async def test_a_state_the_entry_cannot_record_keeps_the_form_open(
+    recorder, states, error
+):
+    hass = recorder
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+
+    result = await _sensor_form(hass, entry)
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], _sensor_input(states=states)
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {CONF_STATES: error}
+    assert not entry.subentries
+
+
+async def test_a_state_already_recorded_is_accepted_though_ignored_now(recorder):
+    """The entry's settings may have changed after the statistic was written."""
+    hass = recorder
+    await _recorded(hass, "unknown")
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+
+    result = await _sensor_form(hass, entry)
+    assert [option["value"] for option in _offered(result)] == ["unknown"]
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], _sensor_input(states=["unknown"])
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    [subentry] = entry.subentries.values()
+    assert subentry.data[CONF_STATES] == ["unknown"]
+
+
+async def test_all_states_is_only_a_count(recorder):
+    hass = recorder
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+
+    result = await _sensor_form(hass, entry)
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], _sensor_input(states=[], metric=METRIC_SHARE)
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {CONF_METRIC: "all_states_count_only"}
+
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], _sensor_input(states=[], metric=METRIC_COUNT)
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == "Grid Status count today"
+    [subentry] = entry.subentries.values()
+    assert subentry.data[CONF_STATES] == []
+
+
+async def test_reconfiguring_a_sensor_keeps_its_entity(recorder, entity_registry):
+    hass = recorder
+    await _recorded(hass, "on", "off")
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+    result = await _sensor_form(hass, entry)
+    await hass.config_entries.subentries.async_configure(
+        result["flow_id"], _sensor_input()
+    )
+    await hass.async_block_till_done()
+    [subentry_id] = entry.subentries
+    registry_entry = entity_registry.async_get(ON_TODAY)
+    assert registry_entry.unique_id == subentry_id
+
+    result = await _sensor_form(hass, entry, subentry_id)
+    assert result["step_id"] == "reconfigure"
+    assert _suggested_value(result, CONF_STATES) == ["on"]
+    assert _suggested_value(result, CONF_PERIOD) == "today"
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], _sensor_input(metric=METRIC_COUNT, period="this_month")
+    )
+    await hass.async_block_till_done()
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+
+    subentry = entry.subentries[subentry_id]
+    assert subentry.data[CONF_METRIC] == METRIC_COUNT
+    assert subentry.title == "Grid Status on count this month"
+    # Same unique_id, so the same registry entry - it keeps its entity ID
+    # even though the suggested one would now differ.
+    assert entity_registry.async_get(ON_TODAY).unique_id == subentry_id
+    assert hass.states.get(ON_TODAY) is not None

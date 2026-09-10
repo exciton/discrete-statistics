@@ -2,7 +2,7 @@
 
 import pytest
 
-from custom_components.discrete_statistics.bucketer import bucket, hour_start
+from custom_components.discrete_statistics.bucketer import bucket, hour_start, tally
 from custom_components.discrete_statistics.const import HOUR
 
 # 2026-01-01T00:00:00Z
@@ -113,3 +113,31 @@ def test_transitions_outside_the_window_are_ignored():
         T0 + HOUR,
     )
     assert result == {("on", T0): (HOUR, 0)}
+
+
+def test_tally_sums_a_window_per_state():
+    transitions = [(T0 + 600, "on"), (T0 + 1200, "off"), (T0 + 2 * HOUR, "on")]
+    assert tally("off", transitions, T0, T0 + 3 * HOUR) == {
+        "off": (600 + 2 * HOUR - 1200, 1),
+        "on": (600 + HOUR, 2),
+    }
+
+
+def test_tally_advances_the_carried_state_past_transitions_before_the_start():
+    # The tail is [max(period_start, timeline.start), now): a period that
+    # starts inside the timeline has the state in effect at its start
+    # carried in, and the transitions before it are not counted.
+    transitions = [(T0 + 600, "on"), (T0 + 1200, "off"), (T0 + 2 * HOUR, "on")]
+    assert tally("off", transitions, T0 + HOUR, T0 + 3 * HOUR) == {
+        "off": (HOUR, 0),
+        "on": (HOUR, 1),
+    }
+
+
+def test_tally_is_empty_for_an_empty_window():
+    assert tally("on", [(T0 + 1, "off")], T0, T0) == {}
+    assert tally("on", [], T0 + 1, T0) == {}
+
+
+def test_tally_of_an_unknown_carried_state_counts_only_after_the_first_transition():
+    assert tally(None, [(T0 + HOUR, "on")], T0, T0 + 2 * HOUR) == {"on": (HOUR, 1)}

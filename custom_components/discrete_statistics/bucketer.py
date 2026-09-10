@@ -84,3 +84,44 @@ def bucket(
 
     add_duration(current, cursor, window_end)
     return result
+
+
+def tally(
+    carried: str | None,
+    transitions: list[tuple[float, str]],
+    start: float,
+    end: float,
+) -> dict[str, tuple[float, int]]:
+    """Seconds and transitions per state over [start, end), summed over hours.
+
+    The live tail of a period sensor: `bucket` over the same rules the
+    compiler writes by, then folded per state. A count is the number of
+    transitions *into* that state inside [start, end) - a spell already in
+    progress when the window opens is not a transition, so it contributes
+    its seconds and no count.
+
+    Transitions before `start` move the carried state along rather than
+    counting, as `canonicalise` folds rows before a window into the state
+    carried into it. A carried state of None is a timeline that opens in
+    no known state: the window opens at its first transition instead,
+    which `bucket` then counts as the boundary transition it is.
+    """
+    if end <= start:
+        return {}
+    index = 0
+    while index < len(transitions) and transitions[index][0] < start:
+        carried = transitions[index][1]
+        index += 1
+    if carried is None:
+        if index == len(transitions):
+            return {}
+        start, carried = transitions[index]
+        if end <= start:
+            return {}
+    result: dict[str, tuple[float, int]] = {}
+    for (state, _), (seconds, count) in bucket(
+        carried, transitions[index:], start, end
+    ).items():
+        had_seconds, had_count = result.get(state, (0.0, 0))
+        result[state] = (had_seconds + seconds, had_count + count)
+    return result
