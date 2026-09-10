@@ -6,6 +6,9 @@ import pytest
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.statistics import async_add_external_statistics
 from homeassistant.setup import async_setup_component
+from pytest_homeassistant_custom_component.components.recorder.common import (
+    async_wait_recording_done,
+)
 
 from custom_components.discrete_statistics import rows
 from custom_components.discrete_statistics.const import METRIC_DURATION
@@ -39,7 +42,11 @@ async def seed(hass, statistic_id, start, sums):
             if value is not None
         ],
     )
-    await get_instance(hass).async_block_till_done()
+    # `Recorder.async_block_till_done` returns immediately when the queue is
+    # empty, and it is empty from the moment the recorder thread picks the
+    # import up - before it has committed it. `async_wait_recording_done`
+    # waits on a task queued behind the import, so the rows are there.
+    await async_wait_recording_done(hass)
 
 
 async def sums_at(hass, ids, edge):
