@@ -20,7 +20,10 @@ from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
+    ConfigSubentry,
+    ConfigSubentryFlow,
     OptionsFlow,
+    SubentryFlowResult,
 )
 from homeassistant.const import (
     ATTR_UNIT_OF_MEASUREMENT,
@@ -42,12 +45,17 @@ from .config import (
     CONF_MIN_DURATION,
     CONF_STATES,
     DISPOSITIONS,
+    EntityConfig,
     blank_error,
+    entity_config_from_entry,
     is_configured,
     min_duration_error,
     uses_ignore_short,
 )
 from .const import (
+    CONF_LIVE,
+    CONF_METRIC,
+    CONF_PERIOD,
     DEFAULT_IGNORE_SHORT,
     DEFAULT_IGNORE_SHORT_UNKNOWN,
     DEFAULT_MIN_DURATION,
@@ -57,9 +65,22 @@ from .const import (
     DISPOSITION_IGNORE_SHORT,
     DISPOSITION_RECORD,
     DOMAIN,
+    METRIC_COUNT,
+    METRIC_DURATION,
+    SENSOR_METRICS,
+    SUBENTRY_SENSOR,
 )
-from .naming import describe, display_name
-from .statistic_ids import is_blank
+from .naming import (
+    async_warm_state_translations,
+    describe,
+    display_name,
+    sensor_title,
+    state_translator,
+)
+from .payload import readable_state
+from .periods import PERIODS
+from .reading import Spec, spec_from
+from .statistic_ids import build, is_blank, parse, state_token
 
 # `ignore` is deliberately absent. With no per-state mapping to supply
 # exceptions it makes resolve() return None for every state, so nothing is
@@ -430,6 +451,189 @@ async def _async_options_form(
     )
 
 
+async def async_offered_states(
+    hass: HomeAssistant, cfg: EntityConfig, existing: Mapping[str, str]
+) -> list[selector.SelectOptionDict]:
+    """The states a sensor can be over, labelled as Home Assistant renders them.
+
+    Two sources, the same as the card's and the entity's own: every
+    duration statistic the entity has - the state as its name holds it,
+    which catches states no longer reported - and an enum's live `options`
+    through `resolve()`, the one case a never-seen state is a real choice.
+    One per token, so a state the entry maps onto another is offered once.
+    Not the recorder's distinct states: those only add the last hour, and
+    the box can be typed into.
+    """
+    await async_warm_state_translations(hass, cfg.entity_id)
+    translate = state_translator(hass, cfg.entity_id)
+    offered: dict[str, str] = {}
+    for statistic_id, name in existing.items():
+        if (parts := parse(statistic_id)) is not None and parts[2] == METRIC_DURATION:
+            offered.setdefault(parts[1], readable_state(name, parts[1]))
+    if (state := hass.states.get(cfg.entity_id)) is not None:
+        for option in state.attributes.get(ATTR_OPTIONS) or []:
+            resolved = cfg.resolve(option)
+            if resolved is not None and not is_blank(resolved):
+                offered.setdefault(state_token(resolved), resolved)
+    return sorted(
+        (
+            selector.SelectOptionDict(value=state, label=translate(state))
+            for state in offered.values()
+        ),
+        key=lambda option: option["label"].casefold(),
+    )
+
+
+def _sensor_states(
+    cfg: EntityConfig, existing: Mapping[str, str], raw_states: list[str]
+) -> tuple[list[str], dict[str, str]]:
+    """The states a sensor reads, as the entry records them, or why not.
+
+    Resolved through the entry's own mapping so the sensor reads the
+    statistic the compile writes. A state the entry ignores is refused -
+    a sensor over it would sit at zero - unless it already has a duration
+    statistic, in which case the settings changed after it was written and
+    there is history to read.
+    """
+    states: list[str] = []
+    for raw in (raw.strip() for raw in raw_states):
+        if is_blank(raw):
+            return [], {CONF_STATES: "state_unusable"}
+        resolved = cfg.resolve(raw)
+        if (
+            resolved is None
+            and build(cfg.entity_id, raw, METRIC_DURATION) not in existing
+        ):
+            return [], {CONF_STATES: "state_ignored"}
+        state = resolved or raw
+        if state not in states:
+            states.append(state)
+    return states, {}
+
+
+def _sensor_schema(
+    offered: list[selector.SelectOptionDict], default_name: str
+) -> vol.Schema:
+    return vol.Schema(
+        {
+            vol.Optional(CONF_STATES, default=[]): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=offered,
+                    multiple=True,
+                    custom_value=True,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Required(CONF_METRIC, default=METRIC_DURATION): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=list(SENSOR_METRICS),
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                    translation_key=CONF_METRIC,
+                )
+            ),
+            vol.Required(CONF_PERIOD, default="this_month"): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=list(PERIODS),
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                    translation_key=CONF_PERIOD,
+                )
+            ),
+            vol.Optional(CONF_NAME): _name_field(default_name),
+            vol.Required(CONF_LIVE, default=True): selector.BooleanSelector(),
+        }
+    )
+
+
+class SensorSubentryFlow(ConfigSubentryFlow):
+    """Add or edit one period sensor on an entry.
+
+    One form for both: the sensor's states, metric and period, its name,
+    and whether it follows the entity live. Creating and reconfiguring
+    differ only in what the form is filled with and what saving it does.
+    """
+
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        return await self._async_form("user", user_input, None)
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        return await self._async_form(
+            "reconfigure", user_input, self._get_reconfigure_subentry()
+        )
+
+    async def _async_form(
+        self,
+        step_id: str,
+        user_input: dict[str, Any] | None,
+        subentry: ConfigSubentry | None,
+    ) -> SubentryFlowResult:
+        entry = self._get_entry()
+        cfg = entity_config_from_entry(entry.data, entry.options)
+        existing = await self.hass.data[DOMAIN]["compiler"].async_existing(
+            cfg.entity_id
+        )
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            states, errors = _sensor_states(
+                cfg, existing, user_input.get(CONF_STATES, [])
+            )
+            metric = user_input[CONF_METRIC]
+            if not errors and not states and metric != METRIC_COUNT:
+                # Time in "any state" is the whole period; only the count
+                # of changes means something over every state.
+                errors[CONF_METRIC] = "all_states_count_only"
+            if not errors:
+                spec = Spec(
+                    tuple(states),
+                    metric,
+                    user_input[CONF_PERIOD],
+                    user_input[CONF_LIVE],
+                )
+                name = user_input.get(CONF_NAME) or None
+                data = {
+                    CONF_STATES: states,
+                    CONF_METRIC: metric,
+                    CONF_PERIOD: spec.period,
+                    CONF_LIVE: spec.live,
+                    CONF_NAME: name,
+                }
+                title = name or sensor_title(self.hass, cfg, spec)
+                if subentry is None:
+                    return self.async_create_entry(title=title, data=data)
+                return self.async_update_and_abort(
+                    entry, subentry, data=data, title=title
+                )
+
+        # What is in the box, or was stored, is what the greyed-out name
+        # describes; a stored name of None is left out so the box stays
+        # empty rather than suggesting "None".
+        current = user_input or {
+            k: v
+            for k, v in (subentry.data if subentry else {}).items()
+            if v is not None
+        }
+        return self.async_show_form(
+            step_id=step_id,
+            data_schema=self.add_suggested_values_to_schema(
+                _sensor_schema(
+                    await async_offered_states(self.hass, cfg, existing),
+                    sensor_title(self.hass, cfg, spec_from(current)),
+                ),
+                current,
+            ),
+            errors=errors,
+            description_placeholders={
+                "entity": (
+                    f"[{describe(self.hass, cfg.entity_id, cfg.name)}]"
+                    f"(/history?entity_id={cfg.entity_id})"
+                ),
+            },
+        )
+
+
 class DiscreteStatisticsConfigFlow(ConfigFlow, domain=DOMAIN):
     """Create one tracked entity.
 
@@ -510,6 +714,14 @@ class DiscreteStatisticsConfigFlow(ConfigFlow, domain=DOMAIN):
     def async_get_options_flow(_config_entry: ConfigEntry) -> OptionsFlow:
         """Return the options flow. entity_id is not editable here."""
         return DiscreteStatisticsOptionsFlow()
+
+    @classmethod
+    @callback
+    def async_get_supported_subentry_types(
+        cls, config_entry: ConfigEntry
+    ) -> dict[str, type[ConfigSubentryFlow]]:
+        """Period sensors hang off the entry as subentries."""
+        return {SUBENTRY_SENSOR: SensorSubentryFlow}
 
 
 class DiscreteStatisticsOptionsFlow(OptionsFlow):

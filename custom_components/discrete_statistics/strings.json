@@ -86,6 +86,60 @@
       "target_unusable": "A state name typed here needs letters or digits, so it can name a statistic."
     }
   },
+  "config_subentries": {
+    "sensor": {
+      "entry_type": "Sensor",
+      "initiate_flow": {
+        "user": "Add sensor"
+      },
+      "step": {
+        "user": {
+          "title": "Add a period sensor",
+          "description": "A number read from the statistics recorded for **{entity}**: how long it spent in a state, what share of the period that was, or how often it changed.",
+          "data": {
+            "states": "States",
+            "metric": "Measure",
+            "period": "Period",
+            "name": "Name",
+            "live": "Include the current hour"
+          },
+          "data_description": {
+            "states": "Pick one or more, or type a state. Several are added together. Leave empty to count changes between every state.",
+            "metric": "Time is in hours. Share is the time as a percentage of the period so far.",
+            "period": "Periods start at midnight, on Monday, on the first of the month or the first of January, in this Home Assistant's time zone.",
+            "name": "Leave blank for a name made from the entity, the states and the period.",
+            "live": "Statistics are compiled hourly. With this on, the sensor follows the entity's changes since the last compiled hour as they happen; with it off, it updates once an hour."
+          }
+        },
+        "reconfigure": {
+          "title": "Period sensor",
+          "description": "A number read from the statistics recorded for **{entity}**: how long it spent in a state, what share of the period that was, or how often it changed.",
+          "data": {
+            "states": "States",
+            "metric": "Measure",
+            "period": "Period",
+            "name": "Name",
+            "live": "Include the current hour"
+          },
+          "data_description": {
+            "states": "Pick one or more, or type a state. Several are added together. Leave empty to count changes between every state.",
+            "metric": "Time is in hours. Share is the time as a percentage of the period so far.",
+            "period": "Periods start at midnight, on Monday, on the first of the month or the first of January, in this Home Assistant's time zone.",
+            "name": "Leave blank for a name made from the entity, the states and the period.",
+            "live": "Statistics are compiled hourly. With this on, the sensor follows the entity's changes since the last compiled hour as they happen; with it off, it updates once an hour."
+          }
+        }
+      },
+      "error": {
+        "state_ignored": "That state is not recorded under this entry's settings, so a sensor over it would never move. Change the entry's states first, or pick a recorded one.",
+        "state_unusable": "A state name needs letters or digits.",
+        "all_states_count_only": "With no states picked, only the number of changes can be measured: the time in any state is the whole period."
+      },
+      "abort": {
+        "reconfigure_successful": "The sensor was updated."
+      }
+    }
+  },
   "selector": {
     "default": {
       "options": {
@@ -99,6 +153,26 @@
       "options": {
         "unknown": "Treat as unknown",
         "ignore": "Ignore - carry the previous state forward"
+      }
+    },
+    "metric": {
+      "options": {
+        "duration": "Time in the states, in hours",
+        "share": "Share of the period in the states, as a percentage",
+        "count": "Number of changes into the states"
+      }
+    },
+    "period": {
+      "options": {
+        "today": "Today",
+        "yesterday": "Yesterday",
+        "this_week": "This week",
+        "last_week": "Last week",
+        "this_month": "This month",
+        "last_month": "Last month",
+        "this_year": "This year",
+        "last_year": "Last year",
+        "all_time": "All time"
       }
     },
     "disposition": {
