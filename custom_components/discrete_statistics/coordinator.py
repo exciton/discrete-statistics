@@ -38,7 +38,7 @@ from homeassistant.util import dt as dt_util
 from . import rows
 from .compiler import Compiler, compiled_signal
 from .const import DOMAIN, HOUR, SUBENTRY_SENSOR
-from .reading import Frame, Reading, compute, edges, spec_from
+from .reading import Frame, Reading, compute, edges_of, plan, spec_from
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -149,7 +149,7 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
 
         wanted: set[float] = set()
         for spec in specs.values():
-            wanted |= edges(spec, frame, now, tz)
+            wanted |= edges_of(plan(spec, frame, now, tz))
         for edge in wanted:
             if all((sid, edge) in sums for sid in frame.existing):
                 continue
@@ -163,6 +163,8 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
             return sums.get((statistic_id, edge), 0.0)
 
         return {
-            subentry_id: compute(cfg, spec, frame, sum_at, timeline, now, tz)
+            subentry_id: compute(
+                cfg, spec, frame, sum_at, lambda partial: None, timeline, now, tz
+            )
             for subentry_id, spec in specs.items()
         }
