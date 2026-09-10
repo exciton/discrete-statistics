@@ -502,7 +502,7 @@ Verified against 2026.8.3.
   success path. A chunk that raises leaves earlier chunks' writes queued, and
   density is read live from `statistics_meta` — so the next compile could
   see half of them and leave the rest sparse.
-- The two `_async_existing` reads in an incremental compile are not
+- The two `async_existing` reads in an incremental compile are not
   redundant. Reusing the first one — taken before `_async_watermark`'s
   round-trips — makes a recently deleted statistic intermittently still
   visible, and the deletion tests flaky about one run in three.

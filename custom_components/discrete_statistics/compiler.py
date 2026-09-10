@@ -16,6 +16,7 @@ from homeassistant.components.recorder.statistics import (
     statistics_during_period,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util import dt as dt_util
 
 from .bucketer import bucket, first_whole_hour, hour_start
@@ -75,6 +76,26 @@ class _ChunkState(NamedTuple):
     carried: str | None
 
 
+class Timeline(NamedTuple):
+    """The resolved timeline of a window, as a compile would bucket it.
+
+    What `async_tail` hands the period sensors: the state the window opened
+    in and every canonical transition inside it, over exactly the rows,
+    carry chain and dispositions a compile of the same window reads - so a
+    sensor's live tail is what the next compile writes, a provisional
+    `ignore_short` verdict included.
+    """
+
+    start: float
+    carried: str
+    transitions: list[tuple[float, str]]
+
+
+def compiled_signal(entity_id: str) -> str:
+    """The dispatcher signal sent after an entity's compile has written."""
+    return f"{DOMAIN}_compiled_{entity_id}"
+
+
 def _carried_from_statistics(
     values: Mapping[str, float], names: Mapping[str, str]
 ) -> str | None:
@@ -111,7 +132,7 @@ class Compiler:
     def __init__(self, hass: HomeAssistant) -> None:
         self._hass = hass
 
-    async def _async_existing(self, entity_id: str) -> dict[str, str]:
+    async def async_existing(self, entity_id: str) -> dict[str, str]:
         """Return {statistic_id: stored name} for one entity's statistics.
 
         The recorder's metadata is the only record of which statistics an
@@ -134,7 +155,7 @@ class Compiler:
         been deleted - there is nothing to trail, so it compiles the whole
         of the entity's retained history instead.
         """
-        existing = await self._async_existing(cfg.entity_id)
+        existing = await self.async_existing(cfg.entity_id)
         watermark = await self._async_watermark(existing)
         if watermark is None:
             start = await self._async_earliest_state_ts(cfg.entity_id)
@@ -166,7 +187,7 @@ class Compiler:
             return 0
 
         await async_warm_state_translations(self._hass, cfg.entity_id)
-        existing = await self._async_existing(cfg.entity_id)
+        existing = await self.async_existing(cfg.entity_id)
         if window_start < (evidence := first_whole_hour(earliest)):
             window_start = await self._async_opening_floor(
                 existing, window_start, evidence
@@ -206,7 +227,43 @@ class Compiler:
             # the window after that would restart those at zero.
             await get_instance(self._hass).async_block_till_done()
 
+        if compiled:
+            # The sensors re-read after a compile rather than on a clock of
+            # their own: the write is drained above, so what they read now
+            # is what was just written.
+            async_dispatcher_send(self._hass, compiled_signal(cfg.entity_id))
+
         return compiled
+
+    async def async_tail(
+        self, cfg: EntityConfig, start: float, end: float
+    ) -> Timeline | None:
+        """The timeline of [start, end) as a compile would read it. Writes nothing.
+
+        `start` is an hour the sensors know is not compiled - the end of
+        the watermark hour - so the carry is read as the opening chunk of a
+        compile reads it, and the window may open later than asked for the
+        reasons `_open_window` gives. None when no source can open it.
+        """
+        if end <= start:
+            return None
+        existing = await self.async_existing(cfg.entity_id)
+        _, previous_hour = await self._async_base(existing, start)
+        state = _ChunkState(
+            sums={},
+            existing=existing,
+            carried=_carried_from_statistics(previous_hour, existing),
+        )
+        rows = await self._async_history(cfg, start - HOUR, end)
+        opened = self._open_window(cfg, rows, start, end, state)
+        return None if opened is None else Timeline(*opened)
+
+    async def async_compiled(
+        self, entity_id: str
+    ) -> tuple[dict[str, str], float | None]:
+        """The entity's statistics and the newest hour compiled into them."""
+        existing = await self.async_existing(entity_id)
+        return existing, await self._async_watermark(existing)
 
     async def _async_history(
         self, cfg: EntityConfig, query_start: float, window_end: float

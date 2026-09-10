@@ -36,3 +36,11 @@ DEFAULT_MIN_DURATION = 60.0
 # Skip a scheduled run when the recorder queue is deeper than this. The
 # watermark is data-derived, so a skipped run costs nothing but latency.
 BACKLOG_THRESHOLD = 1000
+
+# Period sensors: one per config subentry of this type.
+SUBENTRY_SENSOR = "sensor"
+METRIC_SHARE = "share"
+SENSOR_METRICS = (METRIC_DURATION, METRIC_SHARE, METRIC_COUNT)
+CONF_METRIC = "metric"
+CONF_PERIOD = "period"
+CONF_LIVE = "live"
