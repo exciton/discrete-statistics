@@ -158,7 +158,7 @@ class Compiler:
         existing = await self.async_existing(cfg.entity_id)
         watermark = await self._async_watermark(existing)
         if watermark is None:
-            start = await self._async_earliest_state_ts(cfg.entity_id)
+            start = await self.async_earliest_state_ts(cfg.entity_id)
             if start is None:
                 return 0
         else:
@@ -175,7 +175,7 @@ class Compiler:
         self, cfg: EntityConfig, start: float | None, end: float | None = None
     ) -> int:
         """Compile [start, end) for one entity. Returns hours compiled."""
-        earliest = await self._async_earliest_state_ts(cfg.entity_id)
+        earliest = await self.async_earliest_state_ts(cfg.entity_id)
         if earliest is None:
             return 0
         window_start = hour_start(earliest if start is None else start)
@@ -230,8 +230,11 @@ class Compiler:
         if compiled:
             # The sensors re-read after a compile rather than on a clock of
             # their own: the write is drained above, so what they read now
-            # is what was just written.
-            async_dispatcher_send(self._hass, compiled_signal(cfg.entity_id))
+            # is what was just written. The range says which of their
+            # cached sums a rewrite could have moved.
+            async_dispatcher_send(
+                self._hass, compiled_signal(cfg.entity_id), window_start, window_end
+            )
 
         return compiled
 
@@ -597,7 +600,7 @@ class Compiler:
         ]
         return rows[-1]["sum"] if rows else None
 
-    async def _async_earliest_state_ts(self, entity_id: str) -> float | None:
+    async def async_earliest_state_ts(self, entity_id: str) -> float | None:
         """Return the timestamp to open an entity's history at, or None.
 
         The oldest retained state, or - when the recorder holds nothing at

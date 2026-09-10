@@ -414,7 +414,12 @@ async def test_a_reload_releases_the_old_coordinator(recorder, freezer):
         # coordinator and each cost one refresh.
         changes.clear()
         refreshes.clear()
-        async_dispatcher_send(hass, compiled_signal(ENTITY))
+        async_dispatcher_send(
+            hass,
+            compiled_signal(ENTITY),
+            T0.timestamp(),
+            (T0 + timedelta(hours=3)).timestamp(),
+        )
         await hass.async_block_till_done()
         assert len(refreshes) == 1
         await changed_state(hass, freezer, T0 + timedelta(hours=3, minutes=20), "off")

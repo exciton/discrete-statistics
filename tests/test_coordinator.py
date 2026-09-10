@@ -230,7 +230,11 @@ async def test_a_compile_during_a_refresh_does_not_seed_the_new_cache(
             fired.append(True)
             # `sums_at` runs in the executor; the signal is the loop's.
             hass.loop.call_soon_threadsafe(
-                async_dispatcher_send, hass, compiled_signal(ENTITY)
+                async_dispatcher_send,
+                hass,
+                compiled_signal(ENTITY),
+                T0.timestamp(),
+                (T0 + timedelta(hours=3)).timestamp(),
             )
         return real_sums_at(*args, **kwargs)
 

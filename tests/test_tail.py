@@ -148,10 +148,12 @@ async def test_an_open_short_spell_is_provisional(recorder, freezer):
     )
 
 
-async def test_compile_signals_when_done(recorder, freezer):
+async def test_compile_signals_what_it_wrote(recorder, freezer):
     hass = recorder
     heard = []
-    async_dispatcher_connect(hass, compiled_signal(ENTITY), lambda: heard.append(1))
+    async_dispatcher_connect(
+        hass, compiled_signal(ENTITY), lambda start, end: heard.append((start, end))
+    )
     compiler = Compiler(hass)
     # Nothing to compile: no signal.
     await compiler.async_compile(cfg(), T0.timestamp())
@@ -161,7 +163,8 @@ async def test_compile_signals_when_done(recorder, freezer):
     freezer.move_to(T0 + timedelta(hours=2))
     await compiler.async_compile(cfg(), T0.timestamp())
     await hass.async_block_till_done()
-    assert heard == [1]
+    # The hours written: T0 and the one after it, up to the hour in progress.
+    assert heard == [(T0.timestamp(), T0.timestamp() + 2 * HOUR)]
 
 
 async def test_async_compiled_reports_the_watermark(recorder, freezer):

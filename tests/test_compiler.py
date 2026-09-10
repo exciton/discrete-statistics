@@ -1519,7 +1519,7 @@ async def test_a_state_older_than_the_purge_horizon_is_still_carried(recorder, f
     await get_instance(hass).async_block_till_done()
     # Nothing left in the recorder, so the opening moment now comes from the
     # live state: it began exactly on the hour, so that hour is usable whole.
-    assert await Compiler(hass)._async_earliest_state_ts(ENTITY) == start.timestamp()
+    assert await Compiler(hass).async_earliest_state_ts(ENTITY) == start.timestamp()
 
     await Compiler(hass).async_compile(cfg(), (start + timedelta(hours=1)).timestamp())
 

@@ -79,7 +79,7 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
         return None if self._frame is None else self._frame.watermark_end
 
     @callback
-    def _compiled(self) -> None:
+    def _compiled(self, start: float, end: float) -> None:
         # The statistics changed: everything read from them is stale.
         self._frame = None
         self._sums = {}

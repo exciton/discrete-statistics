@@ -106,7 +106,8 @@ to offer their states; so the invariants below are the compiler's alone.
 `Timeline` and never written, so a live sensor agrees with what the next
 compile writes, provisional `ignore_short` verdict included. After a
 compile that wrote anything, `async_compile` sends `compiled_signal(entity_id)`
-on the dispatcher; the coordinator listens and refreshes. A refresh drains
+on the dispatcher with the range it wrote; the coordinator listens and
+refreshes. A refresh drains
 the recorder's write queue first, whichever of its triggers asked for it,
 and a change of the entity's state asks through the coordinator's
 `REFRESH_COOLDOWN` debouncer rather than refreshing outright: a drain per
@@ -417,7 +418,7 @@ for this integration. `_carried_from_state_machine` asks the state machine,
 which still holds both the state and when it last changed.
 `last_changed <= window_start` is what makes it sound rather than a guess: it
 proves the state was already in effect when the window opened.
-`_async_earliest_state_ts` opens such an entity's history at the first *whole*
+`async_earliest_state_ts` opens such an entity's history at the first *whole*
 hour after `last_changed` for exactly that reason — the hour containing the
 change starts before it, so the carried state would be refused and the entity
 would compile nothing at all. Refusing it
