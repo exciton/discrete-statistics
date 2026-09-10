@@ -106,12 +106,20 @@ to offer their states; so the invariants below are the compiler's alone.
 `Timeline` and never written, so a live sensor agrees with what the next
 compile writes, provisional `ignore_short` verdict included. After a
 compile that wrote anything, `async_compile` sends `compiled_signal(entity_id)`
-on the dispatcher; the coordinator listens and refreshes.
+on the dispatcher; the coordinator listens and refreshes. A refresh drains
+the recorder's write queue first, whichever of its triggers asked for it,
+and a change of the entity's state asks through the coordinator's
+`REFRESH_COOLDOWN` debouncer rather than refreshing outright: a drain per
+change commits the recorder's session for the whole instance, and a chatty
+entity would have it doing that per row it writes.
 
 `sensor.py` builds the entry's `PeriodCoordinator` lazily, the first time
-the entry has a `sensor` subentry, and keeps it once built. An entry with
-none registers no state-change listener and does no extra recorder reads
-— the sensors are opt-in, and so is the work behind them.
+the entry has a `sensor` subentry, and keeps it once built. An entry
+that has never had one registers no state-change listener; from the first
+sensor on the listener stays, and a refresh that finds no `sensor`
+subentries returns before the drain and every read, so the last sensor
+leaving stops the work again — the sensors are opt-in, and so is the work
+behind them.
 
 States in a statistic's name are rendered by `naming.state_translator`,
 which wraps `async_translate_state`, so

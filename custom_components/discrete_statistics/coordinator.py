@@ -1,12 +1,20 @@
 """One refresh per config entry, shared by every period sensor on it.
 
-A refresh reads what the recorder holds for the entity once - its
-statistics, the watermark, the series start - then the sums at each edge
-the sensors between them ask for, then one live tail from the watermark
-end, and computes every sensor from those. It runs after each compile
-(the compiler's dispatcher signal), on each change of the entity's state
-and once a minute for the live tail's clock, and the sums it has read
-are kept until the next compile, since nothing else changes them.
+A refresh drains the recorder's write queue, then reads what it holds
+for the entity once - its statistics, the watermark, the series start -
+then the sums at each edge the sensors between them ask for, then one
+live tail from the watermark end, and computes every sensor from those.
+The drain belongs to the refresh rather than to any one of its triggers,
+so whichever of them asked reads rows that are already written. It runs
+after each compile (the compiler's dispatcher signal), on each change of
+the entity's state and once a minute for the live tail's clock, and the
+sums it has read are kept until the next compile, since nothing else
+changes them.
+
+A state change asks for a refresh through the coordinator's debouncer
+rather than taking one: the entity may be chatty, and a drain per change
+commits the recorder's session for the whole instance. A change is
+reflected within `REFRESH_COOLDOWN` of it instead.
 """
 
 from __future__ import annotations
@@ -18,6 +26,7 @@ from homeassistant.components.recorder import get_instance
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ENTITY_ID
 from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import (
     EventStateChangedData,
@@ -33,6 +42,9 @@ from .reading import Frame, Reading, compute, edges, spec_from
 
 _LOGGER = logging.getLogger(__name__)
 
+# How long a run of state changes is gathered into one refresh.
+REFRESH_COOLDOWN = 2.0
+
 
 class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
     """Readings keyed by sensor subentry id."""
@@ -46,6 +58,9 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
             config_entry=entry,
             name=f"{DOMAIN} {entry.title}",
             update_interval=timedelta(seconds=60),
+            request_refresh_debouncer=Debouncer(
+                hass, _LOGGER, cooldown=REFRESH_COOLDOWN, immediate=False
+            ),
         )
         self._compiler = compiler
         self._frame: Frame | None = None
@@ -70,11 +85,12 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
         self._sums = {}
         self.config_entry.async_create_task(self.hass, self.async_refresh())
 
-    async def _state_changed(self, event: Event[EventStateChangedData]) -> None:
-        # The tail reads the recorder, which is a write queue: drain it so
-        # the row this event became is there to read.
-        await get_instance(self.hass).async_block_till_done()
-        await self.async_refresh()
+    @callback
+    def _state_changed(self, event: Event[EventStateChangedData]) -> None:
+        # Only ask: the debouncer gathers a burst of changes into the one
+        # refresh, which is what keeps a chatty entity from draining the
+        # recorder once per row it writes.
+        self.config_entry.async_create_task(self.hass, self.async_request_refresh())
 
     async def _async_update_data(self) -> dict[str, Reading]:
         entry = self.config_entry
@@ -86,6 +102,15 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
             for subentry_id, subentry in entry.subentries.items()
             if subentry.subentry_type == SUBENTRY_SENSOR
         }
+        # The coordinator outlives the last sensor subentry, so a refresh
+        # with nothing to compute reads nothing either.
+        if not specs:
+            return {}
+
+        # The recorder is a write queue: drain it so the rows every read
+        # below wants are there, whichever trigger asked for this refresh.
+        await get_instance(self.hass).async_block_till_done()
+
         now = dt_util.utcnow().timestamp()
         tz = dt_util.get_default_time_zone()
 

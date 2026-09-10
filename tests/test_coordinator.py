@@ -9,7 +9,10 @@ from homeassistant.const import CONF_ENTITY_ID, CONF_NAME
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 from pytest_homeassistant_custom_component.components.recorder.common import (
     async_wait_recording_done,
 )
@@ -22,7 +25,10 @@ from custom_components.discrete_statistics.const import (
     DOMAIN,
     SUBENTRY_SENSOR,
 )
-from custom_components.discrete_statistics.coordinator import PeriodCoordinator
+from custom_components.discrete_statistics.coordinator import (
+    REFRESH_COOLDOWN,
+    PeriodCoordinator,
+)
 
 ENTITY = "binary_sensor.grid_status"
 T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -90,6 +96,18 @@ async def play(hass, freezer, timeline):
     await async_wait_recording_done(hass)
 
 
+async def past_the_cooldown(hass, freezer, when):
+    """Let a state change's debounced refresh land, at `when` on the clock.
+
+    The refresh is a cooldown behind the change, so the timer has to be
+    fired for it; the freezer stays at `when` so the tail is measured to
+    the same instant the change happened.
+    """
+    freezer.move_to(when)
+    async_fire_time_changed(hass, when + timedelta(seconds=REFRESH_COOLDOWN + 1))
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+
 async def compile_by_hand(hass, start):
     cfg = next(iter(hass.data[DOMAIN]["entry_configs"].values()))
     await hass.data[DOMAIN]["compiler"].async_compile(cfg, start.timestamp())
@@ -135,6 +153,7 @@ async def test_a_state_change_refreshes_the_live_tail(recorder, freezer):
     freezer.move_to(T0 + timedelta(hours=1, minutes=30))
     hass.states.async_set(ENTITY, "off")
     await hass.async_block_till_done()
+    await past_the_cooldown(hass, freezer, T0 + timedelta(hours=1, minutes=30))
     assert coordinator.data[ON_TODAY].value == 1.5
 
 
