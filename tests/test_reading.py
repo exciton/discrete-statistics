@@ -227,6 +227,19 @@ def test_suggested_entity_id_names_the_statistic_it_reads():
         ),
         # Both edges inside one hour: one part hour and nothing else.
         (T0 + 600, T0 + 1800, Pieces(None, (Partial(T0, T0 + 600, T0 + 1800),), None)),
+        # A calendar period in a zone on the half hour: a part hour at each end.
+        (
+            T0 - 24 * HOUR + 1800,
+            T0 + 1800,
+            Pieces(
+                (T0 - 23 * HOUR, T0),
+                (
+                    Partial(T0 - 24 * HOUR, T0 - 24 * HOUR + 1800, T0 - 23 * HOUR),
+                    Partial(T0, T0, T0 + 1800),
+                ),
+                None,
+            ),
+        ),
         # Entirely after the watermark: all tail.
         (W_END + 600, NOW + HOUR, Pieces(None, (), (W_END + 600, NOW))),
         # Entirely in the future: nothing.
