@@ -95,7 +95,7 @@
       "step": {
         "user": {
           "title": "Add a period sensor",
-          "description": "A number read from the statistics recorded for **{entity}**: how long it spent in a state, what share of the period that was, or how often it changed.",
+          "description": "A number calculated from the statistics recorded for **{entity}**: how long it spent in a state, what share of the period that was, or how often it changed.",
           "data": {
             "states": "States",
             "metric": "Measure",
@@ -104,7 +104,7 @@
             "live": "Include the current hour"
           },
           "data_description": {
-            "states": "Pick one or more, or type a state. Several are added together. Leave empty to count changes between every state.",
+            "states": "Pick one or more states to combine, or type in a custom state. Leave empty to count changes between every state.",
             "metric": "Time is in hours. Share is the time as a percentage of the period so far.",
             "period": "Periods start at midnight, on Monday, on the first of the month or the first of January, in this Home Assistant's time zone.",
             "name": "Leave blank for a name made from the entity, the states and the period.",
@@ -113,7 +113,7 @@
         },
         "reconfigure": {
           "title": "Period sensor",
-          "description": "A number read from the statistics recorded for **{entity}**: how long it spent in a state, what share of the period that was, or how often it changed.",
+          "description": "A number calculated from the statistics recorded for **{entity}**: how long it spent in a state, what share of the period that was, or how often it changed.",
           "data": {
             "states": "States",
             "metric": "Measure",
@@ -122,7 +122,7 @@
             "live": "Include the current hour"
           },
           "data_description": {
-            "states": "Pick one or more, or type a state. Several are added together. Leave empty to count changes between every state.",
+            "states": "Pick one or more states to combine, or type in a custom state. Leave empty to count changes between every state.",
             "metric": "Time is in hours. Share is the time as a percentage of the period so far.",
             "period": "Periods start at midnight, on Monday, on the first of the month or the first of January, in this Home Assistant's time zone.",
             "name": "Leave blank for a name made from the entity, the states and the period.",
