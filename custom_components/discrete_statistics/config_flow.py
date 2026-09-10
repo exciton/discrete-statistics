@@ -26,6 +26,7 @@ from homeassistant.const import (
     ATTR_UNIT_OF_MEASUREMENT,
     CONF_ENTITY_ID,
     CONF_NAME,
+    STATE_UNKNOWN,
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import section
@@ -44,7 +45,6 @@ from .config import (
     is_configured,
     min_duration_error,
 )
-from .naming import describe, display_name
 from .const import (
     DEFAULT_IGNORE_SHORT,
     DEFAULT_IGNORE_SHORT_UNKNOWN,
@@ -55,8 +55,8 @@ from .const import (
     DISPOSITION_RECORD,
     DOMAIN,
 )
+from .naming import describe, display_name
 from .statistic_ids import is_blank
-from homeassistant.const import STATE_UNKNOWN
 
 # `ignore` is deliberately absent. With no per-state mapping to supply
 # exceptions it makes resolve() return None for every state, so nothing is
@@ -77,7 +77,9 @@ BLANK_SUGGESTIONS = [STATE_UNKNOWN, DISPOSITION_IGNORE]
 OPTIONS_SCHEMA = vol.Schema(
     {
         vol.Optional(CONF_NAME): selector.TextSelector(),
-        vol.Required(CONF_DEFAULT, default=DEFAULT_RECORD_KNOWN): selector.SelectSelector(
+        vol.Required(
+            CONF_DEFAULT, default=DEFAULT_RECORD_KNOWN
+        ): selector.SelectSelector(
             selector.SelectSelectorConfig(
                 options=UI_DEFAULTS,
                 mode=selector.SelectSelectorMode.DROPDOWN,
@@ -180,9 +182,7 @@ async def async_known_states(
         known.add(state.state)
         known.update(state.attributes.get(ATTR_OPTIONS) or [])
     known.update(
-        await get_instance(hass).async_add_executor_job(
-            _stored_states, hass, entity_id
-        )
+        await get_instance(hass).async_add_executor_job(_stored_states, hass, entity_id)
     )
     return sorted((s for s in known if not is_blank(s)), key=str.casefold)
 
@@ -318,9 +318,7 @@ def _has_continuous_state(hass: HomeAssistant, entity_id: str) -> bool:
             return True
     if (state := hass.states.get(entity_id)) is not None:
         attributes = state.attributes
-        if attributes.get(ATTR_STATE_CLASS) or attributes.get(
-            ATTR_UNIT_OF_MEASUREMENT
-        ):
+        if attributes.get(ATTR_STATE_CLASS) or attributes.get(ATTR_UNIT_OF_MEASUREMENT):
             return True
     return False
 

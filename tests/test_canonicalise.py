@@ -101,8 +101,6 @@ def test_leading_ignored_rows_leave_carried_state_none():
     assert transitions == [(T0 + 100.0, "on")]
 
 
-
-
 def short_cfg(default="record_known", states=None, min_duration=60.0):
     return EntityConfig(
         entity_id="binary_sensor.grid_status",

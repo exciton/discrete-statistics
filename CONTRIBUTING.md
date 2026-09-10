@@ -21,6 +21,26 @@ Home Assistant version and pass for the wrong reasons.
 CI runs the same suite, plus the HACS and hassfest validators and the
 card's checks below. hassfest can be run locally too; see `CLAUDE.md`.
 
+## Linting
+
+Python is linted and formatted with ruff. CI refuses anything `ruff check`
+or `ruff format --check` would change, so install the pre-commit hook once
+and each commit is fixed up before it is made:
+
+```bash
+pipx install pre-commit   # a plain pip install is refused by most system Pythons
+pre-commit install
+```
+
+Without the hook, the container carries the same ruff:
+
+```bash
+docker run --rm -v "$PWD:/workspace" -w /workspace ha-discrete-stats-test \
+  ruff check --fix custom_components tests
+docker run --rm -v "$PWD:/workspace" -w /workspace ha-discrete-stats-test \
+  ruff format custom_components tests
+```
+
 ## Working on the card
 
 The card is TypeScript under `frontend/`, and the built bundle is

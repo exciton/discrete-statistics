@@ -7,8 +7,9 @@ FROM mcr.microsoft.com/devcontainers/python:3.14-bookworm
 
 COPY requirements-test.txt /tmp/requirements-test.txt
 # ruff is not a test requirement; it is here for linting in the container
-# and for hassfest, which needs it.
-RUN pip install --no-cache-dir -r /tmp/requirements-test.txt ruff
+# and for hassfest, which needs it. Pinned to the version
+# .pre-commit-config.yaml and validate.yml use, so all three agree.
+RUN pip install --no-cache-dir -r /tmp/requirements-test.txt ruff==0.16.6
 
 # The repository is bind-mounted, so anything pytest or ruff writes into
 # it - caches, bytecode - is owned by whoever runs here. The image's

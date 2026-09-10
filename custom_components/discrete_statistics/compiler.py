@@ -46,6 +46,7 @@ EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 # datetime.fromtimestamp being microsecond-resolution.
 START_MARGIN = 0.5
 
+
 def _readable_state(stored_name: str, token: str) -> str:
     """Recover a state from the name its statistic already carries.
 
@@ -179,7 +180,9 @@ class Compiler:
             return 0
         window_start = hour_start(earliest if start is None else start)
         # Only completed hours are emitted.
-        window_end = hour_start(end if end is not None else dt_util.utcnow().timestamp())
+        window_end = hour_start(
+            end if end is not None else dt_util.utcnow().timestamp()
+        )
         if window_end <= window_start:
             return 0
 
@@ -374,9 +377,7 @@ class Compiler:
         # the end of what was read - or to now, when that is sooner. The
         # decision is provisional then, and the trailing window revisits
         # it once the spell has ended.
-        known_until = min(
-            window_end + cfg.min_duration, dt_util.utcnow().timestamp()
-        )
+        known_until = min(window_end + cfg.min_duration, dt_util.utcnow().timestamp())
         carried, transitions = canonicalise(
             cfg, rows, window_start, window_end, known_until
         )
@@ -555,7 +556,9 @@ class Compiler:
             None,
             {"sum"},
         )
-        rows = [row for row in result.get(statistic_id, []) if row.get("sum") is not None]
+        rows = [
+            row for row in result.get(statistic_id, []) if row.get("sum") is not None
+        ]
         return rows[-1]["sum"] if rows else None
 
     async def _async_earliest_state_ts(self, entity_id: str) -> float | None:

@@ -34,9 +34,7 @@ _UNRENDERED_STATES = {
 }
 
 
-def display_name(
-    hass: HomeAssistant, entity_id: str, name: str | None = None
-) -> str:
+def display_name(hass: HomeAssistant, entity_id: str, name: str | None = None) -> str:
     """A typed name, else the entity's own, else its ID.
 
     The registry is consulted at all because attributes are stripped while an
@@ -101,9 +99,7 @@ def state_translator(hass: HomeAssistant, entity_id: str) -> Callable[[str], str
     return translate
 
 
-async def async_warm_state_translations(
-    hass: HomeAssistant, entity_id: str
-) -> None:
+async def async_warm_state_translations(hass: HomeAssistant, entity_id: str) -> None:
     """Load what `state_translator` reads from the cache.
 
     `async_translate_state` is a callback over a cache and answers with the

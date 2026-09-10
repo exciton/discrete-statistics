@@ -1,0 +1,10 @@
+# Local feedback before a commit; CI runs the same two ruff commands and is
+# the gate. Keep `rev` on the ruff version .devcontainer/Dockerfile and
+# validate.yml pin, so the three cannot disagree about what is clean.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.6
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
