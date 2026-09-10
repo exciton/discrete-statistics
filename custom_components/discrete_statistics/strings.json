@@ -133,7 +133,7 @@
       "error": {
         "state_ignored": "That state is not recorded under this entry's settings, so a sensor over it would never move. Change the entry's states first, or pick a recorded one.",
         "state_unusable": "A state name needs letters or digits.",
-        "all_states_count_only": "With no states picked, only the number of changes can be measured: the time in any state is the whole period."
+        "all_states_count_only": "With no states picked, only the number of changes can be measured. Add a state above, or select number of changes below."
       },
       "abort": {
         "reconfigure_successful": "The sensor was updated."
