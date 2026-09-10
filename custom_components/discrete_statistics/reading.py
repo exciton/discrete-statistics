@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 # resolves to nothing under the entry's settings and none was ever
 # recorded, so there is no series to read and the tail would never
 # contribute.
-REASON_NOT_RECORDED = "not recorded by this entry's settings"
+REASON_NOT_RECORDED = "its states are not recorded by this entry's settings"
 
 
 class Custom(NamedTuple):

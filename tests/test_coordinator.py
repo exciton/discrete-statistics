@@ -20,12 +20,14 @@ from pytest_homeassistant_custom_component.components.recorder.common import (
     async_wait_recording_done,
 )
 
+from custom_components.discrete_statistics import reading as reading_module
 from custom_components.discrete_statistics import rows as rows_module
 from custom_components.discrete_statistics.compiler import Compiler, compiled_signal
 from custom_components.discrete_statistics.config import CONF_DEFAULT
 from custom_components.discrete_statistics.const import (
     DEFAULT_RECORD_KNOWN,
     DOMAIN,
+    METRIC_DURATION,
     SUBENTRY_SENSOR,
 )
 from custom_components.discrete_statistics.coordinator import (
@@ -33,6 +35,7 @@ from custom_components.discrete_statistics.coordinator import (
     PeriodCoordinator,
     render_datetime,
 )
+from custom_components.discrete_statistics.statistic_ids import build
 
 ENTITY = "binary_sensor.grid_status"
 T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -41,6 +44,8 @@ OFF_COUNT_TODAY = "off-count-today"
 SINCE_QUARTER_PAST_ONE = "sensor.since_quarter_past_one"
 YESTERDAY = "sensor.yesterday"
 LAST_HOUR_COUNT = "sensor.last_hour_count"
+LAST_24_HOURS = "sensor.last_24_hours"
+ON_THE_BOUNDARY = "sensor.on_the_boundary"
 # Every scenario here compiles the three hours from T0 with this timeline.
 TIMELINE = [
     (T0 - timedelta(hours=1), "off"),
@@ -279,16 +284,18 @@ async def test_a_compile_during_a_refresh_does_not_seed_the_new_cache(
             delivered = threading.Event()
 
             def send() -> None:
-                async_dispatcher_send(
-                    hass,
-                    compiled_signal(ENTITY),
-                    T0.timestamp(),
-                    (T0 + timedelta(hours=3)).timestamp(),
-                )
-                delivered.set()
+                try:
+                    async_dispatcher_send(
+                        hass,
+                        compiled_signal(ENTITY),
+                        T0.timestamp(),
+                        (T0 + timedelta(hours=3)).timestamp(),
+                    )
+                finally:
+                    delivered.set()
 
             hass.loop.call_soon_threadsafe(send)
-            delivered.wait()
+            assert delivered.wait(10)
         return real_sums_at(*args, **kwargs)
 
     with patch(
@@ -407,15 +414,22 @@ async def test_a_compile_of_the_trailing_window_keeps_older_sums(recorder, freez
     coordinator = await compiled_entry(
         hass,
         freezer,
-        [sensor(YESTERDAY, ["on"], period="yesterday"), sensor(ON_TODAY, ["on"])],
+        [
+            sensor(YESTERDAY, ["on"], period="yesterday"),
+            sensor(ON_TODAY, ["on"]),
+            # Its start is the compile's start below, to the second: the
+            # sum there is the one the compile rewrote *from*, so it still
+            # stands and must not be read again.
+            custom(ON_THE_BOUNDARY, "2026-01-01T01:00:00+00:00"),
+        ],
     )
     with patch(
         "custom_components.discrete_statistics.coordinator.rows.sums_at",
         wraps=rows_module.sums_at,
     ) as sums_at:
         await coordinator.async_refresh()
-        # Yesterday's two edges and today's end, the watermark.
-        assert sums_at.call_count == 3
+        # Yesterday's two edges, the boundary hour, and today's end.
+        assert sums_at.call_count == 4
         # The hourly compile rewrites the trailing hours: only the edge
         # after its start is read again.
         async_dispatcher_send(
@@ -425,7 +439,10 @@ async def test_a_compile_of_the_trailing_window_keeps_older_sums(recorder, freez
             (T0 + timedelta(hours=3)).timestamp(),
         )
         await hass.async_block_till_done()
-        assert sums_at.call_count == 4
+        assert sums_at.call_count == 5
+        assert (
+            sums_at.call_args_list[4].args[2] == (T0 + timedelta(hours=3)).timestamp()
+        )
         # A recompute of everything: every edge.
         async_dispatcher_send(
             hass,
@@ -434,7 +451,109 @@ async def test_a_compile_of_the_trailing_window_keeps_older_sums(recorder, freez
             (T0 + timedelta(hours=3)).timestamp(),
         )
         await hass.async_block_till_done()
-        assert sums_at.call_count == 7
+        assert sums_at.call_count == 9
+
+
+async def test_a_statistic_that_comes_back_drops_every_cached_sum(recorder, freezer):
+    """A deleted statistic that recurs is rewritten from a base of zero.
+
+    The compile's range says which edges it rewrote, not that a series
+    restarted, and a sum cached at an older edge outlives the statistic
+    itself - so the reading would be a new base against an old one. The
+    set of known statistics changing is the signal.
+    """
+    hass = recorder
+    coordinator = await compiled_entry(
+        hass,
+        freezer,
+        [sensor(YESTERDAY, ["on"], period="yesterday"), sensor(ON_TODAY, ["on"])],
+    )
+    await coordinator.async_refresh()
+    compiled = coordinator._compiler.async_compiled
+    deleted = build(ENTITY, "on", METRIC_DURATION)
+
+    async def without_it(entity_id):
+        existing, watermark = await compiled(entity_id)
+        return {k: v for k, v in existing.items() if k != deleted}, watermark
+
+    async def hourly_compile():
+        async_dispatcher_send(
+            hass,
+            compiled_signal(ENTITY),
+            (T0 + timedelta(hours=1)).timestamp(),
+            (T0 + timedelta(hours=3)).timestamp(),
+        )
+        await hass.async_block_till_done()
+
+    with patch.object(Compiler, "async_compiled", side_effect=without_it):
+        await hourly_compile()
+
+    # It recurs: the cached sums at the day's older edges are on the base
+    # it had before it was deleted.
+    with patch(
+        "custom_components.discrete_statistics.coordinator.rows.sums_at",
+        wraps=rows_module.sums_at,
+    ) as sums_at:
+        await hourly_compile()
+        assert sorted(call.args[2] for call in sums_at.call_args_list) == [
+            (T0 - timedelta(days=1)).timestamp(),
+            T0.timestamp(),
+            (T0 + timedelta(hours=3)).timestamp(),
+        ]
+
+
+async def test_sums_at_edges_a_later_plan_does_not_want_are_dropped(recorder, freezer):
+    hass = recorder
+    coordinator = await compiled_entry(
+        hass, freezer, [sensor(LAST_24_HOURS, ["on"], period="last_24_hours")]
+    )
+    await coordinator.async_refresh()
+    assert {edge for _, edge in coordinator._sums} == {
+        (T0 - timedelta(hours=21)).timestamp(),
+        (T0 + timedelta(hours=3)).timestamp(),
+    }
+    # An hour later the window has moved off its old start; nothing will
+    # ask for that edge again, and a rolling sensor sheds one an hour.
+    freezer.move_to(T0 + timedelta(hours=4))
+    await coordinator.async_refresh()
+    assert {edge for _, edge in coordinator._sums} == {
+        (T0 - timedelta(hours=20)).timestamp(),
+        (T0 + timedelta(hours=3)).timestamp(),
+    }
+
+
+async def test_one_sensor_failing_leaves_the_rest_of_the_entry_reading(
+    recorder, freezer
+):
+    """A window that explodes at refresh time is one sensor's problem.
+
+    A template can render to something no window arithmetic survives, and
+    only at refresh time - the value it reads has moved on since the
+    dialog saved it. Failing the refresh would take every sensor on the
+    entry down with it.
+    """
+    hass = recorder
+    coordinator = await compiled_entry(
+        hass,
+        freezer,
+        [sensor(ON_TODAY, ["on"]), sensor(OFF_COUNT_TODAY, ["off"], "count")],
+    )
+    real_plan = reading_module.plan
+
+    def explode(spec, *args, **kwargs):
+        if spec.metric == "count":
+            raise OverflowError("cannot convert float infinity to integer")
+        return real_plan(spec, *args, **kwargs)
+
+    with patch(
+        "custom_components.discrete_statistics.coordinator.plan", side_effect=explode
+    ):
+        await coordinator.async_refresh()
+    assert coordinator.last_update_success
+    assert coordinator.data[ON_TODAY].value == 1.5
+    broken = coordinator.data[OFF_COUNT_TODAY]
+    assert broken.value is None
+    assert broken.reason.startswith("template")
 
 
 async def test_a_finished_window_reads_no_tail(recorder, freezer):
@@ -504,3 +623,13 @@ def test_render_datetime_takes_a_datetime_string_or_a_timestamp(hass):
         render_datetime(hass, "{{ 'soon' }}")
     with pytest.raises(ValueError):
         render_datetime(hass, "{{ nonsense( }}")
+    # A number is not a timestamp merely for being one: these reach hour
+    # arithmetic that raises out of the whole entry's refresh.
+    for text in (
+        "{{ 'inf' | float }}",
+        "{{ 'nan' | float }}",
+        "{{ 1e20 }}",
+        "{{ 2.6e11 }}",
+    ):
+        with pytest.raises(ValueError):
+            render_datetime(hass, text)

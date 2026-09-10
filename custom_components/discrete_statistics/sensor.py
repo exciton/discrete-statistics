@@ -196,11 +196,7 @@ class DiscreteStatisticsSensor(CoordinatorEntity[PeriodCoordinator], SensorEntit
         reading = self._reading
         if reading is not None and reading.reason is not None:
             if not self._warned:
-                _LOGGER.warning(
-                    "%s is unavailable: its states are %s",
-                    self.entity_id,
-                    reading.reason,
-                )
+                _LOGGER.warning("%s is unavailable: %s", self.entity_id, reading.reason)
                 self._warned = True
         else:
             self._warned = False

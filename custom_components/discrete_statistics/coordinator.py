@@ -9,7 +9,8 @@ so whichever of them asked reads rows that are already written. It runs
 after each compile (the compiler's dispatcher signal), on each change of
 the entity's state and once a minute for the live tail's clock, and the
 sums it has read are kept until the next compile, since nothing else
-changes them. A part hour - a window edge inside a compiled hour - is
+changes them, and pruned to the edges the last refresh planned, since a
+rolling window leaves one behind every hour. A part hour - a window edge inside a compiled hour - is
 read from the compiler's timeline of that hour while the recorder holds
 it, and pro-rated from the hour's compiled change afterwards; the
 timelines are kept per hour until a compile.
@@ -23,6 +24,7 @@ reflected within `REFRESH_COOLDOWN` of it instead.
 from __future__ import annotations
 
 import logging
+import math
 from datetime import timedelta
 
 from homeassistant.components.recorder import get_instance
@@ -49,6 +51,7 @@ from .reading import (
     Frame,
     Partial,
     PartialValue,
+    Pieces,
     Reading,
     Spec,
     compute,
@@ -66,6 +69,9 @@ _LOGGER = logging.getLogger(__name__)
 REFRESH_COOLDOWN = 2.0
 # The reason a sensor whose window could not be rendered is unavailable.
 REASON_TEMPLATE = "template"
+# The bound `datetime` can represent, with room: past it the value is no
+# longer a date and time at all, and every rendering of one raises.
+_TIMESTAMP_LIMIT = 2.5e11
 
 
 def render_datetime(hass: HomeAssistant, text: str) -> float:
@@ -82,9 +88,16 @@ def render_datetime(hass: HomeAssistant, text: str) -> float:
     if (parsed := dt_util.parse_datetime(rendered)) is not None:
         return dt_util.as_utc(parsed).timestamp()
     try:
-        return float(rendered)
+        value = float(rendered)
     except ValueError:
         raise ValueError(f"{rendered!r} is not a date and time") from None
+    # A float is not a timestamp merely for being a float. `nan`, `inf`
+    # and a number far outside any date reach hour arithmetic that raises
+    # rather than answers, so they are refused here, where the dialog
+    # sees them too.
+    if not math.isfinite(value) or abs(value) > _TIMESTAMP_LIMIT:
+        raise ValueError(f"{rendered!r} is not a date and time")
+    return value
 
 
 class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
@@ -106,7 +119,8 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
         self._compiler = compiler
         self._frame: Frame | None = None
         self._sums: dict[tuple[str, float], float] = {}
-        self._hours: dict[float, Timeline] = {}
+        self._known: frozenset[str] | None = None
+        self._hours: dict[float, Timeline | None] = {}
         entity_id = entry.data[CONF_ENTITY_ID]
         entry.async_on_unload(
             async_dispatcher_connect(hass, compiled_signal(entity_id), self._compiled)
@@ -141,6 +155,17 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
         # recorder once per row it writes.
         self.config_entry.async_create_task(self.hass, self.async_request_refresh())
 
+    def _unreadable(self, subentry_id: str, err: Exception) -> Reading:
+        """One sensor's arithmetic failing is that sensor's problem alone.
+
+        A window rendered from templates can be any pair of numbers, and
+        only the refresh finds out. Failing here would take every sensor
+        on the entry down with it, so the reading carries the reason and
+        the rest of them compute.
+        """
+        _LOGGER.debug("%s has no readable window: %s", subentry_id, err)
+        return Reading(None, None, None, f"{REASON_TEMPLATE}: {err}")
+
     def _window(self, spec: Spec, now: float) -> tuple[float, float] | str:
         """A custom period's window from its templates, or why it has none."""
         assert spec.custom is not None
@@ -167,7 +192,7 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
         cfg: EntityConfig,
         frame: Frame,
         sums: dict[tuple[str, float], float],
-        hours: dict[float, Timeline],
+        hours: dict[float, Timeline | None],
         partial: Partial,
     ) -> PartialValue:
         """A part hour: exact while the recorder holds the hour, pro-rated after.
@@ -179,13 +204,14 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
         change of zero and contributes nothing, as a hole does everywhere.
         """
         if frame.earliest is not None and frame.earliest <= partial.hour:
-            if (timeline := hours.get(partial.hour)) is None:
-                timeline = await self._compiler.async_tail(
+            # An hour the read path cannot open has no timeline and will
+            # not until the next compile, so the answer is cached either
+            # way: keyed on the hour, not on there being one.
+            if partial.hour not in hours:
+                hours[partial.hour] = await self._compiler.async_tail(
                     cfg, partial.hour, partial.hour + HOUR
                 )
-                if timeline is not None:
-                    hours[partial.hour] = timeline
-            if timeline is not None:
+            if (timeline := hours[partial.hour]) is not None:
                 return exact_partial(partial, timeline)
         seconds: dict[str, float] = {}
         counts: dict[str, float] = {}
@@ -241,6 +267,16 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
         frame = self._frame
         if frame is None:
             existing, watermark = await self._compiler.async_compiled(cfg.entity_id)
+            # A statistic the user deleted and the entity then returned to
+            # is written again from a base of zero, and the compile's range
+            # does not say so. Its cached sums at older edges are on the
+            # base it had before, so the whole cache goes when the set of
+            # known statistics changes - cleared rather than replaced, so
+            # a compile landing mid-refresh still owns the identity below.
+            known = frozenset(existing)
+            if self._known is not None and known != self._known:
+                sums.clear()
+            self._known = known
             series_start = (
                 await get_instance(self.hass).async_add_executor_job(
                     rows.series_start, self.hass, set(existing)
@@ -273,10 +309,13 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
             windows[subentry_id] = window
         wanted = {k: v for k, v in specs.items() if k not in readings}
 
-        plans = {
-            subentry_id: plan(spec, frame, now, tz, windows[subentry_id])
-            for subentry_id, spec in wanted.items()
-        }
+        plans: dict[str, Pieces | None] = {}
+        for subentry_id, spec in wanted.items():
+            try:
+                plans[subentry_id] = plan(spec, frame, now, tz, windows[subentry_id])
+            except (ArithmeticError, ValueError) as err:
+                readings[subentry_id] = self._unreadable(subentry_id, err)
+        wanted = {k: v for k, v in wanted.items() if k in plans}
 
         # The tail is read for the sensors whose window reaches it, not
         # for every live one: a finished window costs no read at all.
@@ -313,15 +352,23 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
             return sums.get((statistic_id, edge), 0.0)
 
         for subentry_id, spec in wanted.items():
-            readings[subentry_id] = compute(
-                cfg,
-                spec,
-                frame,
-                sum_at,
-                partials.get,
-                timeline,
-                now,
-                tz,
-                windows[subentry_id],
-            )
+            try:
+                readings[subentry_id] = compute(
+                    cfg,
+                    spec,
+                    frame,
+                    sum_at,
+                    partials.get,
+                    timeline,
+                    now,
+                    tz,
+                    windows[subentry_id],
+                )
+            except (ArithmeticError, ValueError) as err:
+                readings[subentry_id] = self._unreadable(subentry_id, err)
+
+        # Only the edges this refresh planned are worth keeping: a rolling
+        # window leaves one behind every hour, and nothing else evicts them.
+        if self._sums is sums:
+            self._sums = {k: v for k, v in sums.items() if k[1] in edges}
         return readings

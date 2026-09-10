@@ -1482,6 +1482,11 @@ async def test_a_custom_sensor_from_a_start_alone(recorder):
         # will not parse before the flow sees it.
         ({"start": "{{ nonsense() }}"}, "template_invalid"),
         ({"start": "{{ 'soon' }}", "duration": {"hours": 1}}, "template_invalid"),
+        # A float is not a timestamp merely for being a float.
+        (
+            {"start": "{{ 'inf' | float }}", "duration": {"hours": 1}},
+            "template_invalid",
+        ),
         (
             {
                 "start": "2026-01-01T10:00:00+00:00",

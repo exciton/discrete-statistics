@@ -522,7 +522,7 @@ def _custom_schema() -> vol.Schema:
             vol.Optional(CONF_WINDOW_START): selector.TemplateSelector(),
             vol.Optional(CONF_WINDOW_END): selector.TemplateSelector(),
             vol.Optional(CONF_WINDOW_DURATION): selector.DurationSelector(
-                selector.DurationSelectorConfig(enable_day=True)
+                selector.DurationSelectorConfig(enable_day=False)
             ),
         }
     )
