@@ -23,8 +23,8 @@ from .canonicalise import canonicalise
 from .config import EntityConfig
 from .const import DOMAIN, HOUR, METRIC_DURATION
 from .naming import async_warm_state_translations, display_name, state_translator
-from .payload import build_payloads
-from .statistic_ids import belongs_to, parse, state_token
+from .payload import build_payloads, readable_state
+from .statistic_ids import belongs_to, parse
 
 # Recompute this many trailing hours on every run, so a state committed by
 # the recorder after we first read its hour is still picked up.
@@ -45,27 +45,6 @@ EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 # rather than close it. Anything below a microsecond rounds straight back,
 # datetime.fromtimestamp being microsecond-resolution.
 START_MARGIN = 0.5
-
-
-def _readable_state(stored_name: str, token: str) -> str:
-    """Recover a state from the name its statistic already carries.
-
-    An ID holds only the token, so a state carried out of one would read
-    `heatcool` where the entity says `heat_cool` - and that name would then
-    be written for as long as nothing transitioned. The stored name still
-    has the readable form, in the half `rename` leaves alone.
-
-    Verified rather than trusted: the recovered text must tokenise back to
-    the same token, or the name did not have the shape assumed and the token
-    stands.
-    """
-    head, separator, _ = stored_name.rpartition(" (")
-    if not separator:
-        return token
-    _, separator, state = head.rpartition(": ")
-    if separator and state_token(state) == token:
-        return state
-    return token
 
 
 def _as_datetime(timestamp: float) -> datetime:
@@ -123,7 +102,7 @@ def _carried_from_statistics(
     if len(held) != 1:
         return None
     statistic_id, token = held[0]
-    return _readable_state(names.get(statistic_id, ""), token)
+    return readable_state(names.get(statistic_id, ""), token)
 
 
 class Compiler:

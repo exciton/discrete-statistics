@@ -55,6 +55,27 @@ def rename(stored: str, display: str) -> str:
     return f"{display}: {tail}"
 
 
+def readable_state(stored_name: str, token: str) -> str:
+    """Recover a state from the name its statistic already carries.
+
+    An ID holds only the token, so a state carried out of one would read
+    `heatcool` where the entity says `heat_cool` - and that name would then
+    be written for as long as nothing transitioned. The stored name still
+    has the readable form, in the half `rename` leaves alone.
+
+    Verified rather than trusted: the recovered text must tokenise back to
+    the same token, or the name did not have the shape assumed and the token
+    stands.
+    """
+    head, separator, _ = stored_name.rpartition(" (")
+    if not separator:
+        return token
+    _, separator, state = head.rpartition(": ")
+    if separator and state_token(state) == token:
+        return state
+    return token
+
+
 def metadata_for(metric: str, statistic_id: str, name: str) -> dict[str, Any]:
     """Return StatisticMetaData for one statistic."""
     return {

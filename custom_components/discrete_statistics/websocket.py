@@ -5,9 +5,8 @@ and reduces them in Python whatever the period is asked for. Our sums are
 cumulative and dense, so the card's buckets need only one row per edge:
 one `start_ts IN (...)` query for every statistic at once - a range query
 when the edges are hours, since then every row is wanted - then a
-`LIMIT 1` lookup before any edge that query left blank. The
-arithmetic is in `buckets`; this module is the recorder boundary, and it
-only reads.
+`LIMIT 1` lookup before any edge that query left blank. The arithmetic is
+in `buckets` and the queries in `rows`; this module only reads.
 """
 
 from __future__ import annotations
@@ -18,16 +17,14 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.components.recorder import get_instance
-from homeassistant.components.recorder.db_schema import Statistics
 from homeassistant.components.recorder.statistics import get_metadata_with_session
 from homeassistant.components.recorder.util import session_scope
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import dt as dt_util
-from sqlalchemy import select
-from sqlalchemy.orm import Session
 
-from .buckets import Bucket, Period, Row, cut, edges, hours_wanted
+from .buckets import Bucket, Period, cut, edges, hours_wanted
 from .const import DOMAIN, HOUR
+from .rows import newest_before, rows_at, rows_between
 
 # The most buckets one request may ask for. A chart cannot show more, and
 # the edges, the `IN` list and the rows all grow with the count, so a
@@ -127,9 +124,9 @@ def _buckets(
         # Hourly edges want every row in the range, which a range asks
         # for better than a list of every hour in it.
         at = (
-            _rows_between(session, set(ids), edges_[0] - HOUR, edges_[-1])
+            rows_between(session, set(ids), edges_[0] - HOUR, edges_[-1])
             if period == "hour"
-            else _rows_at(session, set(ids), hours_wanted(edges_))
+            else rows_at(session, set(ids), hours_wanted(edges_))
         )
         return {
             statistic_id: [
@@ -137,7 +134,7 @@ def _buckets(
                 for b in cut(
                     edges_,
                     at.get(metadata_id, {}),
-                    lambda edge, m=metadata_id: _newest_before(session, m, edge),
+                    lambda edge, m=metadata_id: newest_before(session, m, edge),
                 )
             ]
             for metadata_id, statistic_id in ids.items()
@@ -151,52 +148,3 @@ def _serialise(bucket: Bucket) -> dict[str, float]:
         "end": int(bucket.end * 1000),
         "change": bucket.change,
     }
-
-
-def _rows_at(
-    session: Session, metadata_ids: set[int], hours: set[float]
-) -> dict[int, dict[float, Row]]:
-    """Every statistic's rows at the wanted hours, in one query."""
-    return _rows(session, metadata_ids, Statistics.start_ts.in_(hours))
-
-
-def _rows_between(
-    session: Session, metadata_ids: set[int], start: float, end: float
-) -> dict[int, dict[float, Row]]:
-    """Every statistic's rows in [start, end), in one query."""
-    return _rows(
-        session,
-        metadata_ids,
-        Statistics.start_ts >= start,
-        Statistics.start_ts < end,
-    )
-
-
-def _rows(
-    session: Session, metadata_ids: set[int], *where: Any
-) -> dict[int, dict[float, Row]]:
-    rows = session.execute(
-        select(Statistics.metadata_id, Statistics.start_ts, Statistics.sum).where(
-            Statistics.metadata_id.in_(metadata_ids),
-            Statistics.sum.is_not(None),
-            *where,
-        )
-    )
-    result: dict[int, dict[float, Row]] = {}
-    for metadata_id, start_ts, sum_ in rows:
-        result.setdefault(metadata_id, {})[start_ts] = Row(start_ts, sum_)
-    return result
-
-
-def _newest_before(session: Session, metadata_id: int, edge: float) -> Row | None:
-    row = session.execute(
-        select(Statistics.start_ts, Statistics.sum)
-        .where(
-            Statistics.metadata_id == metadata_id,
-            Statistics.sum.is_not(None),
-            Statistics.start_ts < edge,
-        )
-        .order_by(Statistics.start_ts.desc())
-        .limit(1)
-    ).first()
-    return None if row is None else Row(row[0], row[1])

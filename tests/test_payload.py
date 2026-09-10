@@ -7,7 +7,11 @@ from homeassistant.components.recorder.models import StatisticMeanType
 
 from custom_components.discrete_statistics.config import EntityConfig
 from custom_components.discrete_statistics.const import HOUR
-from custom_components.discrete_statistics.payload import build_payloads, rename
+from custom_components.discrete_statistics.payload import (
+    build_payloads,
+    readable_state,
+    rename,
+)
 
 T0 = 1767225600.0
 
@@ -295,3 +299,20 @@ def test_a_colon_in_the_display_name_is_still_fine():
     metadata, _ = payloads[DURATION_ON]
     assert metadata["name"] == "Shed: Grid: on (h)"
     assert rename(metadata["name"], "Mains") == "Mains: on (h)"
+
+
+def test_readable_state_is_verified_against_the_token():
+    """Trusting the name blindly would invent a state and split the series.
+
+    Whatever sits after the last ": " becomes the bucket key, and a wrong
+    one builds a different statistic ID. So the recovered text has to
+    tokenise back to the token the ID actually carries.
+    """
+    assert readable_state("Grid: heat_cool (h)", "heatcool") == "heat_cool"
+    # A display name may hold colons of its own; the state is the last part.
+    assert readable_state("Shed: Grid: heat_cool (h)", "heatcool") == "heat_cool"
+    # Renamed by hand, or written by an older format: no shape to read.
+    assert readable_state("renamed by hand", "heatcool") == "heatcool"
+    # Right shape, wrong state - the name does not belong to this ID.
+    assert readable_state("Grid: off (h)", "heatcool") == "heatcool"
+    assert readable_state("", "heatcool") == "heatcool"
