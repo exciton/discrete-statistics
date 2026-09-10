@@ -19,8 +19,9 @@ const COLOR_SELECTOR = {
 // One row per state: a drag handle, a tick for whether it is drawn, its
 // name — the stored one as the placeholder, so a row reads the same
 // until it is renamed — and a colour. `ha-sortable` is the frontend's own, which every
-// dashboard view loads; a ui_color selector is fetched by `ha-selector`
-// on first use, so neither needs importing here. Changes are announced
+// dashboard view loads; `ha-input` is what every `ha-form` text field is,
+// so the editor dialog has it; a ui_color selector is fetched by
+// `ha-selector` on first use — so none needs importing here. Changes are announced
 // as a whole new list through `value-changed`; the editor turns it into
 // config.
 export class DiscreteStatisticsStateList extends LitElement {
@@ -46,13 +47,13 @@ export class DiscreteStatisticsStateList extends LitElement {
                   .index=${index}
                   @change=${this._shownChanged}
                 ></ha-checkbox>
-                <ha-textfield
+                <ha-input
                   class="name"
                   .placeholder=${row.label}
                   .value=${row.name ?? ""}
                   .index=${index}
                   @change=${this._nameChanged}
-                ></ha-textfield>
+                ></ha-input>
                 <ha-selector
                   .hass=${this.hass}
                   .selector=${COLOR_SELECTOR}
@@ -145,6 +146,10 @@ export class DiscreteStatisticsStateList extends LitElement {
     .name {
       flex: 1;
       min-width: 0;
+      /* ha-input pads below itself for helper text; the picker beside
+         it does not, so the pad would lift the field off the row's
+         centre line. */
+      --ha-input-padding-bottom: 0;
     }
     ha-selector {
       width: 180px;
