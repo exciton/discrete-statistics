@@ -164,9 +164,7 @@ def _usable_blank(value: str) -> str:
 def _usable_state_name(value: str) -> str:
     """Reject a name that cannot itself become a statistic."""
     if is_blank(value):
-        raise vol.Invalid(
-            f"{value!r} does not produce a usable statistic ID"
-        )
+        raise vol.Invalid(f"{value!r} does not produce a usable statistic ID")
     return value
 
 

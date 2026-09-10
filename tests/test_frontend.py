@@ -27,9 +27,7 @@ async def test_registers_the_built_file_and_a_versioned_module_url():
     assert configs == [
         StaticPathConfig(frontend.CARD_URL_PATH, str(frontend.CARD_FILE), True)
     ]
-    assert hass.data[DATA_EXTRA_MODULE_URL] == {
-        f"{frontend.CARD_URL_PATH}?v=1.2.3"
-    }
+    assert hass.data[DATA_EXTRA_MODULE_URL] == {f"{frontend.CARD_URL_PATH}?v=1.2.3"}
 
 
 async def test_the_built_file_is_shipped():

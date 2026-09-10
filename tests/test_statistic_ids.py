@@ -15,9 +15,7 @@ from custom_components.discrete_statistics.statistic_ids import (
 )
 
 # Copied verbatim from homeassistant.components.recorder.statistics
-VALID_STATISTIC_ID = re.compile(
-    r"^(?!.+__)(?!_)[\da-z_]+(?<!_):(?!_)[\da-z_]+(?<!_)$"
-)
+VALID_STATISTIC_ID = re.compile(r"^(?!.+__)(?!_)[\da-z_]+(?<!_):(?!_)[\da-z_]+(?<!_)$")
 
 
 def test_builds_expected_id():

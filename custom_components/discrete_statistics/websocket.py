@@ -82,7 +82,9 @@ async def ws_buckets(
         return
     period: Period = msg["period"]
     if end <= start:
-        connection.send_error(msg["id"], "invalid_range", "end_time is not after start_time")
+        connection.send_error(
+            msg["id"], "invalid_range", "end_time is not after start_time"
+        )
         return
     if (end - start).total_seconds() / _SHORTEST[period] > MAX_BUCKETS:
         connection.send_error(

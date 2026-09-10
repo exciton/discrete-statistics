@@ -18,9 +18,9 @@ from PIL import Image, ImageDraw
 # Three stacked segments, echoing the component's own vocabulary:
 # a recorded state, a second recorded state, and a gap.
 SEGMENT_COLOURS = [
-    (56, 132, 255, 255),   # blue
-    (34, 168, 108, 255),   # green
-    (146, 96, 214, 255),   # purple
+    (56, 132, 255, 255),  # blue
+    (34, 168, 108, 255),  # green
+    (146, 96, 214, 255),  # purple
 ]
 
 # (bottom segment, middle, top) heights per bar, in a 256px grid.

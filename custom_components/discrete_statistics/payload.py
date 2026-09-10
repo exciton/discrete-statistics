@@ -144,15 +144,11 @@ def build_payloads(
         _, token, metric = parts
         # Not seen this window: the readable state survives only in the
         # stored name, so swap its display half rather than rebuilding it.
-        planned[statistic_id] = _Planned(
-            token, metric, rename(stored_name, display)
-        )
+        planned[statistic_id] = _Planned(token, metric, rename(stored_name, display))
 
     payloads: dict[str, Payload] = {}
     for statistic_id, plan in sorted(planned.items()):
-        index, scale = (
-            (0, 1.0 / HOUR) if plan.metric == METRIC_DURATION else (1, 1.0)
-        )
+        index, scale = (0, 1.0 / HOUR) if plan.metric == METRIC_DURATION else (1, 1.0)
         running = base_sums.get(statistic_id, 0.0)
         rows: list[dict[str, Any]] = []
         for hour in hours:

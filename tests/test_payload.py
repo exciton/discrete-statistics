@@ -27,9 +27,7 @@ DURATION_OFF = "discrete_statistics:binary_sensor_grid_status_off_duration"
 
 
 def test_single_hour_single_state():
-    payloads = build_payloads(
-        cfg(), {("on", T0): (HOUR, 0)}, T0, T0 + HOUR, {}
-    )
+    payloads = build_payloads(cfg(), {("on", T0): (HOUR, 0)}, T0, T0 + HOUR, {})
     metadata, rows = payloads[DURATION_ON]
     assert metadata["name"] == "binary_sensor.grid_status: on (h)"
     assert metadata["source"] == "discrete_statistics"
@@ -49,9 +47,7 @@ def test_single_hour_single_state():
 
 
 def test_count_metadata_has_no_unit():
-    payloads = build_payloads(
-        cfg(), {("on", T0): (HOUR, 2)}, T0, T0 + HOUR, {}
-    )
+    payloads = build_payloads(cfg(), {("on", T0): (HOUR, 2)}, T0, T0 + HOUR, {})
     metadata, rows = payloads[COUNT_ON]
     assert metadata["unit_of_measurement"] is None
     assert metadata["unit_class"] is None

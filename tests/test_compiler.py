@@ -135,13 +135,9 @@ async def test_records_an_outage_duration_and_count(recorder, freezer):
     compiler = Compiler(hass)
     await compiler.async_compile(cfg(), start.timestamp())
 
-    sums = await read_sums(
-        hass, DURATION_OFF, start, start + timedelta(hours=2)
-    )
+    sums = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=2))
     assert sums[0] == pytest.approx(0.25)
-    counts = await read_sums(
-        hass, COUNT_OFF, start, start + timedelta(hours=2)
-    )
+    counts = await read_sums(hass, COUNT_OFF, start, start + timedelta(hours=2))
     assert counts[0] == 1
 
 
@@ -188,9 +184,7 @@ async def test_cadence_invariance(recorder, freezer):
 
     freezer.move_to(start + timedelta(hours=5))
     await compiler.async_compile(cfg(), start.timestamp())
-    all_at_once = await read_sums(
-        hass, DURATION_OFF, start, start + timedelta(hours=5)
-    )
+    all_at_once = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=5))
     assert all_at_once  # the comparison below is worthless if this is empty
 
     # Recompute the same range as a sliding window, the way incremental
@@ -205,16 +199,12 @@ async def test_cadence_invariance(recorder, freezer):
             start.timestamp(), step_end.timestamp() - TRAILING_HOURS * HOUR
         )
         await compiler.async_compile(cfg(), step_start, step_end.timestamp())
-    stepwise = await read_sums(
-        hass, DURATION_OFF, start, start + timedelta(hours=5)
-    )
+    stepwise = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=5))
 
     assert all_at_once == stepwise
 
 
-async def test_the_trailing_window_picks_up_a_late_committed_state(
-    recorder, freezer
-):
+async def test_the_trailing_window_picks_up_a_late_committed_state(recorder, freezer):
     """The hourly run recompiles TRAILING_HOURS back from the watermark.
 
     A state change committed after its hour was first compiled sits in the
@@ -322,9 +312,7 @@ async def test_watermark_is_the_newest_hour_across_statistics(recorder):
     assert watermark == (start + timedelta(hours=3)).timestamp()
 
 
-async def test_recompiling_back_before_the_first_state_writes_no_gap(
-    recorder, freezer
-):
+async def test_recompiling_back_before_the_first_state_writes_no_gap(recorder, freezer):
     """A recompute asked to start before the recorder's evidence opens at
     the evidence instead.
 
@@ -372,9 +360,7 @@ async def test_recomputing_past_the_purge_horizon_leaves_older_hours_alone(
     assert before == [1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 5.5, 5.5, 5.5, 5.5]
 
     # Everything the recorder held is purged; one new row arrives after.
-    await hass.services.async_call(
-        "recorder", "purge", {"keep_days": 0}, blocking=True
-    )
+    await hass.services.async_call("recorder", "purge", {"keep_days": 0}, blocking=True)
     await get_instance(hass).async_block_till_done()
     freezer.move_to(start + timedelta(hours=10, minutes=30))
     hass.states.async_set(ENTITY, "on")
@@ -418,9 +404,7 @@ async def test_a_hole_after_the_watermark_is_still_filled(recorder, freezer):
     compiler = Compiler(hass)
     await compiler.async_compile(cfg(), start.timestamp())
 
-    await hass.services.async_call(
-        "recorder", "purge", {"keep_days": 0}, blocking=True
-    )
+    await hass.services.async_call("recorder", "purge", {"keep_days": 0}, blocking=True)
     await get_instance(hass).async_block_till_done()
     freezer.move_to(start + timedelta(hours=5, minutes=30))
     hass.states.async_set(ENTITY, "on")
@@ -461,9 +445,7 @@ async def test_a_hole_nothing_can_vouch_for_is_left_open(recorder, freezer):
     compiler = Compiler(hass)
     await compiler.async_compile_incremental(cfg())
 
-    await hass.services.async_call(
-        "recorder", "purge", {"keep_days": 0}, blocking=True
-    )
+    await hass.services.async_call("recorder", "purge", {"keep_days": 0}, blocking=True)
     await get_instance(hass).async_block_till_done()
     freezer.move_to(start + timedelta(hours=5, minutes=30))
     hass.states.async_set(ENTITY, "on")
@@ -510,9 +492,7 @@ async def test_a_recompute_opening_inside_a_hole_bases_on_the_row_before_it(
     freezer.move_to(start + timedelta(hours=1))
     compiler = Compiler(hass)
     await compiler.async_compile_incremental(cfg())
-    await hass.services.async_call(
-        "recorder", "purge", {"keep_days": 0}, blocking=True
-    )
+    await hass.services.async_call("recorder", "purge", {"keep_days": 0}, blocking=True)
     await get_instance(hass).async_block_till_done()
     freezer.move_to(start + timedelta(hours=5, minutes=30))
     hass.states.async_set(ENTITY, "on")
@@ -528,9 +508,7 @@ async def test_a_recompute_opening_inside_a_hole_bases_on_the_row_before_it(
     assert on == [0.5, 1.5, 2.5]
 
 
-async def test_hours_that_cannot_be_recomputed_are_left_as_they_are(
-    recorder, freezer
-):
+async def test_hours_that_cannot_be_recomputed_are_left_as_they_are(recorder, freezer):
     """A recompute reaches an hour no source can open, with rows behind it.
 
     The purge horizon fell inside the lookback hour and spared only an
@@ -557,9 +535,7 @@ async def test_hours_that_cannot_be_recomputed_are_left_as_they_are(
 
     # The horizon lands at 0:30: the recordable rows go, the ignored one stays.
     freezer.move_to(start + timedelta(minutes=30))
-    await hass.services.async_call(
-        "recorder", "purge", {"keep_days": 0}, blocking=True
-    )
+    await hass.services.async_call("recorder", "purge", {"keep_days": 0}, blocking=True)
     await get_instance(hass).async_block_till_done()
 
     freezer.move_to(start + timedelta(hours=3))
@@ -603,9 +579,7 @@ async def test_an_ignored_state_at_the_window_start_does_not_destroy_durations(
 
     # Now the trailing window the hourly run would use, whose start lands in
     # the middle of the ignored stretch.
-    await compiler.async_compile(
-        cfg(), (start + timedelta(hours=1)).timestamp()
-    )
+    await compiler.async_compile(cfg(), (start + timedelta(hours=1)).timestamp())
     trailing = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=4))
 
     assert trailing == full
@@ -631,18 +605,12 @@ async def test_a_boundary_transition_is_counted_once_from_either_window(
     compiler = Compiler(hass)
 
     await compiler.async_compile(cfg(), start.timestamp())
-    from_earlier = await read_sums(
-        hass, COUNT_OFF, start, start + timedelta(hours=4)
-    )
+    from_earlier = await read_sums(hass, COUNT_OFF, start, start + timedelta(hours=4))
     assert from_earlier == [0, 0, 1, 1]
 
     # Recompile a window that begins exactly on the transition.
-    await compiler.async_compile(
-        cfg(), (start + timedelta(hours=2)).timestamp()
-    )
-    from_boundary = await read_sums(
-        hass, COUNT_OFF, start, start + timedelta(hours=4)
-    )
+    await compiler.async_compile(cfg(), (start + timedelta(hours=2)).timestamp())
+    from_boundary = await read_sums(hass, COUNT_OFF, start, start + timedelta(hours=4))
 
     assert from_boundary == from_earlier
 
@@ -760,9 +728,7 @@ async def test_hourly_values_roll_up_into_a_daily_mean_min_and_max(recorder, fre
     assert rows[0]["sum"] == pytest.approx(2.5)
 
 
-async def test_a_new_entity_opens_at_the_first_whole_hour_it_knows(
-    recorder, freezer
-):
+async def test_a_new_entity_opens_at_the_first_whole_hour_it_knows(recorder, freezer):
     """An entity's first state almost never lands on the hour, and the
     part-known hour containing it cannot both be recorded and total
     wall-clock time."""
@@ -1062,9 +1028,7 @@ OTHER = "binary_sensor.grid_status_pump"
 OTHER_DURATION_ON = "discrete_statistics:binary_sensor_grid_status_pump_on_duration"
 
 
-async def test_two_entities_never_write_into_each_others_statistics(
-    recorder, freezer
-):
+async def test_two_entities_never_write_into_each_others_statistics(recorder, freezer):
     """`belongs_to` is what keeps them apart, and it is load-bearing.
 
     The entity IDs are chosen so one slug is a prefix of the other at an
@@ -1134,7 +1098,10 @@ async def test_a_boundary_row_into_the_carried_state_is_not_a_transition(
     on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=4))
     assert on == [1.0, 2.0, 3.0, 4.0]
     assert await read_sums(hass, COUNT_ON, start, start + timedelta(hours=4)) == [
-        0, 0, 0, 0
+        0,
+        0,
+        0,
+        0,
     ]
 
 
@@ -1169,9 +1136,7 @@ async def test_a_reloaded_entity_does_not_kill_the_compile(recorder, freezer):
     assert on == [1.0, 2.0, 3.0, 4.0]
 
 
-async def test_a_reloaded_entity_is_recorded_as_unknown_under_record(
-    recorder, freezer
-):
+async def test_a_reloaded_entity_is_recorded_as_unknown_under_record(recorder, freezer):
     """Under `record` it lands in the unknown statistic."""
     hass = recorder
     start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
@@ -1192,9 +1157,7 @@ async def test_a_reloaded_entity_is_recorded_as_unknown_under_record(
     freezer.move_to(start + timedelta(hours=4))
     await Compiler(hass).async_compile(record_all, start.timestamp())
 
-    unknown = await read_sums(
-        hass, DURATION_UNKNOWN, start, start + timedelta(hours=4)
-    )
+    unknown = await read_sums(hass, DURATION_UNKNOWN, start, start + timedelta(hours=4))
     on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=4))
     assert unknown == [0.0, 1.0, 2.0, 2.0]
     assert on == [1.0, 1.0, 1.0, 2.0]
@@ -1248,9 +1211,7 @@ async def test_a_blank_substitute_survives_the_whole_pipeline(recorder, freezer)
     ]
 
 
-UNNAMED = EntityConfig(
-    entity_id=ENTITY, name=None, default="record_known", states={}
-)
+UNNAMED = EntityConfig(entity_id=ENTITY, name=None, default="record_known", states={})
 
 
 async def test_the_statistic_name_falls_back_to_the_entitys_name(recorder, freezer):
@@ -1307,7 +1268,10 @@ async def test_the_registry_name_survives_the_entity_being_unavailable(
     """
     hass = recorder
     entity_registry.async_get_or_create(
-        "binary_sensor", "demo", "unique-1", suggested_object_id="grid_status",
+        "binary_sensor",
+        "demo",
+        "unique-1",
+        suggested_object_id="grid_status",
         original_name="Mains Power",
     )
     start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
@@ -1336,7 +1300,10 @@ async def test_the_registry_name_wins_over_a_stale_friendly_name(
     """
     hass = recorder
     entity_registry.async_get_or_create(
-        "binary_sensor", "demo", "unique-2", suggested_object_id="grid_status",
+        "binary_sensor",
+        "demo",
+        "unique-2",
+        suggested_object_id="grid_status",
         original_name="Old Name",
     )
     entity_registry.async_update_entity(ENTITY, name="Mains Power")
@@ -1365,7 +1332,9 @@ async def test_states_are_rendered_the_way_home_assistant_renders_them(
     assert await async_setup_component(hass, "binary_sensor", {})
     await hass.async_block_till_done()
     entity_registry.async_get_or_create(
-        "binary_sensor", "demo", "door-1",
+        "binary_sensor",
+        "demo",
+        "door-1",
         suggested_object_id="grid_status",
         original_name="Front Door",
         original_device_class="door",
@@ -1518,15 +1487,16 @@ async def test_unknown_and_unavailable_are_capitalised(recorder, freezer):
     freezer.move_to(start + timedelta(hours=4))
     await Compiler(hass).async_compile(record_all, start.timestamp())
 
-    assert await stored_name(
-        hass, "discrete_statistics:binary_sensor_grid_status_unavailable_duration"
-    ) == "Grid Status: Unavailable (h)"
+    assert (
+        await stored_name(
+            hass, "discrete_statistics:binary_sensor_grid_status_unavailable_duration"
+        )
+        == "Grid Status: Unavailable (h)"
+    )
     assert await stored_name(hass, DURATION_UNKNOWN) == "Grid Status: Unknown (h)"
 
 
-async def test_a_state_older_than_the_purge_horizon_is_still_carried(
-    recorder, freezer
-):
+async def test_a_state_older_than_the_purge_horizon_is_still_carried(recorder, freezer):
     """The case that matters most once purge_keep_days is short.
 
     An entity that sits in one state for longer than the horizon has no rows
@@ -1545,17 +1515,13 @@ async def test_a_state_older_than_the_purge_horizon_is_still_carried(
     # Everything the recorder held about it is gone. Purge deletes rows
     # older than *now*, so the clock has to have moved past them first.
     freezer.move_to(start + timedelta(hours=4))
-    await hass.services.async_call(
-        "recorder", "purge", {"keep_days": 0}, blocking=True
-    )
+    await hass.services.async_call("recorder", "purge", {"keep_days": 0}, blocking=True)
     await get_instance(hass).async_block_till_done()
     # Nothing left in the recorder, so the opening moment now comes from the
     # live state: it began exactly on the hour, so that hour is usable whole.
     assert await Compiler(hass)._async_earliest_state_ts(ENTITY) == start.timestamp()
 
-    await Compiler(hass).async_compile(
-        cfg(), (start + timedelta(hours=1)).timestamp()
-    )
+    await Compiler(hass).async_compile(cfg(), (start + timedelta(hours=1)).timestamp())
 
     on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=4))
     counts = await read_sums(hass, COUNT_ON, start, start + timedelta(hours=4))
@@ -1563,9 +1529,7 @@ async def test_a_state_older_than_the_purge_horizon_is_still_carried(
     assert counts == [0, 0, 0]
 
 
-async def test_a_state_that_began_inside_the_window_is_not_carried(
-    recorder, freezer
-):
+async def test_a_state_that_began_inside_the_window_is_not_carried(recorder, freezer):
     """It says nothing about how the window opened.
 
     This is also what stops a backfill of old hours being handed whatever
@@ -1578,9 +1542,7 @@ async def test_a_state_that_began_inside_the_window_is_not_carried(
     await hass.async_block_till_done()
     await get_instance(hass).async_block_till_done()
     freezer.move_to(start + timedelta(hours=4))
-    await hass.services.async_call(
-        "recorder", "purge", {"keep_days": 0}, blocking=True
-    )
+    await hass.services.async_call("recorder", "purge", {"keep_days": 0}, blocking=True)
     await get_instance(hass).async_block_till_done()
 
     compiler = Compiler(hass)
@@ -1634,9 +1596,7 @@ async def test_a_live_state_that_began_this_hour_waits(recorder, freezer):
     await get_instance(hass).async_block_till_done()
 
     freezer.move_to(start + timedelta(minutes=50))
-    await hass.services.async_call(
-        "recorder", "purge", {"keep_days": 0}, blocking=True
-    )
+    await hass.services.async_call("recorder", "purge", {"keep_days": 0}, blocking=True)
     await get_instance(hass).async_block_till_done()
 
     assert await Compiler(hass).async_compile_incremental(cfg()) == 0
@@ -1660,9 +1620,7 @@ async def test_the_opening_hour_is_whole_when_it_comes_from_the_live_state(
     await get_instance(hass).async_block_till_done()
 
     freezer.move_to(start + timedelta(hours=2, minutes=30))
-    await hass.services.async_call(
-        "recorder", "purge", {"keep_days": 0}, blocking=True
-    )
+    await hass.services.async_call("recorder", "purge", {"keep_days": 0}, blocking=True)
     await get_instance(hass).async_block_till_done()
 
     assert await Compiler(hass).async_compile_incremental(cfg()) == 1
@@ -1693,9 +1651,7 @@ async def test_an_ignored_row_at_the_boundary_does_not_hide_the_state_behind_it(
     freezer.move_to(start + timedelta(hours=5))
     # The window opens at hour 2, past both rows: the only row before it is
     # the `unavailable`.
-    await Compiler(hass).async_compile(
-        cfg(), (start + timedelta(hours=2)).timestamp()
-    )
+    await Compiler(hass).async_compile(cfg(), (start + timedelta(hours=2)).timestamp())
 
     on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=5))
     assert on == [1.0, 2.0, 3.0]
@@ -1782,9 +1738,10 @@ def test_readable_state_is_verified_against_the_token():
         "heat_cool"
     )
     # A display name may hold colons of its own; the state is the last part.
-    assert compiler_module._readable_state(
-        "Shed: Grid: heat_cool (h)", "heatcool"
-    ) == "heat_cool"
+    assert (
+        compiler_module._readable_state("Shed: Grid: heat_cool (h)", "heatcool")
+        == "heat_cool"
+    )
     # Renamed by hand, or written by an older format: no shape to read.
     assert compiler_module._readable_state("renamed by hand", "heatcool") == "heatcool"
     # Right shape, wrong state - the name does not belong to this ID.
@@ -1866,9 +1823,7 @@ async def test_the_state_machine_outranks_our_own_statistics(recorder, freezer):
     await hass.async_block_till_done()
     await get_instance(hass).async_block_till_done()
     freezer.move_to(start + timedelta(hours=2))
-    await hass.services.async_call(
-        "recorder", "purge", {"keep_days": 0}, blocking=True
-    )
+    await hass.services.async_call("recorder", "purge", {"keep_days": 0}, blocking=True)
     await get_instance(hass).async_block_till_done()
 
     freezer.move_to(start + timedelta(hours=4))
@@ -1880,9 +1835,7 @@ async def test_the_state_machine_outranks_our_own_statistics(recorder, freezer):
     assert off == [0.5, 1.5, 1.5, 1.5]
 
 
-async def test_a_rename_reaches_an_absent_state_through_the_compiler(
-    recorder, freezer
-):
+async def test_a_rename_reaches_an_absent_state_through_the_compiler(recorder, freezer):
     """Through the compiler, not only `payload.rename`.
 
     The entity has not been `off` since hour 0, and the window being
@@ -1910,7 +1863,10 @@ async def test_a_rename_reaches_an_absent_state_through_the_compiler(
     assert await stored_name(hass, DURATION_OFF) == "Mains: off (h)"
     assert await stored_name(hass, COUNT_OFF) == "Mains: off (#)"
     assert await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=4)) == [
-        0.5, 0.5, 0.5, 0.5
+        0.5,
+        0.5,
+        0.5,
+        0.5,
     ]
 
 
@@ -1939,9 +1895,7 @@ async def test_the_evidence_is_the_first_whole_hour_not_the_hour_of_the_row(
 
     # Everything before 2:40 is purged; that row is the oldest evidence.
     freezer.move_to(start + timedelta(hours=2, minutes=30))
-    await hass.services.async_call(
-        "recorder", "purge", {"keep_days": 0}, blocking=True
-    )
+    await hass.services.async_call("recorder", "purge", {"keep_days": 0}, blocking=True)
     await get_instance(hass).async_block_till_done()
 
     freezer.move_to(start + timedelta(hours=4))
@@ -1985,7 +1939,13 @@ async def test_a_short_outage_is_carried_and_a_long_one_recorded(recorder, freez
         hass,
         freezer,
         start,
-        ((0, "on"), (600, "unavailable"), (620, "on"), (5400, "unavailable"), (6000, "on")),
+        (
+            (0, "on"),
+            (600, "unavailable"),
+            (620, "on"),
+            (5400, "unavailable"),
+            (6000, "on"),
+        ),
     )
 
     freezer.move_to(start + timedelta(hours=3))
@@ -2017,9 +1977,9 @@ async def test_a_spell_still_running_at_compile_time_is_settled_by_the_trailing_
     freezer.move_to(start + timedelta(hours=1, minutes=3))
     compiler = Compiler(hass)
     await compiler.async_compile_incremental(short_cfg())
-    assert await read_sums(
-        hass, DURATION_ON, start, start + timedelta(hours=1)
-    ) == [1.0]
+    assert await read_sums(hass, DURATION_ON, start, start + timedelta(hours=1)) == [
+        1.0
+    ]
     assert await existing(hass) == sorted([COUNT_ON, DURATION_ON])
 
     await _set_states(hass, freezer, start, ((4800, "on"),))

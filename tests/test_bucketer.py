@@ -101,9 +101,7 @@ def test_span_of_many_days_conserves_time():
 @pytest.mark.parametrize("transition_offset", [0.5, 1.5, 23.5, 47.9])
 def test_every_window_conserves_time(transition_offset):
     window = 48 * HOUR
-    result = bucket(
-        "on", [(T0 + transition_offset * HOUR, "off")], T0, T0 + window
-    )
+    result = bucket("on", [(T0 + transition_offset * HOUR, "off")], T0, T0 + window)
     assert total_duration(result) == pytest.approx(window)
 
 

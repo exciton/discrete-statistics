@@ -169,7 +169,11 @@ async def test_options_flow_updates_and_recompiles(recorder):
         assert result["step_id"] == "init"
         result = await hass.config_entries.options.async_configure(
             result["flow_id"],
-            {CONF_NAME: "Grid", CONF_DEFAULT: DEFAULT_RECORD, CONF_BLANK: STATE_UNKNOWN},
+            {
+                CONF_NAME: "Grid",
+                CONF_DEFAULT: DEFAULT_RECORD,
+                CONF_BLANK: STATE_UNKNOWN,
+            },
         )
         await hass.async_block_till_done()
 
@@ -336,7 +340,9 @@ async def test_a_measuring_entity_is_refused(recorder, entity_registry):
     hass = recorder
     assert await async_setup_component(hass, DOMAIN, {})
     entity_registry.async_get_or_create(
-        "sensor", "demo", "temp-1",
+        "sensor",
+        "demo",
+        "temp-1",
         suggested_object_id="living_room_temperature",
         capabilities={"state_class": "measurement"},
         unit_of_measurement="°C",
@@ -352,7 +358,9 @@ async def test_a_unit_alone_is_enough_to_refuse(recorder, entity_registry):
     hass = recorder
     assert await async_setup_component(hass, DOMAIN, {})
     entity_registry.async_get_or_create(
-        "sensor", "demo", "temp-2",
+        "sensor",
+        "demo",
+        "temp-2",
         suggested_object_id="living_room_temperature",
         unit_of_measurement="°C",
     )
@@ -370,7 +378,9 @@ async def test_an_enum_sensor_is_accepted(recorder, entity_registry):
     hass = recorder
     assert await async_setup_component(hass, DOMAIN, {})
     entity_registry.async_get_or_create(
-        "sensor", "demo", "enum-1",
+        "sensor",
+        "demo",
+        "enum-1",
         suggested_object_id="washing_machine_status",
         original_device_class="enum",
         capabilities={"options": ["idle", "running", "done"]},
@@ -398,7 +408,9 @@ async def test_a_measuring_entity_is_refused_while_unavailable(
     hass = recorder
     assert await async_setup_component(hass, DOMAIN, {})
     entity_registry.async_get_or_create(
-        "sensor", "demo", "temp-3",
+        "sensor",
+        "demo",
+        "temp-3",
         suggested_object_id="living_room_temperature",
         capabilities={"state_class": "measurement"},
         unit_of_measurement="°C",
@@ -427,7 +439,9 @@ async def test_the_entry_is_titled_with_the_entitys_name_and_id(
     hass = recorder
     assert await async_setup_component(hass, DOMAIN, {})
     entity_registry.async_get_or_create(
-        "binary_sensor", "demo", "title-1",
+        "binary_sensor",
+        "demo",
+        "title-1",
         suggested_object_id="grid_status",
         original_name="Mains Power",
     )
@@ -442,7 +456,9 @@ async def test_a_typed_name_still_leads_the_title(recorder, entity_registry):
     hass = recorder
     assert await async_setup_component(hass, DOMAIN, {})
     entity_registry.async_get_or_create(
-        "binary_sensor", "demo", "title-2",
+        "binary_sensor",
+        "demo",
+        "title-2",
         suggested_object_id="grid_status",
         original_name="Mains Power",
     )
@@ -475,7 +491,9 @@ async def test_the_options_dialog_says_what_it_is_editing(recorder, entity_regis
     """Otherwise the form is four fields with nothing naming the subject."""
     hass = recorder
     entity_registry.async_get_or_create(
-        "binary_sensor", "demo", "opt-1",
+        "binary_sensor",
+        "demo",
+        "opt-1",
         suggested_object_id="grid_status",
         original_name="Mains Power",
     )
@@ -501,7 +519,9 @@ async def test_the_options_dialog_says_what_it_is_editing(recorder, entity_regis
     }
 
 
-async def test_the_name_box_is_not_prefilled_with_the_default(recorder, entity_registry):
+async def test_the_name_box_is_not_prefilled_with_the_default(
+    recorder, entity_registry
+):
     """A suggested value comes back on submit and would freeze the name.
 
     The default belongs in the field's description, not in the field: the
@@ -509,7 +529,9 @@ async def test_the_name_box_is_not_prefilled_with_the_default(recorder, entity_r
     """
     hass = recorder
     entity_registry.async_get_or_create(
-        "binary_sensor", "demo", "opt-2",
+        "binary_sensor",
+        "demo",
+        "opt-2",
         suggested_object_id="grid_status",
         original_name="Mains Power",
     )
@@ -736,7 +758,10 @@ async def test_ignore_short_unknown_is_offered_and_needs_a_duration(recorder):
     ):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            {**user_input, CONF_MIN_DURATION: {"hours": 0, "minutes": 0, "seconds": 20}},
+            {
+                **user_input,
+                CONF_MIN_DURATION: {"hours": 0, "minutes": 0, "seconds": 20},
+            },
         )
         await hass.async_block_till_done()
     assert result["type"] is FlowResultType.CREATE_ENTRY
@@ -792,9 +817,7 @@ async def test_the_options_form_offers_a_row_per_state_the_recorder_holds(record
 
 async def test_an_enum_sensors_options_are_rows_before_they_are_seen(recorder):
     hass = recorder
-    hass.states.async_set(
-        ENTITY, "idle", {"options": ["idle", "Heating", "cooling"]}
-    )
+    hass.states.async_set(ENTITY, "idle", {"options": ["idle", "Heating", "cooling"]})
     entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
 
     result = await hass.config_entries.options.async_init(entry.entry_id)

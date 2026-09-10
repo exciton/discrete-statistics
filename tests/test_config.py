@@ -42,9 +42,7 @@ def test_record_known_ignores_unknown_and_unavailable():
 
 
 def test_default_record_keeps_everything():
-    [cfg] = parse(
-        [{"entity_id": "binary_sensor.x", "default": "record"}]
-    )
+    [cfg] = parse([{"entity_id": "binary_sensor.x", "default": "record"}])
     assert cfg.resolve("unknown") == "unknown"
     assert cfg.resolve("anything") == "anything"
 
@@ -78,9 +76,7 @@ def test_explicit_ignore_overrides_default_record():
 
 
 def test_explicit_record_opts_back_in_under_record_known():
-    [cfg] = parse(
-        [{"entity_id": "sensor.x", "states": {"unknown": "record"}}]
-    )
+    [cfg] = parse([{"entity_id": "sensor.x", "states": {"unknown": "record"}}])
     assert cfg.resolve("unknown") == "unknown"
 
 
@@ -126,9 +122,7 @@ def test_entity_id_required():
 
 
 def test_name_is_carried_through():
-    [cfg] = parse(
-        [{"entity_id": "sensor.x", "name": "Grid Status"}]
-    )
+    [cfg] = parse([{"entity_id": "sensor.x", "name": "Grid Status"}])
     assert cfg.name == "Grid Status"
 
 
@@ -188,9 +182,7 @@ def test_distinct_entity_ids_are_accepted():
 
 def test_is_configured_matches_on_entity_id():
     configs = [
-        EntityConfig(
-            entity_id="binary_sensor.a", name=None, default=DEFAULT_RECORD
-        )
+        EntityConfig(entity_id="binary_sensor.a", name=None, default=DEFAULT_RECORD)
     ]
     assert is_configured(configs, "binary_sensor.a")
     assert not is_configured(configs, "binary_sensor.b")
@@ -262,9 +254,7 @@ def test_an_unsluggable_state_is_treated_as_unknown():
 
 def test_the_conversion_follows_a_states_map_for_unknown():
     """Because it happens before resolution, not after it."""
-    cfg = parse(
-        [{"entity_id": "sensor.x", "states": {"unknown": "offline"}}]
-    )[0]
+    cfg = parse([{"entity_id": "sensor.x", "states": {"unknown": "offline"}}])[0]
     assert cfg.resolve("") == "offline"
     assert cfg.resolve("!!!") == "offline"
 
@@ -296,11 +286,13 @@ def test_the_two_compose_with_the_explicit_entry_first():
     of the config.
     """
     cfg = parse(
-        [{
-            "entity_id": "sensor.x",
-            "blank": "weird",
-            "states": {"": "ok"},
-        }]
+        [
+            {
+                "entity_id": "sensor.x",
+                "blank": "weird",
+                "states": {"": "ok"},
+            }
+        ]
     )[0]
     assert cfg.resolve("") == "ok"
     assert cfg.resolve("!!!") == "weird"
@@ -320,11 +312,13 @@ def test_an_unusable_blank_value_is_rejected():
 def test_an_explicitly_recorded_blank_falls_back_rather_than_crashing():
     """`"": record` names it but it still cannot become an ID."""
     cfg = parse(
-        [{
-            "entity_id": "sensor.x",
-            "default": "record",
-            "states": {"": "record"},
-        }]
+        [
+            {
+                "entity_id": "sensor.x",
+                "default": "record",
+                "states": {"": "record"},
+            }
+        ]
     )[0]
     assert cfg.resolve("") == "unknown"
 
@@ -351,9 +345,7 @@ def test_blank_can_be_ignored_outright():
 
 
 def test_blank_ignore_still_loses_to_an_explicit_mapping():
-    cfg = parse(
-        [{"entity_id": "sensor.x", "blank": "ignore", "states": {"": "ok"}}]
-    )[0]
+    cfg = parse([{"entity_id": "sensor.x", "blank": "ignore", "states": {"": "ok"}}])[0]
     assert cfg.resolve("") == "ok"
     assert cfg.resolve("!!!") is None
 
@@ -368,11 +360,13 @@ def test_ignore_short_resolves_to_the_state_and_flags_it():
     """Whether a spell is long enough is a question about a spell, not a
     state, so `resolve` records it and `classify` says it is conditional."""
     cfg = parse(
-        [{
-            "entity_id": "sensor.x",
-            "states": {"unavailable": "ignore_short"},
-            "min_duration": {"seconds": 30},
-        }]
+        [
+            {
+                "entity_id": "sensor.x",
+                "states": {"unavailable": "ignore_short"},
+                "min_duration": {"seconds": 30},
+            }
+        ]
     )[0]
     assert cfg.min_duration == 30.0
     assert cfg.resolve("unavailable") == "unavailable"
@@ -383,12 +377,14 @@ def test_ignore_short_resolves_to_the_state_and_flags_it():
 
 def test_ignore_short_as_the_default_flags_every_unlisted_state():
     cfg = parse(
-        [{
-            "entity_id": "binary_sensor.door",
-            "default": "ignore_short",
-            "states": {"unavailable": "ignore"},
-            "min_duration": "00:00:05",
-        }]
+        [
+            {
+                "entity_id": "binary_sensor.door",
+                "default": "ignore_short",
+                "states": {"unavailable": "ignore"},
+                "min_duration": "00:00:05",
+            }
+        ]
     )[0]
     assert cfg.min_duration == 5.0
     assert cfg.classify("on") == ("on", True)
@@ -398,11 +394,13 @@ def test_ignore_short_as_the_default_flags_every_unlisted_state():
 
 def test_a_blank_state_inherits_ignore_short_from_its_substitute():
     cfg = parse(
-        [{
-            "entity_id": "sensor.x",
-            "states": {"unknown": "ignore_short"},
-            "min_duration": {"minutes": 1},
-        }]
+        [
+            {
+                "entity_id": "sensor.x",
+                "states": {"unknown": "ignore_short"},
+                "min_duration": {"minutes": 1},
+            }
+        ]
     )[0]
     assert cfg.classify("") == ("unknown", True)
     assert cfg.classify("!!!") == ("unknown", True)
@@ -410,12 +408,14 @@ def test_a_blank_state_inherits_ignore_short_from_its_substitute():
 
 def test_ignore_short_is_not_a_map_target():
     cfg = parse(
-        [{
-            "entity_id": "sensor.x",
-            "default": "ignore",
-            "states": {"x": "ignore_short"},
-            "min_duration": {"minutes": 1},
-        }]
+        [
+            {
+                "entity_id": "sensor.x",
+                "default": "ignore",
+                "states": {"x": "ignore_short"},
+                "min_duration": {"minutes": 1},
+            }
+        ]
     )[0]
     assert cfg.resolve("ignore_short") is None
 
@@ -425,35 +425,39 @@ def test_ignore_short_requires_a_threshold():
     with pytest.raises(vol.Invalid, match="min_duration"):
         parse([{"entity_id": "sensor.x", "default": "ignore_short"}])
     with pytest.raises(vol.Invalid, match="min_duration"):
-        parse(
-            [{"entity_id": "sensor.x", "states": {"unknown": "ignore_short"}}]
-        )
+        parse([{"entity_id": "sensor.x", "states": {"unknown": "ignore_short"}}])
     with pytest.raises(vol.Invalid, match="min_duration"):
         parse(
-            [{
-                "entity_id": "sensor.x",
-                "default": "ignore_short",
-                "min_duration": {"seconds": 0},
-            }]
+            [
+                {
+                    "entity_id": "sensor.x",
+                    "default": "ignore_short",
+                    "min_duration": {"seconds": 0},
+                }
+            ]
         )
 
 
 def test_the_threshold_is_capped_at_an_hour():
     """The distance the compiler reads back before a window."""
     parse(
-        [{
-            "entity_id": "sensor.x",
-            "default": "ignore_short",
-            "min_duration": {"hours": 1},
-        }]
+        [
+            {
+                "entity_id": "sensor.x",
+                "default": "ignore_short",
+                "min_duration": {"hours": 1},
+            }
+        ]
     )
     with pytest.raises(vol.Invalid, match="one hour"):
         parse(
-            [{
-                "entity_id": "sensor.x",
-                "default": "ignore_short",
-                "min_duration": {"hours": 1, "seconds": 1},
-            }]
+            [
+                {
+                    "entity_id": "sensor.x",
+                    "default": "ignore_short",
+                    "min_duration": {"hours": 1, "seconds": 1},
+                }
+            ]
         )
 
 
@@ -476,16 +480,21 @@ def test_entity_config_from_entry_reads_the_minimum_duration():
     )
     assert cfg.min_duration == 20.0
     assert cfg.classify("on") == ("on", True)
-    assert entity_config_from_entry({CONF_ENTITY_ID: "binary_sensor.a"}, {}).min_duration == 0.0
+    assert (
+        entity_config_from_entry({CONF_ENTITY_ID: "binary_sensor.a"}, {}).min_duration
+        == 0.0
+    )
 
 
 def test_ignore_short_unknown_is_conditional_only_for_unavailable_and_unknown():
     cfg = parse(
-        [{
-            "entity_id": "sensor.x",
-            "default": "ignore_short_unknown",
-            "min_duration": {"minutes": 1},
-        }]
+        [
+            {
+                "entity_id": "sensor.x",
+                "default": "ignore_short_unknown",
+                "min_duration": {"minutes": 1},
+            }
+        ]
     )[0]
     assert cfg.classify("on") == ("on", False)
     assert cfg.classify("unavailable") == ("unavailable", True)

@@ -77,7 +77,9 @@ BLANK_SUGGESTIONS = [STATE_UNKNOWN, DISPOSITION_IGNORE]
 OPTIONS_SCHEMA = vol.Schema(
     {
         vol.Optional(CONF_NAME): selector.TextSelector(),
-        vol.Required(CONF_DEFAULT, default=DEFAULT_RECORD_KNOWN): selector.SelectSelector(
+        vol.Required(
+            CONF_DEFAULT, default=DEFAULT_RECORD_KNOWN
+        ): selector.SelectSelector(
             selector.SelectSelectorConfig(
                 options=UI_DEFAULTS,
                 mode=selector.SelectSelectorMode.DROPDOWN,
@@ -180,9 +182,7 @@ async def async_known_states(
         known.add(state.state)
         known.update(state.attributes.get(ATTR_OPTIONS) or [])
     known.update(
-        await get_instance(hass).async_add_executor_job(
-            _stored_states, hass, entity_id
-        )
+        await get_instance(hass).async_add_executor_job(_stored_states, hass, entity_id)
     )
     return sorted((s for s in known if not is_blank(s)), key=str.casefold)
 
@@ -318,9 +318,7 @@ def _has_continuous_state(hass: HomeAssistant, entity_id: str) -> bool:
             return True
     if (state := hass.states.get(entity_id)) is not None:
         attributes = state.attributes
-        if attributes.get(ATTR_STATE_CLASS) or attributes.get(
-            ATTR_UNIT_OF_MEASUREMENT
-        ):
+        if attributes.get(ATTR_STATE_CLASS) or attributes.get(ATTR_UNIT_OF_MEASUREMENT):
             return True
     return False
 

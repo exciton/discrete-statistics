@@ -25,9 +25,7 @@ from .const import DOMAIN, METRIC_COUNT, METRIC_DURATION
 # Copied from homeassistant.components.recorder.statistics so that an
 # upstream change surfaces here as a test failure rather than a runtime
 # HomeAssistantError from the recorder.
-VALID_STATISTIC_ID = re.compile(
-    r"^(?!.+__)(?!_)[\da-z_]+(?<!_):(?!_)[\da-z_]+(?<!_)$"
-)
+VALID_STATISTIC_ID = re.compile(r"^(?!.+__)(?!_)[\da-z_]+(?<!_):(?!_)[\da-z_]+(?<!_)$")
 
 METRICS = (METRIC_DURATION, METRIC_COUNT)
 
