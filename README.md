@@ -522,7 +522,7 @@ states:
 
 The editor lists the entity's states with a tick, a drag handle, a name
 and a colour each, and writes the two keys for you. Its "Ignore states that
-appear later" tick chooses which the unticked states become: with it
+appear later" switch chooses which the unticked states become: with it
 on they are left out of `states:`; with it off they go in
 `ignore_states:`, which stays present — empty if need be — so the list
 stays open.

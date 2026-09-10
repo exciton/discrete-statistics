@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveColor, toHex } from "../src/colors";
+import { paletteCss, resolveColor, toHex } from "../src/colors";
 
 const theme = (name: string) =>
   ({ "--red-color": "#f44336", "--light-blue-color": "#03a9f4" })[name] ?? "";
@@ -35,5 +35,17 @@ describe("resolveColor", () => {
     expect(resolveColor("grey", theme)).toBeUndefined();
     expect(resolveColor("tomato", theme)).toBeUndefined();
     expect(resolveColor(undefined, theme)).toBeUndefined();
+  });
+});
+
+describe("paletteCss", () => {
+  it("is the theme's graph colour for the position, with the card's fallback behind it", () => {
+    expect(paletteCss(0)).toBe("var(--graph-color-1, #4269d0)");
+    expect(paletteCss(3)).toBe("var(--graph-color-4, #6cc5b0)");
+  });
+
+  it("wraps as the card's palette does", () => {
+    expect(paletteCss(8)).toBe(paletteCss(0));
+    expect(paletteCss(9)).toBe(paletteCss(1));
   });
 });

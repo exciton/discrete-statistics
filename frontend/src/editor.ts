@@ -94,7 +94,6 @@ export function configSchema(entities?: string[], followsPicker = false) {
         },
       ],
     },
-    { name: "energy_date_selection", selector: { boolean: {} } },
     {
       name: "",
       type: "grid",
@@ -121,7 +120,14 @@ export function configSchema(entities?: string[], followsPicker = false) {
         },
       ],
     },
-    { name: "hide_legend", selector: { boolean: {} } },
+    {
+      name: "",
+      type: "grid",
+      schema: [
+        { name: "energy_date_selection", selector: { boolean: {} } },
+        { name: "hide_legend", selector: { boolean: {} } },
+      ],
+    },
   ];
 }
 
@@ -133,7 +139,7 @@ export const computeLabel = (schema: { name: string }) =>
     period: "Period",
     days_to_show: "Days to show",
     collection_key: "Collection key",
-    energy_date_selection: "Follow the dashboard's date picker",
+    energy_date_selection: "Follow the date picker",
     metric: "Show",
     unit: "Time unit",
     hide_legend: "Hide the legend",
@@ -141,9 +147,7 @@ export const computeLabel = (schema: { name: string }) =>
 
 export const computeHelper = (schema: { name: string }) =>
   ({
-    period: "Auto suits the period to the days shown.",
     collection_key: "Names the date picker when a dashboard has more than one.",
-    unit: "Automatic picks hours or days to suit the period.",
   })[schema.name];
 
 export class DiscreteStatisticsCardEditor extends LitElement {

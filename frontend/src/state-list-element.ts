@@ -1,20 +1,27 @@
 import { LitElement, css, html } from "lit";
 import { property } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
-import type { StateList, StateRow } from "./state-list";
+import { paletteCss } from "./colors";
+import { automaticIndex, type StateList, type StateRow } from "./state-list";
 import type { HassLike } from "./types";
 
 // mdi:drag-horizontal-variant, the handle the stock row editors use.
 const DRAG_ICON = "M21 11H3V9H21V11M21 13H3V15H21V13Z";
 // The frontend's theme colours plus an entry for the palette, which is
-// what a row has until a colour is picked.
+// what a row has until a colour is picked - shown in the colour the
+// chart would give that row, so the picker says what "automatic" means.
+// A row without a colour hands the picker no value, so it shows that
+// default without the clear button a chosen colour gets.
 const AUTO = "auto";
-const COLOR_SELECTOR = {
+// The switch the form draws for its own boolean fields, so the tick under
+// the list looks like the one beside it.
+const IGNORE_NEW_SELECTOR = { boolean: {} };
+const colorSelector = (automatic: string) => ({
   ui_color: {
     default_color: AUTO,
-    extra_options: [{ value: AUTO, label: "Automatic" }],
+    extra_options: [{ value: AUTO, label: "Automatic", display_color: automatic }],
   },
-};
+});
 
 // One row per state: a drag handle, a tick for whether it is drawn, its
 // name — the stored one as the placeholder, so a row reads the same
@@ -56,8 +63,8 @@ export class DiscreteStatisticsStateList extends LitElement {
                 ></ha-input>
                 <ha-selector
                   .hass=${this.hass}
-                  .selector=${COLOR_SELECTOR}
-                  .value=${row.color ?? AUTO}
+                  .selector=${colorSelector(paletteCss(automaticIndex(list.rows, index)))}
+                  .value=${row.color}
                   .index=${index}
                   @value-changed=${this._colorChanged}
                 ></ha-selector>
@@ -66,12 +73,13 @@ export class DiscreteStatisticsStateList extends LitElement {
           )}
         </div>
       </ha-sortable>
-      <ha-formfield label="Ignore states that appear later">
-        <ha-checkbox
-          .checked=${list.ignoreNew}
-          @change=${this._ignoreNewChanged}
-        ></ha-checkbox>
-      </ha-formfield>
+      <ha-selector
+        .hass=${this.hass}
+        .selector=${IGNORE_NEW_SELECTOR}
+        .label=${"Ignore states that appear later"}
+        .value=${list.ignoreNew}
+        @value-changed=${this._ignoreNewChanged}
+      ></ha-selector>
     `;
   }
 
@@ -102,9 +110,9 @@ export class DiscreteStatisticsStateList extends LitElement {
     });
   }
 
-  private _ignoreNewChanged(ev: Event) {
-    const target = ev.currentTarget as HTMLElement & { checked: boolean };
-    this._announce({ ...this.value!, ignoreNew: target.checked });
+  private _ignoreNewChanged(ev: CustomEvent<{ value: boolean }>) {
+    ev.stopPropagation();
+    this._announce({ ...this.value!, ignoreNew: ev.detail.value });
   }
 
   private _updateRow(index: number, change: Partial<StateRow>) {

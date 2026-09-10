@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { stateList, stateListConfig } from "../src/state-list";
+import { automaticIndex, stateList, stateListConfig } from "../src/state-list";
 import type { StateStatistic } from "../src/statistic-ids";
 
 const stat = (token: string, label = token): StateStatistic => ({
@@ -99,5 +99,24 @@ describe("stateListConfig", () => {
       const list = { rows, ignoreNew };
       expect(stateList(all, stateListConfig(list))).toEqual(list);
     }
+  });
+});
+
+describe("automaticIndex", () => {
+  const rows = [
+    { token: "heat", label: "heat", shown: true },
+    { token: "off", label: "off", shown: false },
+    { token: "cool", label: "cool", shown: true },
+    { token: "fan", label: "fan", shown: false },
+  ];
+
+  it("counts a drawn row's position among the drawn rows, as the chart does", () => {
+    expect(automaticIndex(rows, 0)).toBe(0);
+    expect(automaticIndex(rows, 2)).toBe(1);
+  });
+
+  it("gives an undrawn row the position it would take if ticked", () => {
+    expect(automaticIndex(rows, 1)).toBe(1);
+    expect(automaticIndex(rows, 3)).toBe(2);
   });
 });

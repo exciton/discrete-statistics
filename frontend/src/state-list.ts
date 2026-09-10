@@ -87,3 +87,11 @@ export function stateListConfig(list: StateList): StateFilter {
     ignore_states: list.rows.filter((row) => !row.shown).map(nameOf),
   };
 }
+
+// The palette position a row's state is drawn at: the chart hands out
+// colours in order over the states it draws, so a drawn row's is its
+// place among the drawn rows, and an undrawn row's is the place it would
+// take if it were ticked.
+export function automaticIndex(rows: StateRow[], index: number): number {
+  return rows.slice(0, index).filter((row) => row.shown).length;
+}
