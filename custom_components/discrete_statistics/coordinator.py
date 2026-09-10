@@ -25,7 +25,7 @@ from datetime import timedelta
 from homeassistant.components.recorder import get_instance
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ENTITY_ID
-from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.core import CoreState, Event, HomeAssistant, callback
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import (
@@ -109,7 +109,12 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
 
         # The recorder is a write queue: drain it so the rows every read
         # below wants are there, whichever trigger asked for this refresh.
-        await get_instance(self.hass).async_block_till_done()
+        # Not before Home Assistant has started: the recorder holds its
+        # queue until then, and startup is waiting on this entry's setup,
+        # so a refresh that waited here would wait on itself. The compile
+        # at startup signals a refresh that drains.
+        if self.hass.state is CoreState.running:
+            await get_instance(self.hass).async_block_till_done()
 
         now = dt_util.utcnow().timestamp()
         tz = dt_util.get_default_time_zone()

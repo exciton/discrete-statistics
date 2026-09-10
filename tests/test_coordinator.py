@@ -4,8 +4,10 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
+from homeassistant.components.recorder import Recorder
 from homeassistant.config_entries import ConfigSubentryData
 from homeassistant.const import CONF_ENTITY_ID, CONF_NAME
+from homeassistant.core import CoreState
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.setup import async_setup_component
@@ -241,3 +243,27 @@ async def test_a_compile_during_a_refresh_does_not_seed_the_new_cache(
         # Two edges read by each refresh: the one racing the compile, and
         # the one that compile scheduled, which finds an empty cache.
         assert sums_at.call_count == 4
+
+
+async def test_a_refresh_before_startup_does_not_wait_for_the_recorder(
+    recorder, freezer
+):
+    """The recorder holds its queue until Home Assistant has started.
+
+    A refresh during setup that waited on it would wait on startup, which
+    is itself waiting on the entry - a deadlock the bootstrap breaks only
+    by giving up on the entry. Before startup the reads go straight to the
+    database; the compile at startup signals a refresh that drains.
+    """
+    hass = recorder
+    freezer.move_to(T0)
+    entry = await setup_entry(hass, [sensor(ON_TODAY, ["on"])])
+    coordinator = PeriodCoordinator(hass, entry, hass.data[DOMAIN]["compiler"])
+    with patch.object(Recorder, "async_block_till_done") as drain:
+        hass.set_state(CoreState.starting)
+        await coordinator.async_refresh()
+        assert coordinator.last_update_success
+        assert drain.call_count == 0
+        hass.set_state(CoreState.running)
+        await coordinator.async_refresh()
+        assert drain.call_count == 1
