@@ -61,31 +61,57 @@ build` bundles.
 A pure pipeline with a single I/O boundary. Dependencies point one way:
 
 ```
-const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds, count)}
+const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds, count)},
+       │                    and tally: a timeline -> {state: (seconds, count)}
        ├─ statistic_ids     pure: build, parse and match an external statistic ID
        ├─ config ── canonicalise   pure: recorder rows -> canonical transitions
-       │   │    └─ config_flow    HA UI: entity -> EntityConfig, per entry
+       │   │    └─ config_flow    HA UI: entity -> EntityConfig, per entry;
+       │   │                      sensor subentries
        │   └─ statistic_ids       for the blank-state test
        ├─ naming            HA: entity, state -> the names a person recognises
        ├─ payload           pure: buckets -> cumulative StatisticData rows
        │        │
-       │    compiler        writes the recorder: the only module that does
+       │    compiler        writes the recorder: the only module that does;
+       │        │           hands out its read path as a Timeline (async_tail)
+       ├─ buckets           pure: edge rows -> per-period {start, end, change}
        │        │
-       └─ buckets           pure: edge rows -> per-period {start, end, change}
+       ├─ periods           pure: a named period -> its edges, in a zone
+       │        │
+       ├─ rows              reads the recorder: the rows at edges, the sums
+       │        │           at an edge, where a series starts
+       ├─ reading           pure: two edges, the tail -> one sensor's value
+       │        │
+       │    coordinator     one refresh per entry: frame, tail, readings
+       │        │
+       │    sensor          one entity per sensor subentry
+       │
+            websocket       reads the recorder through rows, for the card
                 │
-            websocket       reads the recorder, for the card
-                │
-            __init__        setup, hourly schedule, recompute service, the command
+            __init__        setup, hourly schedule, recompute service, the command,
+                            the sensor platform
 ```
 
-Everything except `compiler`, `websocket`, `config_flow` and `naming` is
-pure and testable without a `hass` instance. Keep it that way: if a change
-needs recorder access in a lower module, the design is drifting. Three
-recorder boundaries: `compiler` is the only module that writes;
-`websocket` reads — `session_scope(read_only=True)`, one `IN` query on
-`(metadata_id, start_ts)` plus `LIMIT 1` lookups — and `config_flow` reads
-once per options dialog, the entity's distinct states, to draw a mapping
-row for each; so the invariants below are the compiler's alone.
+Everything except `compiler`, `rows`, `websocket`, `config_flow`, `naming`,
+`coordinator` and `sensor` is pure and testable without a `hass` instance.
+Keep it that way: if a change needs recorder access in a lower module, the
+design is drifting. Three recorder boundaries: `compiler` is the only
+module that writes; `rows` reads — `session_scope(read_only=True)`, the
+rows at a set of edges, the newest row before one, the earliest row of a
+series — for `websocket` and the coordinator alike; and `config_flow`
+reads once per options dialog, the entity's distinct states, to draw a
+mapping row for each, and once per sensor dialog, the entity's statistics,
+to offer their states; so the invariants below are the compiler's alone.
+`Compiler.async_tail` is the compiler's *read* path — the carry chain,
+`_async_history`, `canonicalise`, `_open_window` — handed out as a
+`Timeline` and never written, so a live sensor agrees with what the next
+compile writes, provisional `ignore_short` verdict included. After a
+compile that wrote anything, `async_compile` sends `compiled_signal(entity_id)`
+on the dispatcher; the coordinator listens and refreshes.
+
+`sensor.py` builds the entry's `PeriodCoordinator` lazily, the first time
+the entry has a `sensor` subentry, and keeps it once built. An entry with
+none registers no state-change listener and does no extra recorder reads
+— the sensors are opt-in, and so is the work behind them.
 
 States in a statistic's name are rendered by `naming.state_translator`,
 which wraps `async_translate_state`, so
@@ -134,13 +160,17 @@ other entities, so the generic heading is the honest one. Only `helper` and
 `entity` are special-cased anywhere else in the frontend, so the key costs
 nothing else either way.
 
-**The integration provides no entities.** `integration_type: helper` would
-list every entry in the Helpers panel — where `ha-config-helpers.ts:503-546`
-draws a row per *entity* and a red-exclamation row for any entry with none —
-and so force a placeholder entity just to carry the row, which then takes the
-row's name and icon and brings a service device with it. As a normal
-integration none of that applies: the page lists the entries, and each row
-opens its configuration.
+**The entry itself provides no entities.** `integration_type: helper`
+would list every entry in the Helpers panel — where
+`ha-config-helpers.ts:503-546` draws a row per *entity* and a
+red-exclamation row for any entry with none — and so force a placeholder
+entity just to carry the row, which then takes the row's name and icon and
+brings a service device with it. As a normal integration none of that
+applies: the page lists the entries, and each row opens its configuration.
+The period sensors do not change this: each belongs to a `sensor`
+*subentry* (`config_subentry_id` on `async_add_entities`), created by
+`SensorSubentryFlow` from the entry's page, so removing the subentry
+removes the entity and the entry with no subentries still has none.
 
 `Compiler` is a class built from `(hass,)`; the entry points are its methods,
 not module-level functions.
@@ -508,6 +538,11 @@ Verified against 2026.8.3.
   visible, and the deletion tests flaky about one run in three.
 - An `asyncio.Lock` in `hass.data` serialises the hourly run against the
   service. It is not reentrant: never call `compile_all` from inside it.
+- `Recorder.async_block_till_done()` returns as soon as the queue is empty,
+  which is before a popped `ImportStatisticsTask` has committed. A test
+  that seeds statistics with `async_add_external_statistics` and then reads
+  them back must wait with `async_wait_recording_done` instead —
+  `tests/test_rows.py`'s `seed` is the pattern.
 
 ## Units
 

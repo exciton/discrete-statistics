@@ -25,6 +25,9 @@ as external statistics, which are never purged.
   date picker if there is one
 - Draws with the stock statistics-graph card too: `change` for totals over
   days, weeks and months; `mean`, `min` and `max` for average and peak hours
+- Period sensors, opt-in: "time on today", "share of this month at the
+  office", "openings this year" — a number read from the statistics, so it
+  never shrinks when the recorder purges, following the entity live
 - The `mean` of a duration over any period is the share of that period
   spent in the state — `0.4` is 40 % — straight from the stock card
 - New states are picked up automatically as they appear, in the card as
@@ -556,6 +559,79 @@ The card renders through Home Assistant's own chart component. Because
 that component is internal to the frontend, a Home Assistant release can
 change it; the integration's minimum version is raised when that happens.
 
+## Period sensors
+
+A sensor with a number in it: how long the door was open today, what share
+of the month the heat pump spent heating, how many times the garage opened
+this year. Each reads its value out of the statistics above, so it
+reaches back as far as they do, and the recorder's retention does not
+shrink it.
+
+They are opt-in, one at a time. On the integration's page, open the entry
+for the entity and choose **Add sensor**:
+
+- **States** — one or more, added together, from the states the entity has
+  statistics for and the options of an enum sensor; any state can be typed
+  in. A state the entry's own settings ignore is refused, since a sensor
+  over it would never move. Leave it empty to count changes between every
+  state.
+- **Measure** — time in the states in hours, the share of the period spent
+  in them as a percentage, or the number of changes into them.
+- **Period** — today, yesterday, this week, last week, this month, last
+  month, this year, last year, or all time. Weeks start on Monday, days at
+  midnight in Home Assistant's own time zone.
+- **Name** — optional; the default is made from the entity, the states,
+  the measure and the period, "Front Door open time this month".
+- **Include the current hour** — statistics are compiled hourly. On, the
+  sensor follows the entity between compiles, reading the recorder for the
+  hours since the last compiled one and updating on every change and once
+  a minute, exactly as the next compile will record them — a state that
+  has to last a minimum duration is left out until it has. Off, the sensor
+  moves once an hour and is a pure function of the statistics.
+
+The sensor belongs to the entry: its settings are edited from the entry's
+page and deleting it there removes the sensor. The entry itself still has
+no entities.
+
+A time sensor is a duration in hours with two decimals, a share a
+percentage with one, a count a whole number. Each carries `period_start`
+and `period_end`, `compiled_until` — the end of the last compiled hour,
+which is where the statistics stop and the live reading starts — and
+`live`. A period that starts before the entity's statistics do is measured
+from where they start, and the share is of the time actually measured, so
+a sensor over all time on an entity with a month of statistics reads the
+share of that month. A sensor whose states are all ignored by the entry,
+or whose entity has no statistics yet, is `unavailable`, with the reason in
+the log.
+
+**Count.** A count is the number of changes *into* the states inside the
+period, as the statistics record them. A spell already in progress when
+the period opens is not a change: a door open since yesterday evening
+counts `0` openings today until it closes and opens again.
+`history_stats` counts it as `1`, because it counts the spells overlapping
+its window rather than the changes inside it. For the same reason the
+count of a period is exactly the sum of its hours' counts, which is what
+lets today's count agree with the chart.
+
+**Keep them out of the recorder.** The sensors change every minute, and
+each change is a row in the recorder's `states` table — recording a
+number that is derived from statistics the recorder already keeps. The
+entity IDs all start with `sensor.discrete_`, so one line excludes them:
+
+```yaml
+recorder:
+  exclude:
+    entity_globs:
+      - sensor.discrete_*
+```
+
+The IDs are `sensor.discrete_<entity>_<states>_<measure>_<period>` —
+`sensor.discrete_binary_sensor_front_door_on_duration_today` — so the
+sensor and the statistic it reads visibly match; renaming the entity ID
+afterwards is fine, the exclude is only a convenience. Nothing here adds a
+`state_class`, so the recorder does not build a second set of long-term
+statistics over these either.
+
 ## Backfilling
 
 An entity that has not changed within the recorder's window has no history at
@@ -630,7 +706,18 @@ answers a different question. It is a sensor whose value is *how much of a
 window* an entity spent in some states — the window being whatever its
 `start`/`end` templates render to right now — and it reads that from the
 recorder each time. This component writes the answer for every hour, once,
-into statistics that outlive the recorder. Each is the right tool for a specific job.
+into statistics that outlive the recorder. Each is the right tool for a
+specific job.
+
+The two are built the other way round from each other. `history_stats` is
+sensor first: the number is what it makes, and long-term statistics of it
+are optional, a `state_class` on the sensor for the recorder to sum. This
+component is statistics first: the hourly rows are the product, and a
+sensor over them is optional, a period sensor on the entry. That order is
+what lets the recorder's retention be short — a few days is enough, since
+the statistics are compiled from the history while it is still there — and
+what makes a long range cheap: a year is twelve rows a state, not a year of
+state changes read back.
 
 ### The same chart, both ways
 
@@ -743,18 +830,13 @@ hours counted as quiet, not skipped.
 
 ### Things `history_stats` does that this component cannot
 
-**A number right now.** Time in state *so far today*, updated on every change
-and at least once a minute. This component writes an hour after it closes;
-nothing here is ever more current than the last whole hour.
+**Any window.** The last thirty minutes, since sunrise, until 4 pm:
+whatever a template can render. The period sensors here have nine named
+periods, each aligned to the clock, and the charts hourly buckets.
 
-**Any window.** The last thirty minutes, since sunrise, until 4 pm, the
-previous calendar month: whatever a template can render. This component has
-hourly buckets, and only what Home Assistant's statistics cards can do with
-them.
-
-**An entity.** A sensor can sit on a card, gate an automation, and be read in
-a template. Statistics are only reachable through the statistics cards and
-the recorder's websocket API.
+**Seconds.** A `history_stats` window can start and end at any second, and
+its value is exact to the second within it. A period sensor is exact too,
+but only for the named periods, and its chart is hourly.
 
 Its `ratio` type is not on that list. Hours per hour is already a fraction:
 the `mean` of a duration statistic over any period *is* the share of that
@@ -765,8 +847,8 @@ chart under *Charts* draws.
 
 | | `history_stats` | `discrete_statistics` |
 |---|---|---|
-| Produces | one sensor: a value for the current window | per-state duration and count statistics, per hour |
-| Freshness | on change, at least every minute | after each hour closes |
+| Produces | one sensor: a value for the current window | per-state duration and count statistics, per hour; period sensors over them |
+| Freshness | on change, at least every minute | statistics after each hour closes; a period sensor on change and every minute |
 | Resolution | seconds, within the window | hourly buckets |
 | Reach into the past | as far as the recorder's retention | whole retained history on first run, kept forever after |
 | Backfill | none — begins when the sensor is created | first run, and `recompute` for any range with history |
@@ -776,22 +858,23 @@ chart under *Charts* draws.
 | Count means | intervals in the window; a state active at the start counts | transitions into the state, in the hour they happen |
 | `unavailable` / `unknown` | not in the list, so they break the interval | carry the previous state forward; configurable |
 | State mapping | none | `states:` map, `default`, `blank` |
-| Window | any template; two of `start`/`end`/`duration` | none — hourly, and whatever the cards aggregate |
-| Share of time | `ratio` % | `mean` of a duration: hours per hour is a fraction |
+| Window | any template; two of `start`/`end`/`duration` | today, yesterday, this/last week, month, year, all time |
+| Share of time | `ratio` % | `share` sensor, or the `mean` of a duration: hours per hour is a fraction |
 | Debounce | `min_state_duration` | `ignore_short` with `min_duration`, per state or as the default |
-| Usable in automations | yes, it is a sensor | no |
-| Configuration | UI with live preview, or YAML; one sensor per state × metric × window | UI or YAML; one entry per entity |
+| Usable in automations | yes, it is a sensor | yes, a period sensor |
+| Configuration | UI with live preview, or YAML; one sensor per state × metric × window | UI or YAML; one entry per entity, sensors added to it |
 | Long-term statistics | of the sensor's own value (`measurement`), or `total_increasing` with reset detection | are the product |
 
-Use both: `history_stats` for the tile that says how long the door has been
-open today, this component for the chart of how often it was opened each
-week this year.
+Use `history_stats` for a window only a template can say; this component
+for the history, the chart, and the numbers over named periods that a
+purge cannot shrink.
 
 ## Limitations
 
 - Hourly buckets only. The external statistics API writes only to the
   hourly table.
-- An in-progress state change is not charted until its hour closes.
+- An in-progress state change is not charted until its hour closes; a
+  period sensor with the current hour included shows it.
 - A state committed later than the trailing window needs a manual
   `recompute`.
 - The stock statistics-graph card names its statistics explicitly, so a
