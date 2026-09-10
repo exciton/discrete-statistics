@@ -50,7 +50,7 @@ def _local(timestamp: float, tz: tzinfo) -> datetime:
     return datetime.fromtimestamp(timestamp, tz)
 
 
-def _floor(timestamp: float, period: Period, tz: tzinfo) -> float:
+def floor(timestamp: float, period: Period, tz: tzinfo) -> float:
     """The start of the period containing timestamp.
 
     Day, week, month and year start at local midnight, weeks on Monday -
@@ -69,7 +69,7 @@ def _floor(timestamp: float, period: Period, tz: tzinfo) -> float:
     return local.timestamp()
 
 
-def _next(edge: float, period: Period, tz: tzinfo) -> float:
+def after(edge: float, period: Period, tz: tzinfo) -> float:
     """The start of the period after the one starting at edge."""
     if period == "hour":
         return edge + HOUR
@@ -96,9 +96,9 @@ def edges(start: float, end: float, period: Period, tz: tzinfo) -> list[float]:
     `start`, the last is the start of the first period at or after `end`.
     A chart drawn from these shows whole periods, as the recorder's does.
     """
-    result = [_floor(start, period, tz)]
+    result = [floor(start, period, tz)]
     while result[-1] < end:
-        result.append(_next(result[-1], period, tz))
+        result.append(after(result[-1], period, tz))
     return result
 
 
