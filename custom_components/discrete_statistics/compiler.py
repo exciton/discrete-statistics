@@ -92,7 +92,10 @@ class Timeline(NamedTuple):
 
 
 def compiled_signal(entity_id: str) -> str:
-    """The dispatcher signal sent after an entity's compile has written."""
+    """The dispatcher signal sent after an entity's compile has written.
+
+    Listeners receive `(window_start, window_end)`, the range written.
+    """
     return f"{DOMAIN}_compiled_{entity_id}"
 
 

@@ -591,7 +591,9 @@ for the entity and choose **Add sensor**:
   `{{ now() - timedelta(hours=8) }}` — and Duration is a length. The
   templates are rendered again on every refresh, so one that reads
   another entity follows it within the minute; a template that does not
-  render makes the sensor `unavailable`, with the error in the log.
+  render makes the sensor `unavailable`, with the error in the log. A
+  window whose end is not after its start when it is rendered holds no
+  time, so a time or count sensor over it reads `0.0`.
 - **Name** — optional; the default is made from the entity, the states,
   the measure and the period, "Front Door open time this month".
 - **Include the current hour** — statistics are compiled hourly. On, the
@@ -611,8 +613,8 @@ taken it: the hour's total scaled by the part inside the window, time in
 proportion and a count rounded to whole changes, so one change in an hour
 counts as one when at least half the hour is inside and as none
 otherwise. The `estimated` attribute says which a sensor's value is,
-decided on every refresh from what the recorder holds, never from
-`purge_keep_days`. A calendar period in a time zone on the whole hour
+decided from what the recorder holds, re-read after each compile, never
+from `purge_keep_days`. A calendar period in a time zone on the whole hour
 starts and ends on the hour and is never estimated; in a time zone on the
 half hour — Asia/Kolkata, Australia/Adelaide, America/St_Johns — its two
 edges fall at :30 UTC, and the half hours on either side are read like

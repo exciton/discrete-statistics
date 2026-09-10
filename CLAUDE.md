@@ -121,16 +121,17 @@ inside an hour, and the tail. A part hour is answered on evidence, per
 refresh: when the entity's oldest retained state
 (`Compiler.async_earliest_state_ts`) is at or before the hour, the
 compiler's own timeline of that hour (`async_tail` over the hour, cached
-per hour until a compile) is tallied inside the window and the answer is
-exact; otherwise the hour's compiled change is pro-rated by the part
-inside and the reading is marked `estimated`. Custom windows are rendered
-in the coordinator, on every refresh, through `render_datetime` — the
-same call the dialog validates with. The compile signal carries the range
-written, and the coordinator drops cached sums only at edges after its
-start: a sum is cumulative, so a finished window's edges survive every
-hourly compile, and the tail is read only when some live sensor's window
-reaches it — a finished window costs no recorder work at all between the
-day changing and a recompute reaching back to it.
+per hour until a compile) is tallied and, when the tail opens, the answer
+is exact; an hour inside the retained range that no source can open is
+pro-rated like any other. Otherwise the hour's compiled change is
+pro-rated by the part inside and the reading is marked `estimated`. Custom
+windows are rendered in the coordinator, on every refresh, through
+`render_datetime` — the same call the dialog validates with. The compile
+signal carries the range written, and the coordinator drops cached sums
+only at edges after its start: a sum is cumulative, so a finished window's
+edges survive every hourly compile, and the tail is read only when some
+live sensor's window reaches it — a finished window costs no recorder work
+at all between the day changing and a recompute reaching back to it.
 
 `sensor.py` builds the entry's `PeriodCoordinator` lazily, the first time
 the entry has a `sensor` subentry, and keeps it once built. An entry
@@ -512,10 +513,12 @@ lie by up to an hour; and a window is never anchored on the watermark
 instead, which would move it by up to an hour at the retention horizon.
 The evidence is the entity's oldest retained state row, read with the
 frame — never `purge_keep_days`, which says what the recorder is asked to
-keep, not what it holds. It errs only towards exact for an hour just
-purged, and the compile after a purge is at most the trailing window
-away. The estimate is disclosed: the `estimated` attribute, and the
-dialog's warning on the Period field.
+keep, not what it holds. Evidence alone is not enough: the hour's
+timeline has to open too, and one inside the retained range that no
+source can open is pro-rated like any other. It errs only towards exact
+for an hour just purged, and the compile after a purge is at most the
+trailing window away. The estimate is disclosed: the `estimated`
+attribute, and the dialog's warning on the Period field.
 
 **Nothing in this integration deletes statistics.** Recompute overwrites
 buckets it has source data for and leaves everything else alone, so a rebuild
