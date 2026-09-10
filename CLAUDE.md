@@ -79,7 +79,8 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
        │        │
        ├─ rows              reads the recorder: the rows at edges, the sums
        │        │           at an edge, where a series starts
-       ├─ reading           pure: two edges, the tail -> one sensor's value
+       ├─ reading           pure: a window in pieces - whole hours, part hours,
+       │        │           the tail -> one sensor's value
        │        │
        │    coordinator     one refresh per entry: frame, tail, readings
        │        │
@@ -113,6 +114,23 @@ and a change of the entity's state asks through the coordinator's
 `REFRESH_COOLDOWN` debouncer rather than refreshing outright: a drain per
 change commits the recorder's session for the whole instance, and a chatty
 entity would have it doing that per row it writes.
+
+A window is read in pieces (`reading.pieces`): its whole compiled hours
+from the sums at two edges, up to two part hours where an edge falls
+inside an hour, and the tail. A part hour is answered on evidence, per
+refresh: when the entity's oldest retained state
+(`Compiler.async_earliest_state_ts`) is at or before the hour, the
+compiler's own timeline of that hour (`async_tail` over the hour, cached
+per hour until a compile) is tallied inside the window and the answer is
+exact; otherwise the hour's compiled change is pro-rated by the part
+inside and the reading is marked `estimated`. Custom windows are rendered
+in the coordinator, on every refresh, through `render_datetime` — the
+same call the dialog validates with. The compile signal carries the range
+written, and the coordinator drops cached sums only at edges after its
+start: a sum is cumulative, so a finished window's edges survive every
+hourly compile, and the tail is read only when some live sensor's window
+reaches it — a finished window costs no recorder work at all between the
+day changing and a recompute reaching back to it.
 
 `sensor.py` builds the entry's `PeriodCoordinator` lazily, the first time
 the entry has a `sensor` subentry, and keeps it once built. An entry
@@ -487,6 +505,17 @@ After a move the base is read again for the new start, which is safe only
 because a window moves only when no state was carried into it, and once a
 chunk has written anything the next one is handed the state it ended in —
 so nothing is queued yet. Do not re-read it anywhere else.
+
+**A part hour is exact or estimated on evidence, never snapped.** A
+rolling window must be exactly its length, or "the last 24 hours" is a
+lie by up to an hour; and a window is never anchored on the watermark
+instead, which would move it by up to an hour at the retention horizon.
+The evidence is the entity's oldest retained state row, read with the
+frame — never `purge_keep_days`, which says what the recorder is asked to
+keep, not what it holds. It errs only towards exact for an hour just
+purged, and the compile after a purge is at most the trailing window
+away. The estimate is disclosed: the `estimated` attribute, and the
+dialog's warning on the Period field.
 
 **Nothing in this integration deletes statistics.** Recompute overwrites
 buckets it has source data for and leaves everything else alone, so a rebuild
