@@ -52,3 +52,19 @@ export function resolveColor(
   }
   return toHex(color);
 }
+
+// The chart's palette: the theme's `--graph-color-1` to `-8`, and these
+// when a theme sets none. The card reads the variables; `paletteCss`
+// is the same choice written as CSS, for the editor to show a row the
+// colour the chart will give it.
+export const PALETTE_SIZE = 8;
+
+export const FALLBACK_COLORS = [
+  "#4269d0", "#f4bd4a", "#ff725c", "#6cc5b0",
+  "#a463f2", "#ff8ab7", "#9c6b4e", "#97bbf5",
+];
+
+export function paletteCss(index: number): string {
+  const slot = index % PALETTE_SIZE;
+  return `var(--graph-color-${slot + 1}, ${FALLBACK_COLORS[slot]})`;
+}

@@ -26,6 +26,7 @@ from homeassistant.const import (
     ATTR_UNIT_OF_MEASUREMENT,
     CONF_ENTITY_ID,
     CONF_NAME,
+    STATE_UNAVAILABLE,
     STATE_UNKNOWN,
 )
 from homeassistant.core import HomeAssistant, callback
@@ -44,10 +45,12 @@ from .config import (
     blank_error,
     is_configured,
     min_duration_error,
+    uses_ignore_short,
 )
 from .const import (
     DEFAULT_IGNORE_SHORT,
     DEFAULT_IGNORE_SHORT_UNKNOWN,
+    DEFAULT_MIN_DURATION,
     DEFAULT_RECORD,
     DEFAULT_RECORD_KNOWN,
     DISPOSITION_IGNORE,
@@ -65,18 +68,21 @@ from .statistic_ids import is_blank
 UI_DEFAULTS = [
     DEFAULT_RECORD,
     DEFAULT_RECORD_KNOWN,
-    DEFAULT_IGNORE_SHORT_UNKNOWN,
     DEFAULT_IGNORE_SHORT,
+    DEFAULT_IGNORE_SHORT_UNKNOWN,
 ]
 
 # Offered, not exhaustive: `blank` takes any state name, and mapping to a
 # real one is the point for a text sensor whose blank means "no error".
 # custom_value lets the dropdown be typed into.
 BLANK_SUGGESTIONS = [STATE_UNKNOWN, DISPOSITION_IGNORE]
+# The rows every entity gets, after the ones it has actually reported.
+ALWAYS_KNOWN = (STATE_UNAVAILABLE, STATE_UNKNOWN)
 
+# The name is not here: its box shows the entity's own name greyed out,
+# so the field is built per request by `_name_field`.
 OPTIONS_SCHEMA = vol.Schema(
     {
-        vol.Optional(CONF_NAME): selector.TextSelector(),
         vol.Required(
             CONF_DEFAULT, default=DEFAULT_RECORD_KNOWN
         ): selector.SelectSelector(
@@ -86,20 +92,25 @@ OPTIONS_SCHEMA = vol.Schema(
                 translation_key=CONF_DEFAULT,
             )
         ),
-        vol.Required(CONF_BLANK, default=STATE_UNKNOWN): selector.SelectSelector(
-            selector.SelectSelectorConfig(
-                options=BLANK_SUGGESTIONS,
-                mode=selector.SelectSelectorMode.DROPDOWN,
-                translation_key=CONF_BLANK,
-                custom_value=True,
-            )
-        ),
         # Read only under `ignore_short`; always shown, because a form is
         # one fixed schema and cannot grow a field on a dropdown choice.
         vol.Optional(CONF_MIN_DURATION): selector.DurationSelector(
             selector.DurationSelectorConfig(enable_day=False)
         ),
     }
+)
+
+# The blank state's row, last in the States section: it is one more state
+# the entity may report, and the section is where each state's treatment
+# goes. A state literally named `blank` would share its key, so `_known`
+# leaves that one off the form.
+BLANK_FIELD = selector.SelectSelector(
+    selector.SelectSelectorConfig(
+        options=BLANK_SUGGESTIONS,
+        mode=selector.SelectSelectorMode.DROPDOWN,
+        translation_key=CONF_BLANK,
+        custom_value=True,
+    )
 )
 
 USER_SCHEMA = vol.Schema({vol.Required(CONF_ENTITY_ID): selector.EntitySelector()})
@@ -130,8 +141,8 @@ DISPOSITION_DEFAULT = "default"
 FIXED_DISPOSITIONS = [
     DISPOSITION_DEFAULT,
     DISPOSITION_RECORD,
-    DISPOSITION_IGNORE,
     DISPOSITION_IGNORE_SHORT,
+    DISPOSITION_IGNORE,
 ]
 
 # Not imported from homeassistant.components.sensor: that would make sensor a
@@ -175,7 +186,10 @@ async def async_known_states(
     live state and an enum sensor's `options` cover what it has not yet
     been in. The mapping's own keys and targets are kept so an entry made
     with a state the recorder has since purged still shows it. Blank states
-    are left out: `blank` is their setting.
+    are left out: `blank` is their setting. `unavailable` and `unknown`
+    close the list whether or not the entity has reported them, since
+    every entity can, and they are the two a person most often wants
+    treated differently from the rest.
     """
     known = set(states) | {v for v in states.values() if v not in DISPOSITIONS}
     if (state := hass.states.get(entity_id)) is not None:
@@ -184,7 +198,10 @@ async def async_known_states(
     known.update(
         await get_instance(hass).async_add_executor_job(_stored_states, hass, entity_id)
     )
-    return sorted((s for s in known if not is_blank(s)), key=str.casefold)
+    known -= set(ALWAYS_KNOWN)
+    return sorted((s for s in known if not is_blank(s)), key=str.casefold) + list(
+        ALWAYS_KNOWN
+    )
 
 
 def _disposition_field(state: str, known: list[str]) -> selector.SelectSelector:
@@ -207,34 +224,48 @@ def _disposition_field(state: str, known: list[str]) -> selector.SelectSelector:
 
 
 def _rows_schema(known: list[str]) -> vol.Schema:
-    """A mapping row for each known state.
+    """A mapping row for each known state, then the blank state's row.
 
     Built per request: the rows are the entity's states, which a fixed
     schema cannot know.
     """
-    return vol.Schema(
-        {
-            vol.Required(state, default=DISPOSITION_DEFAULT): _disposition_field(
-                state, known
-            )
-            for state in known
-        }
-    )
+    rows: dict[Any, Any] = {
+        vol.Required(state, default=DISPOSITION_DEFAULT): _disposition_field(
+            state, known
+        )
+        for state in known
+    }
+    rows[vol.Required(CONF_BLANK, default=STATE_UNKNOWN)] = BLANK_FIELD
+    return vol.Schema(rows)
 
 
-def _options_schema(known: list[str], mapped: bool) -> vol.Schema:
-    """The options form, with the rows in a section.
+def _name_field(default_name: str) -> selector.TextSelector:
+    """A name box with the entity's own name greyed out in it.
 
-    The section opens when something is mapped, and stays folded away
+    A placeholder, not a value: the box stays empty, so the name keeps
+    following the entity until one is typed. The frontend's text selector
+    draws `placeholder` (ha-selector-text.ts:85), but core's config schema
+    for the selector does not list the key and would refuse it, so it is
+    added after validation; `serialize` passes the config on verbatim.
+    """
+    field = selector.TextSelector()
+    field.config["placeholder"] = default_name  # type: ignore[typeddict-unknown-key]
+    return field
+
+
+def _options_schema(known: list[str], open_: bool, default_name: str) -> vol.Schema:
+    """The options form: the name first, then the rows in a section.
+
+    The section opens when something in it is set, and stays folded away
     otherwise, since most entities need no mapping.
     """
-    if not known:
-        return OPTIONS_SCHEMA
-    return OPTIONS_SCHEMA.extend(
+    return vol.Schema(
         {
+            vol.Optional(CONF_NAME): _name_field(default_name),
+            **OPTIONS_SCHEMA.schema,
             vol.Required(CONF_STATES): section(
-                _rows_schema(known), {"collapsed": not mapped}
-            )
+                _rows_schema(known), {"collapsed": not open_}
+            ),
         }
     )
 
@@ -244,8 +275,18 @@ def _mapping(rows: Mapping[str, str]) -> dict[str, str]:
     return {
         state: disposition
         for state, disposition in rows.items()
-        if disposition and disposition != DISPOSITION_DEFAULT
+        if state != CONF_BLANK and disposition and disposition != DISPOSITION_DEFAULT
     }
+
+
+def _blank(user_input: Mapping[str, Any]) -> str:
+    """The blank state's treatment, from its row in the section."""
+    return user_input.get(CONF_STATES, {}).get(CONF_BLANK, STATE_UNKNOWN)
+
+
+def _known(states: list[str]) -> list[str]:
+    """The states that get a row: all but one sharing the blank row's key."""
+    return [state for state in states if state != CONF_BLANK]
 
 
 def _mapping_errors(mapping: Mapping[str, str]) -> dict[str, str]:
@@ -266,7 +307,7 @@ def _options(user_input: dict[str, Any]) -> dict[str, Any]:
     options = {
         CONF_NAME: user_input.get(CONF_NAME) or None,
         CONF_DEFAULT: user_input[CONF_DEFAULT],
-        CONF_BLANK: user_input[CONF_BLANK],
+        CONF_BLANK: _blank(user_input),
     }
     if (seconds := _seconds(user_input.get(CONF_MIN_DURATION))) is not None:
         options[CONF_MIN_DURATION] = seconds
@@ -282,14 +323,34 @@ def _suggested(options: Mapping[str, Any]) -> dict[str, Any]:
         suggested[CONF_MIN_DURATION] = duration
     else:
         suggested.pop(CONF_MIN_DURATION, None)
+    suggested[CONF_STATES] = {
+        **(options.get(CONF_STATES) or {}),
+        CONF_BLANK: options.get(CONF_BLANK, STATE_UNKNOWN),
+    }
     return suggested
+
+
+def _filled(user_input: dict[str, Any]) -> dict[str, Any]:
+    """The submitted form, with a blank duration filled in where one is needed.
+
+    The box cannot be made required by the choice beside it - a form is one
+    fixed schema - so a choice that needs a duration and a box left blank,
+    or at zero, gets `DEFAULT_MIN_DURATION` rather than an error; the form
+    shows what it chose if something else sends it back.
+    """
+    if _seconds(user_input.get(CONF_MIN_DURATION)) or not uses_ignore_short(
+        user_input[CONF_DEFAULT], _mapping(user_input.get(CONF_STATES, {}))
+    ):
+        return user_input
+    return {**user_input, CONF_MIN_DURATION: _duration(DEFAULT_MIN_DURATION)}
 
 
 def _errors(user_input: dict[str, Any]) -> dict[str, str]:
     """Field errors for a submitted form, shared by both flows."""
     errors: dict[str, str] = {}
-    if problem := blank_error(user_input[CONF_BLANK]):
-        errors[CONF_BLANK] = problem
+    # A form error, like the mapping's: the field is in the section.
+    if problem := blank_error(_blank(user_input)):
+        errors["base"] = problem
     mapping = _mapping(user_input.get(CONF_STATES, {}))
     if problem := min_duration_error(
         _seconds(user_input.get(CONF_MIN_DURATION)), user_input[CONF_DEFAULT], mapping
@@ -333,21 +394,27 @@ async def _async_options_form(
 ) -> ConfigFlowResult:
     """The one form both flows edit an entity's options on.
 
-    Which entity this is about, and what leaving the name blank would give,
-    are in the description. The name is NOT prefilled into its box: a
-    suggested value comes back on submit, which would freeze the name
-    instead of letting it follow the entity.
+    Which entity this is about is in the description, and what leaving the
+    name blank would give is greyed out in the name box. The name is NOT
+    prefilled into it: a suggested value comes back on submit, which would
+    freeze the name instead of letting it follow the entity.
     """
-    mapping = (
-        _mapping(user_input.get(CONF_STATES, {}))
-        if user_input
-        else stored.get(CONF_STATES) or {}
-    )
+    if user_input:
+        mapping = _mapping(user_input.get(CONF_STATES, {}))
+        blank = _blank(user_input)
+    else:
+        mapping = stored.get(CONF_STATES) or {}
+        blank = stored.get(CONF_BLANK, STATE_UNKNOWN)
     known = await async_known_states(flow.hass, entity_id, mapping)
     return flow.async_show_form(
         step_id=step_id,
         data_schema=flow.add_suggested_values_to_schema(
-            _options_schema(known, bool(mapping)), user_input or _suggested(stored)
+            _options_schema(
+                _known(known),
+                bool(mapping) or blank != STATE_UNKNOWN,
+                display_name(flow.hass, entity_id),
+            ),
+            user_input or _suggested(stored),
         ),
         errors=errors,
         description_placeholders={
@@ -359,7 +426,6 @@ async def _async_options_form(
             "entity": (
                 f"[{describe(flow.hass, entity_id)}](/history?entity_id={entity_id})"
             ),
-            "default_name": display_name(flow.hass, entity_id),
         },
     )
 
@@ -423,6 +489,7 @@ class DiscreteStatisticsConfigFlow(ConfigFlow, domain=DOMAIN):
         """Say how the entity's states are recorded."""
         errors: dict[str, str] = {}
         if user_input is not None:
+            user_input = _filled(user_input)
             errors = _errors(user_input)
             if not errors:
                 name = user_input.get(CONF_NAME) or None
@@ -458,6 +525,7 @@ class DiscreteStatisticsOptionsFlow(OptionsFlow):
         """Show and save the editable options."""
         errors: dict[str, str] = {}
         if user_input is not None:
+            user_input = _filled(user_input)
             errors = _errors(user_input)
             if not errors:
                 return self.async_create_entry(data=_options(user_input))

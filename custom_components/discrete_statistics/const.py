@@ -29,6 +29,9 @@ DEFAULT_IGNORE_SHORT_UNKNOWN = "ignore_short_unknown"
 # window to find the state carried into it, and that has to be enough to
 # measure a spell that began before the window.
 MAX_MIN_DURATION = HOUR
+# What the dialog fills in when a choice needs `min_duration` and the box
+# was left blank.
+DEFAULT_MIN_DURATION = 60.0
 
 # Skip a scheduled run when the recorder queue is deeper than this. The
 # watermark is data-derived, so a skipped run costs nothing but latency.

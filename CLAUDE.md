@@ -206,7 +206,10 @@ states, so any subset of states and a DST day both come out right.
 that decides which key the unticked rows are written to; `colors.ts`
 resolves a configured colour (a theme name through its CSS variable, or
 hex) to the six-digit hex `series.ts` adds alpha to, and anything else
-falls back to the palette. The list element itself
+falls back to the palette — the theme's `--graph-color-N`, which
+`colors.ts` also holds, with `paletteCss` writing a position in it as
+CSS so the editor's Automatic option shows the colour the chart will
+use. The list element itself
 (`state-list-element.ts`) leans on the frontend's `ha-sortable` and the
 `ui_color` selector, both internal like `<ha-chart-base>`.
 

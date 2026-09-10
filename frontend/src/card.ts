@@ -1,7 +1,7 @@
 import { LitElement, html, css, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { ensureChartBase } from "./chart-base";
-import { resolveColor } from "./colors";
+import { FALLBACK_COLORS, PALETTE_SIZE, resolveColor } from "./colors";
 import { fetchStatistics, listStatisticIds, subscribeEnergyRange } from "./hass-api";
 import { rangeFromDays, resolvePeriod, resolveUnit, type Range } from "./period";
 import {
@@ -19,11 +19,6 @@ const DEFAULT_DAYS = 30;
 // The stock statistics-graph card refreshes hourly; a dashboard left open
 // otherwise freezes on the range it was rendered with.
 const REFRESH_INTERVAL_MS = 60 * 60 * 1000;
-const FALLBACK_COLORS = [
-  "#4269d0", "#f4bd4a", "#ff725c", "#6cc5b0",
-  "#a463f2", "#ff8ab7", "#9c6b4e", "#97bbf5",
-];
-
 // What echarts hands a tooltip formatter, for the series this card
 // draws: value is the point, [point time, value, bucket start, bucket end].
 interface TooltipParam {
@@ -319,7 +314,7 @@ export class DiscreteStatisticsCard extends LitElement {
 
   private _colors(cssVariable: (name: string) => string): string[] {
     const colors: string[] = [];
-    for (let i = 1; i <= 8; i++) {
+    for (let i = 1; i <= PALETTE_SIZE; i++) {
       const c = cssVariable(`--graph-color-${i}`);
       if (c) {
         colors.push(c);
