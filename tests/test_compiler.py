@@ -2233,3 +2233,48 @@ async def test_dense_rows_already_written_are_carried_across(recorder, freezer):
         ft.partial(get_metadata, hass, statistic_ids={DURATION_ON})
     )
     assert metadata[DURATION_ON][1]["mean_type"] is StatisticMeanType.NONE
+
+
+async def test_a_statistic_whose_only_row_is_the_previous_hour_vouches_for_it(
+    recorder, freezer
+):
+    """Carry source 4 reads the hour's value, and a first row's value is its sum.
+
+    With no earlier row to subtract, the base is zero: taking the newest
+    row's own sum instead would make the hour read as unchanged and leave
+    the window with no state to open in.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start + timedelta(minutes=30))
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    # Ignored under record_known: from here neither the recorder nor the
+    # state machine can open a later window.
+    freezer.move_to(start + timedelta(minutes=45))
+    hass.states.async_set(ENTITY, "unavailable")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    # Only hour 1 is compiled, so "on" holds exactly one row.
+    freezer.move_to(start + timedelta(hours=2))
+    compiler = Compiler(hass)
+    await compiler.async_compile(
+        cfg(),
+        (start + timedelta(hours=1)).timestamp(),
+        (start + timedelta(hours=2)).timestamp(),
+    )
+    await async_wait_recording_done(hass)
+    assert await read_rows(hass, DURATION_ON, start, start + timedelta(hours=2)) == [
+        ((start + timedelta(hours=1)).timestamp(), 1.0)
+    ]
+
+    freezer.move_to(start + timedelta(hours=3))
+    assert (
+        await compiler.async_compile(cfg(), (start + timedelta(hours=2)).timestamp())
+        == 1
+    )
+
+    assert await read_sums(
+        hass, DURATION_ON, start + timedelta(hours=1), start + timedelta(hours=3)
+    ) == [1.0, 2.0]

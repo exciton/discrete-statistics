@@ -151,6 +151,7 @@ class TestKnown:
         known.add([Row(10 * H, 9.0), Row(5 * H, 0.5)])
         assert known.before(11 * H).sum == 9.0  # last write wins
         assert known.before(10 * H) == Row(5 * H, 0.5)
+        # Nothing public reports the row count, so the list is peeked at.
         assert known._starts == [5 * H, 10 * H]  # not duplicated
 
 
@@ -241,6 +242,75 @@ class TestCut:
             Bucket(0.0, 24 * H, 0.0),
             Bucket(24 * H, 48 * H, 1.5),
         ]
+
+
+def _settled(rows: list[Row]) -> Known:
+    """Every edge settled, so `cut` reads the rows alone."""
+    known = Known(rows)
+    known.floor = -float("inf")
+    return known
+
+
+def _compiled(known: Known):
+    return lambda a, b: has_row(known, a, b)
+
+
+class TestHoles:
+    def test_a_hole_straddling_an_edge_is_in_neither_bucket(self):
+        # Rows every hour for hours 0-19 and 30-47: the hole spans the day
+        # edge at 24H. Each bucket's change covers only its own rows.
+        near = [Row(h * H, 0.25 * (h + 1)) for h in range(20)]
+        far = [Row(h * H, 5.0 + 0.25 * (h - 29)) for h in range(30, 48)]
+        known = _settled([Row(-H, 0.0), *near, *far])
+
+        assert cut([0.0, 24 * H, 48 * H], known, _compiled(known)) == [
+            Bucket(0.0, 24 * H, pytest.approx(20 * 0.25)),
+            Bucket(24 * H, 48 * H, pytest.approx(18 * 0.25)),
+        ]
+
+    def test_a_hole_inside_a_bucket_stays_inside_it(self):
+        # Hours 10-13 are missing, well within the day: one bucket, its
+        # change spanning the hole rather than the bucket being split.
+        rows = [
+            Row(h * H, 0.25 * (h + 1 if h < 10 else h - 3))
+            for h in list(range(10)) + list(range(14, 24))
+        ]
+        known = _settled([Row(-H, 0.0), *rows])
+
+        assert cut([0.0, 24 * H], known, _compiled(known)) == [
+            Bucket(0.0, 24 * H, pytest.approx(20 * 0.25))
+        ]
+
+
+def test_half_past_edges_cut_the_hours_between_them():
+    # Kolkata days start at 18:30 UTC, so no row starts the hour before an
+    # edge: each edge resolves to the row running through it, and a day is
+    # still the twenty-four rows between two such edges - the same tally an
+    # hour-aligned zone gets.
+    kolkata = ZoneInfo("Asia/Kolkata")
+    start = datetime(2026, 6, 1, tzinfo=kolkata)
+    end = datetime(2026, 6, 4, tzinfo=kolkata)
+    half_past = edges(start.timestamp(), end.timestamp(), "day", kolkata)
+    assert all(edge % H == 1800 for edge in half_past)
+
+    # A different value every hour, so a bucket reading an hour early or
+    # late reads a different number.
+    first = row_before(half_past[0]) - 24 * H
+    values = [0.01 * (i + 1) for i in range(24 * (len(half_past) + 1))]
+    total = 0.0
+    rows = []
+    for i, value in enumerate(values):
+        total += value
+        rows.append(Row(first + i * H, total))
+    known = _settled(rows)
+
+    # The row running through edge k is the (24 + 24k)th; the day after it
+    # is the twenty-four values that follow.
+    expected = [
+        pytest.approx(sum(values[24 + 24 * k + 1 : 24 + 24 * k + 25]))
+        for k in range(len(half_past) - 1)
+    ]
+    assert [b.change for b in cut(half_past, known, _compiled(known))] == expected
 
 
 class TestHasRow:

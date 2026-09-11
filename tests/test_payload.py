@@ -160,12 +160,22 @@ def test_a_standing_row_is_rewritten_even_when_the_state_is_absent():
     ]
 
 
-def test_a_standing_row_outside_the_window_is_ignored():
+@pytest.mark.parametrize(
+    ("stands", "expected"),
+    [
+        # Outside the window: no row of its own, and none conjured for the
+        # hour it names.
+        (T0 + 5 * HOUR, [(T0, 1.0)]),
+        # Inside it: the quiet hour is rewritten with the carried sum.
+        (T0 + HOUR, [(T0, 1.0), (T0 + HOUR, 1.0)]),
+    ],
+)
+def test_a_standing_row_is_rewritten_only_inside_the_window(stands, expected):
     buckets = {("on", T0): (3600.0, 0)}
     _, rows = build_payloads(
-        cfg(), buckets, T0, T0 + HOUR, {}, standing={DURATION_ON: {T0 + 5 * HOUR}}
+        cfg(), buckets, T0, T0 + 2 * HOUR, {}, standing={DURATION_ON: {stands}}
     )[DURATION_ON]
-    assert len(rows) == 1
+    assert [(r["start"].timestamp(), r["sum"]) for r in rows] == expected
 
 
 def test_metadata_declares_a_sum_and_no_mean():

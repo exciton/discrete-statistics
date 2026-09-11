@@ -528,3 +528,19 @@ async def test_a_part_hour_the_recorder_has_lost_is_estimated(recorder, freezer)
     state = hass.states.get(ON_COUNT_LAST_HOUR)
     assert state.state == "1"
     assert state.attributes["estimated"] is True
+
+
+async def test_a_state_with_no_row_in_a_compiled_period_reads_zero(recorder, freezer):
+    hass = recorder
+    # The third hour is compiled and wholly "on", so "off" has no row in
+    # it: its sum is the one carried from the hour before, not nothing.
+    await seeded(
+        hass,
+        freezer,
+        [sensor("off last hour", ["off"], period="last_hour", live=False)],
+    )
+    state = hass.states.get(
+        "sensor.discrete_binary_sensor_grid_status_off_duration_last_hour"
+    )
+    assert state.state == "0.0"
+    assert state.attributes["period_start"] == (T0 + timedelta(hours=2)).isoformat()
