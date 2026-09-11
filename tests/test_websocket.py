@@ -1,14 +1,17 @@
 """The card's bucket command, end to end through the recorder."""
 
+import re
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
+from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.statistics import async_add_external_statistics
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.components.recorder.common import (
     async_wait_recording_done,
 )
+from sqlalchemy import event as sqlalchemy_event
 
 from custom_components.discrete_statistics.const import DOMAIN, METRIC_DURATION
 from custom_components.discrete_statistics.payload import metadata_for
@@ -16,6 +19,8 @@ from custom_components.discrete_statistics.payload import metadata_for
 ENTITY = "binary_sensor.grid_status"
 ON = "discrete_statistics:binary_sensor_grid_status_on_duration"
 OFF = "discrete_statistics:binary_sensor_grid_status_off_duration"
+OTHER = "discrete_statistics:binary_sensor_porch_light_on_duration"
+OTHER_OFF = "discrete_statistics:binary_sensor_porch_light_off_duration"
 CONFIG = {DOMAIN: [{"entity_id": ENTITY, "name": "Grid Status"}]}
 TZ = ZoneInfo("Australia/Sydney")
 
@@ -75,6 +80,27 @@ async def ask(client, ids, start, end, period="day"):
         }
     )
     return await client.receive_json()
+
+
+@pytest.fixture
+def statements(hass, recorder_mock):
+    """The SELECTs the recorder's engine runs against the statistics table."""
+    seen: list[str] = []
+
+    def listen(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT") and re.search(
+            r"\bstatistics\b", statement
+        ):
+            seen.append(statement)
+
+    engine = get_instance(hass).engine
+    sqlalchemy_event.listen(engine, "before_cursor_execute", listen)
+    yield seen
+    sqlalchemy_event.remove(engine, "before_cursor_execute", listen)
+
+
+def utc(*args: int) -> datetime:
+    return datetime(*args, tzinfo=UTC)
 
 
 async def test_days_in_the_instance_timezone(hass, client):
@@ -326,6 +352,135 @@ async def test_buckets_match_the_recorder(hass, client, zone, span):
         theirs = await stock(client, [ON, OFF], start, end, period)
 
         assert ours["success"], period
-        assert inside(ours["result"]) == inside(theirs), period
+        mine, stock_ = inside(ours["result"]), inside(theirs)
+        for statistic_id in (ON, OFF):
+            by_start = {b["start"]: b for b in mine[statistic_id]}
+            assert [by_start[b["start"]] for b in stock_[statistic_id]] == stock_[
+                statistic_id
+            ], (period, statistic_id)
+            extra = [
+                b
+                for b in mine[statistic_id]
+                if b["start"] not in {t["start"] for t in stock_[statistic_id]}
+            ]
+            assert all(b["change"] == 0.0 for b in extra), (period, statistic_id)
         assert len(ours["result"][ON]) > 2 or period == "year"
         assert len(ours["result"][OFF]) > 1 or period == "year"
+
+
+async def test_a_rare_state_is_zero_in_a_compiled_month_and_absent_in_a_hole(
+    hass, client
+):
+    """Gap or zero is judged on the entity's duration rows as a whole."""
+    await hass.config.async_set_time_zone("UTC")
+    jan, feb, mar, apr = (
+        utc(2026, 1, 1),
+        utc(2026, 2, 1),
+        utc(2026, 3, 1),
+        utc(2026, 4, 1),
+    )
+    # ON is the state held: a row every hour in January and March, none in
+    # February. OFF happened once, in January.
+    seed(hass, ON, jan, [float(i) for i in range(31 * 24)])
+    seed(hass, ON, mar, [1000.0 + i for i in range(31 * 24)])
+    seed(hass, OFF, jan + timedelta(days=10, hours=5), [1.0])
+    await async_wait_recording_done(hass)
+
+    response = await ask(client, [OFF], jan, apr, "month")
+
+    assert response["result"][OFF] == [
+        {"start": ms(jan), "end": ms(feb), "change": 1.0},
+        {"start": ms(mar), "end": ms(apr), "change": 0.0},
+    ]
+
+
+async def test_a_rare_state_costs_one_seek(hass, client, statements):
+    await hass.config.async_set_time_zone("UTC")
+    jan, apr = utc(2026, 1, 1), utc(2026, 4, 1)
+    # ON held throughout, from before the range, so every edge's row is
+    # in the IN query. OFF happened three times.
+    seed(hass, ON, jan - timedelta(days=1), [float(i) for i in range(91 * 24)])
+    for day in (10, 40, 70):
+        seed(hass, OFF, jan + timedelta(days=day, hours=5), [float(day)])
+    await async_wait_recording_done(hass)
+
+    statements.clear()
+    response = await ask(client, [OFF], jan, apr, "month")
+
+    assert [b["change"] for b in response["result"][OFF]] == [10.0, 30.0, 30.0]
+    # The IN query, then one seek for OFF that returns its whole series.
+    assert len(statements) == 2
+
+
+async def test_a_busy_statistic_under_monthly_edges_seeks_once_per_hole(
+    hass, client, statements
+):
+    await hass.config.async_set_time_zone("UTC")
+    jan, apr = utc(2026, 1, 1), utc(2026, 4, 1)
+    days = (apr - jan).days
+    # OFF held: every hour, from before the range. ON: hours 0-11 of every
+    # day, so never in the hour before an edge.
+    seed(hass, OFF, jan - timedelta(days=1), [float(i) for i in range((days + 1) * 24)])
+    seed(hass, ON, jan, [float(i) if i % 24 < 12 else None for i in range(days * 24)])
+    await async_wait_recording_done(hass)
+
+    statements.clear()
+    response = await ask(client, [ON], jan, apr, "month")
+
+    assert [b["change"] for b in response["result"][ON]] == [
+        pytest.approx(31 * 24 - 13),
+        pytest.approx(28 * 24),
+        pytest.approx(31 * 24),
+    ]
+    # The IN query, then a seek at each of the four edges - the last one
+    # finds nothing before January and settles the rest. Never a range.
+    assert len(statements) == 5
+    assert not any("start_ts >=" in s for s in statements[1:])
+
+
+async def test_a_daily_statistic_under_daily_edges_reads_one_range(
+    hass, client, statements
+):
+    await hass.config.async_set_time_zone("UTC")
+    start = utc(2026, 1, 1)
+    end = start + timedelta(days=60)
+    # OTHER_OFF held: every hour, from before the range. OTHER: 18:00 to
+    # 21:00 every day.
+    seed(hass, OTHER_OFF, start - timedelta(days=1), [float(i) for i in range(61 * 24)])
+    seed(
+        hass,
+        OTHER,
+        start,
+        [float(i) if 18 <= i % 24 <= 21 else None for i in range(60 * 24)],
+    )
+    await async_wait_recording_done(hass)
+
+    statements.clear()
+    response = await ask(client, [OTHER], start, end, "day")
+
+    buckets = response["result"][OTHER]
+    assert len(buckets) == 60
+    # Each day's change is the step from the previous day's last row (21:00)
+    # to this day's (21:00): 24.
+    assert [b["change"] for b in buckets[1:]] == [pytest.approx(24.0)] * 59
+    # The IN query, one seek, one range, and one seek for the first edge,
+    # which the range cannot settle - nothing is known before it.
+    assert len(statements) == 4
+    assert sum("start_ts >=" in s for s in statements[1:]) == 1
+
+
+async def test_two_entities_are_each_judged_on_their_own_rows(hass, client):
+    await hass.config.async_set_time_zone("UTC")
+    jan, mar = utc(2026, 1, 1), utc(2026, 3, 1)
+    seed(hass, ON, jan, [float(i) for i in range(59 * 24)])
+    seed(hass, OTHER, jan, [float(i) for i in range(31 * 24)])
+    # The states asked for exist but never occurred: metadata, no rows.
+    seed(hass, OFF, jan, [])
+    seed(hass, OTHER_OFF, jan, [])
+    await async_wait_recording_done(hass)
+
+    response = await ask(client, [OFF, OTHER_OFF], jan, mar, "month")
+
+    # OFF's entity was compiled both months, OTHER_OFF's only in January.
+    assert [b["change"] for b in response["result"][OFF]] == [0.0, 0.0]
+    assert [b["start"] for b in response["result"][OTHER_OFF]] == [ms(jan)]

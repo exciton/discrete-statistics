@@ -1,12 +1,17 @@
-"""The card's query: per-period buckets straight from the rows at the edges.
+"""The card's query: per-period buckets from the rows that answer the edges.
 
 `recorder/statistics_during_period` reads every hourly row in the range
-and reduces them in Python whatever the period is asked for. Our sums are
-cumulative and dense, so the card's buckets need only one row per edge:
-one `start_ts IN (...)` query for every statistic at once - a range query
-when the edges are hours, since then every row is wanted - then a
-`LIMIT 1` lookup before any edge that query left blank. The arithmetic is
-in `buckets` and the queries in `rows`; this module only reads.
+and reduces them in Python whatever the period is asked for. Our sums
+are cumulative, so a bucket needs only the newest row before each of its
+edges, and the rows are sparse, so which reads settle which edges is
+tracked per statistic in `buckets.Known`. The reads run in rounds: one
+`start_ts IN (...)` query for every statistic at once (a range query
+when the edges are hours), then per statistic still blank a seek before
+its newest blank edge, then one range read batched over the statistics
+whose rows are sparser than seeks are worth, then seeks again until
+nothing is blank. The entity's duration statistics ride along so a
+bucket can be told compiled from a hole. The arithmetic is in `buckets`
+and the queries in `rows`; this module only reads.
 """
 
 from __future__ import annotations
@@ -22,9 +27,21 @@ from homeassistant.components.recorder.util import session_scope
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import dt as dt_util
 
-from .buckets import Bucket, Period, cut, edges, hours_wanted
-from .const import DOMAIN, HOUR
+from .buckets import (
+    LOOKUP_ROWS,
+    Bucket,
+    Known,
+    Period,
+    blanks,
+    cut,
+    edges,
+    has_row,
+    hours_wanted,
+    wants_range,
+)
+from .const import DOMAIN, HOUR, METRIC_DURATION
 from .rows import newest_before, rows_at, rows_between
+from .statistic_ids import parse
 
 # The most buckets one request may ask for. A chart cannot show more, and
 # the edges, the `IN` list and the rows all grow with the count, so a
@@ -99,6 +116,12 @@ async def ws_buckets(
     connection.send_result(msg["id"], result)
 
 
+def _family(statistic_id: str) -> str:
+    """The entity a statistic belongs to, as its ID names it."""
+    parts = parse(statistic_id)
+    return statistic_id if parts is None else parts[0]
+
+
 def _buckets(
     hass: HomeAssistant,
     statistic_ids: set[str],
@@ -110,34 +133,78 @@ def _buckets(
 
     The edges are aligned in the instance's timezone, as the recorder
     aligns its own, so a chart shows the same days and months whichever
-    command drew it.
+    command drew it. Gap or zero is judged on each entity's duration
+    statistics as a whole, which ride along in every read: a chart of one
+    rare state must not show a gap in every period it did not occur.
     """
     edges_ = edges(start, end, period, dt_util.get_default_time_zone())
     with session_scope(hass=hass, read_only=True) as session:
-        metadata = get_metadata_with_session(
-            get_instance(hass), session, statistic_ids=statistic_ids
-        )
-        ids = {
-            metadata_id: statistic_id
-            for statistic_id, (metadata_id, _) in metadata.items()
-        }
-        # Hourly edges want every row in the range, which a range asks
-        # for better than a list of every hour in it.
-        at = (
-            rows_between(session, set(ids), edges_[0] - HOUR, edges_[-1])
-            if period == "hour"
-            else rows_at(session, set(ids), hours_wanted(edges_))
-        )
+        instance = get_instance(hass)
+        ours = get_metadata_with_session(instance, session, statistic_source=DOMAIN)
+        requested = {sid for sid in statistic_ids if sid in ours}
+        judges: dict[str, set[str]] = {}
+        for statistic_id in requested:
+            family = _family(statistic_id)
+            judges.setdefault(family, set()).update(
+                sid
+                for sid in ours
+                if _family(sid) == family
+                and (parts := parse(sid)) is not None
+                and parts[2] == METRIC_DURATION
+            )
+        # An entity with no duration statistic left is judged on what was asked.
+        for statistic_id in requested:
+            family = _family(statistic_id)
+            judges[family] = judges[family] or {statistic_id}
+        wanted = requested.union(*judges.values())
+        ids = {sid: ours[sid][0] for sid in wanted}
+
+        known: dict[str, Known] = {}
+        if period == "hour":
+            # Hourly edges want every row in the range: one range read
+            # settles every edge down to the oldest row it finds.
+            between = rows_between(
+                session, set(ids.values()), edges_[0] - HOUR, edges_[-1]
+            )
+            for sid, metadata_id in ids.items():
+                known[sid] = Known()
+                known[sid].ranged(between.get(metadata_id, {}).values())
+        else:
+            at = rows_at(session, set(ids.values()), hours_wanted(edges_))
+            known = {sid: Known(at.get(mid, {}).values()) for sid, mid in ids.items()}
+
+        # Rounds: a seek per statistic still blank, at its newest blank
+        # edge; after the first, one batched range for those whose rows
+        # are sparser than seeks are worth; again until nothing is blank.
+        pending = {sid for sid in known if blanks(known[sid], edges_)}
+        first = True
+        while pending:
+            spans: dict[str, tuple[float, float]] = {}
+            for sid in pending:
+                blank = blanks(known[sid], edges_)
+                run = newest_before(session, ids[sid], blank[0], LOOKUP_ROWS)
+                known[sid].seek(run)
+                if first and (span := wants_range(known[sid], edges_, run)):
+                    spans[sid] = span
+            if spans:
+                lo = min(span[0] for span in spans.values())
+                hi = max(span[1] for span in spans.values())
+                between = rows_between(session, {ids[sid] for sid in spans}, lo, hi)
+                for sid in spans:
+                    known[sid].ranged(between.get(ids[sid], {}).values())
+            first = False
+            pending = {sid for sid in pending if blanks(known[sid], edges_)}
+
+        def compiled_by(family: str):
+            judged = [known[sid] for sid in judges[family]]
+            return lambda a, b: any(has_row(k, a, b) for k in judged)
+
         return {
-            statistic_id: [
+            sid: [
                 _serialise(b)
-                for b in cut(
-                    edges_,
-                    at.get(metadata_id, {}),
-                    lambda edge, m=metadata_id: newest_before(session, m, edge),
-                )
+                for b in cut(edges_, known[sid], compiled_by(_family(sid)))
             ]
-            for metadata_id, statistic_id in ids.items()
+            for sid in requested
         }
 
 
