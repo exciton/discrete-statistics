@@ -1,11 +1,12 @@
 """Read-only recorder queries over our own rows.
 
-The sums are cumulative and dense, so a value at an edge is one row: the
-row starting the hour before it (`buckets.row_before`), or the newest
-before that when the hour is a hole. The card reads edges in bulk through
-`websocket`; the sensors read one edge at a time here. Both go through
-`session_scope(read_only=True)` and neither writes - `compiler` is the
-only module that does.
+The sums are cumulative, and a row stands only where something changed
+or once stood, so a value at an edge is the newest row before it - one
+index seek on `(metadata_id, start_ts)`. The card reads edges in bulk
+through `websocket`; the sensors read one edge at a time here; the
+compiler reads its base and the rows standing in its window. All go
+through `session_scope(read_only=True)` and none writes - `compiler` is
+the only module that does.
 """
 
 from __future__ import annotations
@@ -58,8 +59,11 @@ def _rows(
     return result
 
 
-def newest_before(session: Session, metadata_id: int, edge: float) -> Row | None:
-    row = session.execute(
+def newest_before(
+    session: Session, metadata_id: int, edge: float, limit: int = 1
+) -> list[Row]:
+    """Up to `limit` rows before the edge, newest first. One seek whatever the limit."""
+    rows = session.execute(
         select(Statistics.start_ts, Statistics.sum)
         .where(
             Statistics.metadata_id == metadata_id,
@@ -67,9 +71,45 @@ def newest_before(session: Session, metadata_id: int, edge: float) -> Row | None
             Statistics.start_ts < edge,
         )
         .order_by(Statistics.start_ts.desc())
-        .limit(1)
-    ).first()
-    return None if row is None else Row(row[0], row[1])
+        .limit(limit)
+    )
+    return [Row(start_ts, sum_) for start_ts, sum_ in rows]
+
+
+def bases(
+    hass: HomeAssistant, statistic_ids: set[str], edge: float
+) -> dict[str, list[Row]]:
+    """The two newest rows of each statistic before an edge. Executor.
+
+    The newest is the sum a window continues from; the pair gives the
+    hour before the edge its value by difference. A statistic with no
+    row before the edge is absent.
+    """
+    with session_scope(hass=hass, read_only=True) as session:
+        metadata = get_metadata_with_session(
+            get_instance(hass), session, statistic_ids=statistic_ids
+        )
+        found = {
+            statistic_id: newest_before(session, metadata_id, edge, 2)
+            for statistic_id, (metadata_id, _) in metadata.items()
+        }
+        return {statistic_id: rows for statistic_id, rows in found.items() if rows}
+
+
+def standing(
+    hass: HomeAssistant, statistic_ids: set[str], start: float, end: float
+) -> dict[str, set[float]]:
+    """The hours in [start, end) at which each statistic already holds a row. Executor."""
+    with session_scope(hass=hass, read_only=True) as session:
+        metadata = get_metadata_with_session(
+            get_instance(hass), session, statistic_ids=statistic_ids
+        )
+        ids = {
+            metadata_id: statistic_id
+            for statistic_id, (metadata_id, _) in metadata.items()
+        }
+        between = rows_between(session, set(ids), start, end)
+        return {ids[metadata_id]: set(rows) for metadata_id, rows in between.items()}
 
 
 def sums_at(
@@ -94,7 +134,8 @@ def sums_at(
         for metadata_id, statistic_id in ids.items():
             row = at.get(metadata_id, {}).get(row_before(edge))
             if row is None:
-                row = newest_before(session, metadata_id, edge)
+                found = newest_before(session, metadata_id, edge)
+                row = found[0] if found else None
             result[statistic_id] = 0.0 if row is None else row.sum
         return result
 

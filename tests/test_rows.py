@@ -1,6 +1,6 @@
 """The read-only recorder queries the sensors and the card share."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 from homeassistant.components.recorder import get_instance
@@ -13,6 +13,7 @@ from pytest_homeassistant_custom_component.components.recorder.common import (
 from custom_components.discrete_statistics import rows
 from custom_components.discrete_statistics.const import METRIC_DURATION
 from custom_components.discrete_statistics.payload import metadata_for
+from custom_components.discrete_statistics.rows import bases, standing
 
 ON = "discrete_statistics:binary_sensor_grid_status_on_duration"
 OFF = "discrete_statistics:binary_sensor_grid_status_off_duration"
@@ -88,3 +89,72 @@ async def test_series_start_is_the_earliest_row_across_statistics(recorder):
         )
         is None
     )
+
+
+async def test_bases_are_the_two_newest_rows_before_the_edge(recorder):
+    hass = recorder
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    # A: rows at hours 0, 1, 5 (a hole at 2-4). B: one row at hour 0. C: none.
+    await seed(
+        hass,
+        "discrete_statistics:a_on_duration",
+        start,
+        [1.0, 2.0, None, None, None, 3.0],
+    )
+    await seed(hass, "discrete_statistics:b_on_duration", start, [7.0])
+
+    edge = (start + timedelta(hours=6)).timestamp()
+    found = await get_instance(hass).async_add_executor_job(
+        bases,
+        hass,
+        {
+            "discrete_statistics:a_on_duration",
+            "discrete_statistics:b_on_duration",
+            "discrete_statistics:c_on_duration",
+        },
+        edge,
+    )
+
+    a = found["discrete_statistics:a_on_duration"]
+    assert [(r.start, r.sum) for r in a] == [
+        ((start + timedelta(hours=5)).timestamp(), 3.0),
+        ((start + timedelta(hours=1)).timestamp(), 2.0),
+    ]
+    assert [r.sum for r in found["discrete_statistics:b_on_duration"]] == [7.0]
+    assert "discrete_statistics:c_on_duration" not in found
+
+
+async def test_bases_stop_strictly_before_the_edge(recorder):
+    hass = recorder
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    await seed(hass, "discrete_statistics:a_on_duration", start, [1.0, 2.0, 3.0])
+
+    # A row starting exactly on the edge is not before it.
+    edge = (start + timedelta(hours=2)).timestamp()
+    found = await get_instance(hass).async_add_executor_job(
+        bases, hass, {"discrete_statistics:a_on_duration"}, edge
+    )
+    assert [r.sum for r in found["discrete_statistics:a_on_duration"]] == [2.0, 1.0]
+
+
+async def test_standing_lists_the_hours_holding_a_row_inside_the_window(recorder):
+    hass = recorder
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    await seed(hass, "discrete_statistics:a_on_duration", start, [1.0, None, 2.0, 3.0])
+    await seed(
+        hass, "discrete_statistics:b_on_duration", start, [None, None, None, None, 4.0]
+    )
+
+    hours = await get_instance(hass).async_add_executor_job(
+        standing,
+        hass,
+        {"discrete_statistics:a_on_duration", "discrete_statistics:b_on_duration"},
+        (start + timedelta(hours=1)).timestamp(),
+        (start + timedelta(hours=4)).timestamp(),
+    )
+    assert hours == {
+        "discrete_statistics:a_on_duration": {
+            (start + timedelta(hours=2)).timestamp(),
+            (start + timedelta(hours=3)).timestamp(),
+        }
+    }
