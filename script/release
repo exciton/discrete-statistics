@@ -80,7 +80,7 @@ if ! gh pr checks "$BRANCH" --watch --fail-fast >/dev/null; then
   echo "checks failed on $PR: fix and merge it, then rerun to tag" >&2
   exit 1
 fi
-gh pr merge "$BRANCH" --squash --delete-branch >/dev/null
+gh pr merge "$BRANCH" --squash >/dev/null
 git checkout -q main
 git pull -q origin main
 git branch -q -D "$BRANCH" 2>/dev/null || true
