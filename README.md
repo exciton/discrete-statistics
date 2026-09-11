@@ -298,8 +298,10 @@ is observed — no configuration change is needed when a new state shows up.
 A row is written only for an hour in which something happened: a state
 gets a duration row for each hour it had time in, and a count row for
 each hour it was entered. A period in which the entity was recorded but
-the state never occurred reads as zero; a period with no rows at all —
-the integration was not running — is a gap.
+the state never occurred reads as zero on the integration's own card;
+the stock statistics-graph card, which reduces the rows itself, leaves
+such a period out. A period with no rows at all — the integration was not
+running — is a gap either way.
 
 ### Blank states
 
@@ -326,8 +328,9 @@ the stretch leaves it alone too.
 The statistics are ordinary long-term statistics, so the stock
 statistics-graph card draws them; the integration also ships its own card
 (below), which is configured by entity rather than by statistic ID and
-draws every state the entity has, including one it gains later. Each
-example here is given both ways.
+draws every state the entity has, including one it gains later. Most
+examples here are given both ways; the share of time has no stock-card
+equivalent.
 
 Time in each state per day, stacked:
 

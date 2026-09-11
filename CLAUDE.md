@@ -78,9 +78,9 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
        │        │
        ├─ periods           pure: a named period -> its edges, in a zone
        │        │
-       ├─ rows              reads the recorder: the rows at edges, a
-       │        │           statistic's newest rows before one, the rows
-       │        │           standing in a window, where a series starts
+       ├─ rows              reads the recorder: the rows at edges, the sums
+       │        │           at an edge, a statistic's newest rows before one,
+       │        │           the rows standing in a window, where a series starts
        ├─ reading           pure: a window in pieces - whole hours, part hours,
        │        │           the tail -> one sensor's value
        │        │
@@ -99,11 +99,12 @@ Everything except `compiler`, `rows`, `websocket`, `config_flow`, `naming`,
 Keep it that way: if a change needs recorder access in a lower module, the
 design is drifting. Three recorder boundaries: `compiler` is the only
 module that writes; `rows` reads — `session_scope(read_only=True)`, the
-rows at a set of edges, the newest rows before one, the rows standing in
-a window, the earliest row of a series — for `websocket`, the compiler and
-the coordinator alike; and `config_flow` reads once per options dialog, the
-entity's distinct states, to draw a mapping row for each, and once per sensor
-dialog, the entity's statistics, to offer their states; so the invariants below are the compiler's alone.
+rows at a set of edges, the sums at an edge, the newest rows before one,
+the rows standing in a window, the earliest row of a series — for
+`websocket`, the compiler and the coordinator alike; and `config_flow`
+reads once per options dialog, the entity's distinct states, to draw a
+mapping row for each, and once per sensor dialog, the entity's statistics,
+to offer their states; so the invariants below are the compiler's alone.
 `Compiler.async_tail` is the compiler's *read* path — the carry chain,
 `_async_history`, `canonicalise`, `_open_window` — handed out as a
 `Timeline` and never written, so a live sensor agrees with what the next
@@ -240,11 +241,13 @@ of `LOOKUP_ROWS` before its newest blank edge, then — when a full run's
 density says the blank span holds fewer than `SEEK_WORTH` rows per
 blank edge — one range read batched over every such statistic, then
 seeks again until nothing is blank. Every read is an index seek on
-`(metadata_id, start_ts)`; nothing is proportional to the range. Gap or
-zero is judged on the entity's duration statistics as a whole, which
-ride along in the reads: a bucket is compiled when any of them has a
-row inside it, a requested statistic with no row of its own there reads
-zero, and only a hole is left out for the card to draw as a gap.
+`(metadata_id, start_ts)` and none is proportional to the range — except
+at the hourly period, where every row in the range answers an edge and
+one range read fetches the lot. Gap or zero is judged on the entity's
+duration statistics as a whole, which ride along in the reads: a bucket
+is compiled when any of them has a row inside it, a requested statistic
+with no row of its own there reads zero, and only a hole is left out for
+the card to draw as a gap.
 `row_before` an edge is the row starting the hour before it, whose sum
 is the sum at the edge, or the row running through it in a zone half an
 hour off UTC, where every edge is at half past; the `IN` query asks for
