@@ -148,9 +148,10 @@ class TestKnown:
 
     def test_rows_are_deduplicated_by_start(self):
         known = Known([Row(10 * H, 1.0)])
-        known.add([Row(10 * H, 1.0), Row(5 * H, 0.5)])
-        assert known.before(11 * H) == Row(10 * H, 1.0)
+        known.add([Row(10 * H, 9.0), Row(5 * H, 0.5)])
+        assert known.before(11 * H).sum == 9.0  # last write wins
         assert known.before(10 * H) == Row(5 * H, 0.5)
+        assert known._starts == [5 * H, 10 * H]  # not duplicated
 
 
 DAYS_60 = [d * 24 * H for d in range(61)]
@@ -170,10 +171,12 @@ class TestBlanks:
 
 class TestWantsRange:
     def test_a_short_run_never_wants_a_range(self):
+        # Known here was not seeded by run, so a blank edge remains close
+        # enough that the density math alone would want a range - the
+        # length guard is what a caller passing a stale run relies on.
         known = Known()
-        run = _run(24 * 89, 3)
-        known.seek(run)
-        assert wants_range(known, MONTHS_3, run) is None
+        run = _run(0, LOOKUP_ROWS - 1)
+        assert wants_range(known, [MONTHS_3[3]], run) is None
 
     def test_a_busy_statistic_under_monthly_edges_keeps_seeking(self):
         # Rows every hour: the three months left hold thousands of rows.

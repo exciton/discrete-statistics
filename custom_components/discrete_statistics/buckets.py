@@ -154,7 +154,7 @@ class Known:
         self.floor = min(self.floor, -math.inf if exhausted else rows[-1].start)
 
     def ranged(self, rows: Iterable[Row]) -> None:
-        """Take every row of a span that starts at or below the newest unsettled edge."""
+        """Take every row of a span whose end reaches the newest unsettled edge."""
         rows = list(rows)
         self.add(rows)
         if rows:
