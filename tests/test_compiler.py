@@ -1,6 +1,7 @@
 """Tests for the compiler against a real recorder."""
 
 import functools as ft
+import re
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -11,6 +12,10 @@ from homeassistant.components.recorder.statistics import (
     statistics_during_period,
 )
 from homeassistant.setup import async_setup_component
+from pytest_homeassistant_custom_component.components.recorder.common import (
+    async_wait_recording_done,
+)
+from sqlalchemy import event as sqlalchemy_event
 
 from custom_components.discrete_statistics import compiler as compiler_module
 from custom_components.discrete_statistics.compiler import TRAILING_HOURS, Compiler
@@ -75,10 +80,8 @@ async def stored_name(hass, statistic_id):
     return metadata[statistic_id][1]["name"]
 
 
-async def read_sums(hass, statistic_id, start, end):
-    """Return the cumulative sums recorded for a statistic."""
-    # async_add_external_statistics only queues the write, so drain the
-    # recorder before querying it back.
+async def read_rows(hass, statistic_id, start, end):
+    """The rows a statistic holds in [start, end), as (hour, sum)."""
     await get_instance(hass).async_block_till_done()
     result = await get_instance(hass).async_add_executor_job(
         statistics_during_period,
@@ -90,7 +93,48 @@ async def read_sums(hass, statistic_id, start, end):
         None,
         {"sum"},
     )
-    return [row["sum"] for row in result.get(statistic_id, [])]
+    return [(row["start"], row["sum"]) for row in result.get(statistic_id, [])]
+
+
+async def read_sums(hass, statistic_id, start, end, entity_id=ENTITY):
+    """The cumulative sum at each compiled hour in [start, end).
+
+    A row stands only where something changed, so the sum at a quiet hour
+    is carried from the newest row before it - zero before the statistic's
+    first row - and an hour is compiled when any duration statistic of the
+    entity holds a row there.
+    """
+    durations = [
+        sid
+        for sid in await existing(hass, entity_id)
+        if parse(sid)[2] == METRIC_DURATION
+    ]
+    result = await get_instance(hass).async_add_executor_job(
+        statistics_during_period,
+        hass,
+        start - timedelta(days=400),
+        end,
+        {*durations, statistic_id},
+        "hour",
+        None,
+        {"sum"},
+    )
+    compiled = sorted(
+        {
+            row["start"]
+            for sid in durations
+            for row in result.get(sid, [])
+            if start.timestamp() <= row["start"] < end.timestamp()
+        }
+    )
+    own = sorted((row["start"], row["sum"]) for row in result.get(statistic_id, []))
+    sums, i, running = [], 0, 0.0
+    for hour in compiled:
+        while i < len(own) and own[i][0] <= hour:
+            running = own[i][1]
+            i += 1
+        sums.append(running)
+    return sums
 
 
 async def test_compiles_nothing_without_history(recorder):
@@ -670,64 +714,6 @@ async def test_compiling_across_a_chunk_boundary(recorder, freezer, monkeypatch)
     assert off_duration[-1] == pytest.approx((4500 + 5400 + 3600) / 3600)
 
 
-async def read_day(hass, statistic_id, start, end):
-    """Return the day-period rollup rows for a statistic."""
-    await get_instance(hass).async_block_till_done()
-    result = await get_instance(hass).async_add_executor_job(
-        statistics_during_period,
-        hass,
-        start,
-        end,
-        {statistic_id},
-        "day",
-        None,
-        {"mean", "min", "max", "sum"},
-    )
-    return result.get(statistic_id, [])
-
-
-async def test_hourly_values_roll_up_into_a_daily_mean_min_and_max(recorder, freezer):
-    """The point of writing mean/min/max: second-order statistics for free.
-
-    The recorder reduces the hourly rows itself, so a statistics-graph card
-    asking for `mean` over a day answers "average hours on per hour" and
-    `max` answers "the busiest hour" - neither of which the cumulative sum
-    can express.
-    """
-    hass = recorder
-    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
-    freezer.move_to(start)
-    hass.states.async_set(ENTITY, "on")
-    await hass.async_block_till_done()
-
-    freezer.move_to(start + timedelta(hours=2))
-    hass.states.async_set(ENTITY, "off")
-    await hass.async_block_till_done()
-
-    freezer.move_to(start + timedelta(hours=3, minutes=30))
-    hass.states.async_set(ENTITY, "on")
-    await hass.async_block_till_done()
-    await get_instance(hass).async_block_till_done()
-
-    freezer.move_to(start + timedelta(hours=4))
-    compiler = Compiler(hass)
-    await compiler.async_compile(cfg(), start.timestamp())
-
-    # Hourly "on" durations are 1.0, 1.0, 0.0, 0.5.
-    hourly = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=4))
-    assert hourly == [1.0, 2.0, 2.0, 2.5]
-
-    rows = await read_day(
-        hass, DURATION_ON, start - timedelta(days=1), start + timedelta(days=2)
-    )
-    assert len(rows) == 1
-    assert rows[0]["mean"] == pytest.approx(2.5 / 4)
-    assert rows[0]["min"] == 0.0
-    assert rows[0]["max"] == 1.0
-    # The sum is untouched by the reduction: it stays the cumulative total.
-    assert rows[0]["sum"] == pytest.approx(2.5)
-
-
 async def test_a_new_entity_opens_at_the_first_whole_hour_it_knows(recorder, freezer):
     """An entity's first state almost never lands on the hour, and the
     part-known hour containing it cannot both be recorded and total
@@ -894,10 +880,11 @@ async def test_a_deleted_statistic_is_forgotten_not_recreated(recorder, freezer)
 
     assert DURATION_ON not in await existing(hass)
     assert COUNT_ON not in await existing(hass)
-    assert await read_sums(hass, DURATION_ON, start, start + timedelta(hours=6)) == []
-    # The surviving state carries on undisturbed, still dense and monotonic.
+    assert await read_rows(hass, DURATION_ON, start, start + timedelta(hours=6)) == []
+    # The surviving state carries on undisturbed and monotonic. Hour 0 was
+    # spent entirely in "on", so deleting it leaves no row there at all.
     off = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=6))
-    assert off == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+    assert off == [1.0, 2.0, 3.0, 4.0, 5.0]
 
 
 async def test_deleting_one_metric_sticks_until_its_state_recurs(recorder, freezer):
@@ -935,13 +922,13 @@ async def test_deleting_one_metric_sticks_until_its_state_recurs(recorder, freez
     assert DURATION_ON in await existing(hass)
 
 
-async def test_a_healthy_entity_keeps_every_statistic_dense(recorder, freezer):
-    """The density invariant, asserted on rows rather than on ID membership.
+async def test_a_quiet_state_writes_no_rows_and_the_hours_still_tile(recorder, freezer):
+    """The invariant that replaced density.
 
-    Membership alone proves nothing: nothing in this integration ever removes
-    a statistics_meta row, so `existing == before` holds however badly the
-    compile behaves. What must hold is that a state absent from the window
-    still gets a row in each of its hours, carrying its sum forward.
+    A state absent from an hour gets no row there; the states present do,
+    and their changes sum to the hour. Asserted on rows, not on ID
+    membership: nothing ever removes a statistics_meta row, so membership
+    proves nothing.
     """
     hass = recorder
     start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
@@ -950,34 +937,38 @@ async def test_a_healthy_entity_keeps_every_statistic_dense(recorder, freezer):
     freezer.move_to(start + timedelta(hours=4))
     compiler = Compiler(hass)
     await compiler.async_compile(cfg(), start.timestamp())
+    await async_wait_recording_done(hass)
 
     freezer.move_to(start + timedelta(hours=6))
     await compiler.async_compile_incremental(cfg())
 
-    # "on" happened only in hour 0 and never again, so every later hour is a
-    # carried row: same sum, and a zero hourly value.
-    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=6))
-    assert on == [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-    off = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=6))
-    assert off == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
-    # And the two still tile the clock in every hour.
-    for hour, (a, b) in enumerate(zip(on, off)):
-        total = (a - (on[hour - 1] if hour else 0.0)) + (
-            b - (off[hour - 1] if hour else 0.0)
-        )
-        assert total == pytest.approx(1.0), (hour, a, b)
+    end = start + timedelta(hours=6)
+    on = await read_rows(hass, DURATION_ON, start, end)
+    off = await read_rows(hass, DURATION_OFF, start, end)
+    assert on == [(start.timestamp(), 1.0)]
+    assert [(h - start.timestamp()) / HOUR for h, _ in off] == [1, 2, 3, 4, 5]
+    assert [s for _, s in off] == [1.0, 2.0, 3.0, 4.0, 5.0]
+
+    # Every compiled hour is tiled by the duration rows present in it.
+    change = {}
+    for sid, rows in ((DURATION_ON, on), (DURATION_OFF, off)):
+        previous = 0.0
+        for hour, total in rows:
+            change.setdefault(hour, 0.0)
+            change[hour] += total - previous
+            previous = total
+    assert sorted(change) == [start.timestamp() + h * HOUR for h in range(6)]
+    assert all(total == pytest.approx(1.0) for total in change.values())
 
 
-async def test_a_statistic_created_in_one_chunk_stays_dense_in_the_next(
+async def test_a_statistic_created_in_one_chunk_continues_its_sum_in_a_later_one(
     recorder, freezer, monkeypatch
 ):
-    """The carry-forward of newly created statistics across a chunk seam.
+    """The sums thread across the chunk seam.
 
-    A statistic first written in chunk N is NOT yet in the recorder's
-    metadata when chunk N+1 asks - the write is still queued - so the chunk
-    has to hand it forward itself. Without that, "on" would have no row in
-    hours 2 onward, and the next window would find no base in the hour before
-    it and restart the series at zero.
+    A statistic first written in chunk N is still queued when chunk N+2
+    sees its state again, so a base read from the recorder would find
+    nothing and restart it at zero. The chunk hands its sums forward.
     """
     monkeypatch.setattr(compiler_module, "CHUNK_HOURS", 2)
 
@@ -986,9 +977,11 @@ async def test_a_statistic_created_in_one_chunk_stays_dense_in_the_next(
     freezer.move_to(start)
     hass.states.async_set(ENTITY, "on")
     await hass.async_block_till_done()
-    # "on" ends inside the first chunk and never returns.
     freezer.move_to(start + timedelta(minutes=30))
     hass.states.async_set(ENTITY, "off")
+    await hass.async_block_till_done()
+    freezer.move_to(start + timedelta(hours=4, minutes=30))
+    hass.states.async_set(ENTITY, "on")
     await hass.async_block_till_done()
     await get_instance(hass).async_block_till_done()
 
@@ -996,8 +989,12 @@ async def test_a_statistic_created_in_one_chunk_stays_dense_in_the_next(
     compiler = Compiler(hass)
     assert await compiler.async_compile(cfg(), start.timestamp()) == 6
 
-    on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=6))
-    assert on == [0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+    on = await read_rows(hass, DURATION_ON, start, start + timedelta(hours=6))
+    assert on == [
+        (start.timestamp(), 0.5),
+        (start.timestamp() + 4 * HOUR, 1.0),
+        (start.timestamp() + 5 * HOUR, 2.0),
+    ]
 
 
 async def test_an_entity_with_no_recordable_state_compiles_nothing(recorder, freezer):
@@ -1727,13 +1724,158 @@ async def test_a_state_carried_from_statistics_keeps_its_readable_name(
     ) == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
 
 
+async def test_a_standing_row_with_no_change_does_not_vouch_for_its_state(
+    recorder, freezer
+):
+    """Carry source 4 reads change, not presence.
+
+    A row rewritten with the carried sum stands in the hour but says the
+    state had no time in it. Counting it would find two statistics in the
+    hour and refuse to carry - leaving the window uncompiled.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    freezer.move_to(start + timedelta(minutes=30))
+    hass.states.async_set(ENTITY, "off")
+    await hass.async_block_till_done()
+    # Unavailable is ignored under record_known: the recorder and the
+    # state machine both fall silent from here, so hour 2 can only be
+    # opened from the statistics of hour 1.
+    freezer.move_to(start + timedelta(minutes=45))
+    hass.states.async_set(ENTITY, "unavailable")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=2))
+    compiler = Compiler(hass)
+    await compiler.async_compile(cfg(), start.timestamp())
+    await async_wait_recording_done(hass)
+    # A stale "on" row in hour 1, carrying the sum with nothing added.
+    async_add_external_statistics(
+        hass,
+        metadata_for(METRIC_DURATION, DURATION_ON, "Grid Status: on (h)"),
+        [{"start": start + timedelta(hours=1), "sum": 0.5}],
+    )
+    await async_wait_recording_done(hass)
+
+    freezer.move_to(start + timedelta(hours=4))
+    assert (
+        await compiler.async_compile(cfg(), (start + timedelta(hours=2)).timestamp())
+        == 2
+    )
+
+    off = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=4))
+    assert off == [0.5, 1.5, 2.5, 3.5]
+
+
+async def test_a_recompile_that_drops_a_state_from_an_hour_rewrites_its_row(
+    recorder, freezer
+):
+    """Nothing deletes, so a stale row is corrected by rewriting it.
+
+    Without the rewrite the stale sum stands ahead of every later row and
+    the series stops being monotonic.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    freezer.move_to(start + timedelta(minutes=30))
+    hass.states.async_set(ENTITY, "off")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    # A row for "on" in hour 1 that the history does not support.
+    async_add_external_statistics(
+        hass,
+        metadata_for(METRIC_DURATION, DURATION_ON, "Grid Status: on (h)"),
+        [
+            {"start": start, "sum": 0.5},
+            {"start": start + timedelta(hours=1), "sum": 0.9},
+        ],
+    )
+    await async_wait_recording_done(hass)
+
+    freezer.move_to(start + timedelta(hours=3))
+    await Compiler(hass).async_compile(cfg(), start.timestamp())
+
+    on = await read_rows(hass, DURATION_ON, start, start + timedelta(hours=3))
+    assert on == [(start.timestamp(), 0.5), (start.timestamp() + HOUR, 0.5)]
+
+
+@pytest.fixture
+def statements(recorder):
+    """Every SQL statement the recorder's engine runs, with its parameters."""
+    seen: list[tuple[str, tuple]] = []
+
+    def listen(conn, cursor, statement, parameters, context, executemany):
+        flat = parameters if executemany else [parameters]
+        seen.append((statement, tuple(p for group in flat for p in (group or ()))))
+
+    engine = get_instance(recorder).engine
+    sqlalchemy_event.listen(engine, "before_cursor_execute", listen)
+    yield seen
+    sqlalchemy_event.remove(engine, "before_cursor_execute", listen)
+
+
+async def test_the_base_of_a_quiet_statistic_is_a_seek_not_a_scan(
+    recorder, freezer, statements
+):
+    """A statistic with rows on both sides of the window costs one seek.
+
+    A recompute inside the series is where a read from the epoch would
+    hide - and under sparse rows that is every inactive statistic on
+    every chunk of a backfill. Every SELECT over the statistics table
+    during the compile binds nothing older than the window's neighbourhood.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    await _seed_two_states(hass, freezer, start)
+    # "on" again at hour 20, so its newest row is ahead of a window at 10.
+    freezer.move_to(start + timedelta(hours=20))
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    freezer.move_to(start + timedelta(hours=20, minutes=30))
+    hass.states.async_set(ENTITY, "off")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    freezer.move_to(start + timedelta(hours=30))
+    compiler = Compiler(hass)
+    await compiler.async_compile(cfg(), start.timestamp())
+    await async_wait_recording_done(hass)
+
+    statements.clear()
+    window = start + timedelta(hours=10)
+    await compiler.async_compile(
+        cfg(), window.timestamp(), (window + timedelta(hours=2)).timestamp()
+    )
+    await async_wait_recording_done(hass)
+
+    floor = (window - timedelta(hours=1)).timestamp()
+    selects = [
+        (sql, params)
+        for sql, params in statements
+        if sql.lstrip().upper().startswith("SELECT")
+        and re.search(r"\bstatistics\b", sql)
+    ]
+    assert selects, "nothing was read"
+    for sql, params in selects:
+        stamps = [p for p in params if isinstance(p, float)]
+        assert all(p >= floor for p in stamps), (sql, params)
+
+
 async def test_a_chunk_that_raises_still_drains_the_ones_before_it(
     recorder, freezer, monkeypatch
 ):
     """The writes of the chunks before it are committed, not left queued.
 
-    Density is read live from `statistics_meta`, so a compile that returned
-    with rows still queued would let the next one see half of them.
+    The standing rows and the metadata are read live, so a compile that
+    returned with rows still queued would let the next one see half of them.
     """
     monkeypatch.setattr(compiler_module, "CHUNK_HOURS", 2)
     hass = recorder
@@ -1768,7 +1910,7 @@ async def test_a_chunk_that_raises_still_drains_the_ones_before_it(
         None,
         {"sum"},
     )
-    assert [row["sum"] for row in result[DURATION_ON]] == [0.5, 0.5]
+    assert [row["sum"] for row in result[DURATION_ON]] == [0.5]
     assert [row["sum"] for row in result[DURATION_OFF]] == [0.5, 1.5]
 
 
