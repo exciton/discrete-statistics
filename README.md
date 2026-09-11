@@ -584,6 +584,9 @@ for the entity and choose **Add sensor**:
   midnight in Home Assistant's own time zone. Or the last hour, 24 hours,
   7, 30 or 365 days, ending now — exactly that long, across a clock change
   too. Or *Custom*, for a window the section below describes.
+
+  ![The Period dropdown open: the nine calendar periods, then Last hour, Last 24 hours, Last 7 days, Last 30 days, Last 365 days and Custom](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/sensor-dialog-period-options.png)
+
 - **Custom period** — a folded section with **Start**, **End** and
   **Duration**. Fill in any two, or Start alone to run to now. Start and
   End are templates that render to a date and time —
@@ -594,6 +597,9 @@ for the entity and choose **Add sensor**:
   render makes the sensor `unavailable`, with the error in the log. A
   window whose end is not after its start when it is rendered holds no
   time, so a time or count sensor over it reads `0.0`.
+
+  ![The dialog with Period set to Custom and the Custom period section open: a Start template of today_at('09:00'), an empty End, and a Duration of eight hours](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/custom-period.png)
+
 - **Name** — optional; the default is made from the entity, the states,
   the measure and the period, "Front Door open time this month".
 - **Include the current hour** — statistics are compiled hourly. On, the
@@ -606,7 +612,7 @@ for the entity and choose **Add sensor**:
   ending at the last compiled hour and moving only when a compile does,
   so it never includes an estimated end.
 
-![The Add a period sensor dialog: a States picker with On chosen, the Measure and Period dropdowns, the Name box showing the composed name greyed out, and the Include the current hour switch](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/sensor-dialog.png)
+![The period sensor dialog: a States picker with On chosen, the Measure and Period dropdowns, the folded Custom period section, the Name box showing the composed name greyed out, and the Include the current hour switch](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/sensor-dialog.png)
 
 **Part hours.** The statistics are hourly, and a rolling or custom window
 usually starts or ends part-way through an hour. That hour is read
@@ -642,7 +648,7 @@ share of that month. A sensor whose states are all ignored by the entry,
 or whose entity has no statistics yet, is `unavailable`, with the reason in
 the log — as is a custom sensor whose templates do not render.
 
-![A count sensor's details: state 38, with Period start, Period end, Compiled until and Live attributes](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/sensor-details.png)
+![A time sensor's details: 38 h 15 m this month, with Period start, Period end, Compiled until, Live and Estimated attributes](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/sensor-details.png)
 
 **Count.** A count is the number of changes *into* the states inside the
 period, as the statistics record them. A spell already in progress when
