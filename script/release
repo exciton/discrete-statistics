@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# Cut a release: bump the manifest version, commit, tag and publish.
+# Cut a release: bump the manifest version through a pull request, then tag
+# the merge and publish.
 #
 #   script/release 0.2.0
 #
 # The tag is `v<version>`; the version in manifest.json is what Home
 # Assistant reports and what HACS compares, so the two are written from the
-# same argument and release.yml refuses a release where they differ.
+# same argument and release.yml refuses a release where they differ. `main`
+# takes changes only through a pull request with its checks green, so the
+# bump goes up as one, labelled `skip-changelog` to keep it out of the
+# notes, and is squash-merged here once the checks pass.
 set -euo pipefail
 
 VERSION="${1:?usage: script/release X.Y.Z}"
@@ -23,6 +27,24 @@ gh auth status >/dev/null 2>&1 || { echo "gh is not logged in; nothing done" >&2
 git fetch -q origin main
 [[ "$(git rev-parse HEAD)" == "$(git rev-parse origin/main)" ]] || { echo "main is not in sync with origin" >&2; exit 1; }
 ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || { echo "$TAG already exists" >&2; exit 1; }
+
+manifest_version() {
+  python3 -c "import json; print(json.load(open('$MANIFEST'))['version'])"
+}
+
+publish() {
+  git tag -s "$TAG" -m "Release $VERSION"
+  git push -q origin "$TAG"
+  gh release create "$TAG" --title "$VERSION" --generate-notes
+}
+
+# A rerun after the bump has merged by hand - or after the tag step failed -
+# has nothing left to bump: tag what main already carries.
+if manifest_version | grep -qx "$VERSION"; then
+  echo "main already carries $VERSION; tagging it" >&2
+  publish
+  exit 0
+fi
 
 echo "Building the card..." >&2
 (cd "$REPO_ROOT/frontend" && npm ci --silent && npm run --silent check && npm test --silent && npm run --silent build)
@@ -42,8 +64,24 @@ with open(path, "w") as f:
     f.write("\n")
 PY
 
+BRANCH="release-$VERSION"
+git checkout -q -b "$BRANCH"
 git add "$MANIFEST"
 git commit -q -m "Release $VERSION"
-git tag -s "$TAG" -m "Release $VERSION"
-git push -q origin main "$TAG"
-gh release create "$TAG" --title "$VERSION" --generate-notes
+git push -q -u origin "$BRANCH"
+PR="$(gh pr create --base main --head "$BRANCH" --label skip-changelog \
+  --title "Release $VERSION" --body "Bump the manifest version to $VERSION.")"
+echo "Opened $PR; waiting for its checks..." >&2
+if ! gh pr checks "$BRANCH" --watch --fail-fast >/dev/null; then
+  git checkout -q main
+  echo "checks failed on $PR: fix and merge it, then rerun to tag" >&2
+  exit 1
+fi
+gh pr merge "$BRANCH" --squash --delete-branch >/dev/null
+git checkout -q main
+git pull -q origin main
+git branch -q -D "$BRANCH" 2>/dev/null || true
+manifest_version | grep -qx "$VERSION" \
+  || { echo "main does not carry $VERSION after the merge" >&2; exit 1; }
+
+publish
