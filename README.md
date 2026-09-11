@@ -250,6 +250,12 @@ dialog refuses an entity that YAML already configures; a YAML block added
 later for an entity the UI owns disables that entry and raises a repair
 issue.
 
+The entry's ⋮ menu has **Download diagnostics**: the entry and the
+disposition table built from it, the statistics the recorder holds and
+where they end, the entity's earliest retained state and current one, the
+recorder's backlog and retention, and every period sensor's state — what a
+report of "it isn't compiling" needs.
+
 Removing an entry stops compiling. It never deletes statistics — do that
 in Settings → System → Tools → Statistics.
 
