@@ -250,6 +250,12 @@ dialog refuses an entity that YAML already configures; a YAML block added
 later for an entity the UI owns disables that entry and raises a repair
 issue.
 
+The entry's ⋮ menu has **Download diagnostics**: the entry and the
+disposition table built from it, the statistics the recorder holds and
+where they end, the entity's earliest retained state and current one, the
+recorder's backlog and retention, and every period sensor's state — what a
+report of "it isn't compiling" needs.
+
 Removing an entry stops compiling. It never deletes statistics — do that
 in Settings → System → Tools → Statistics.
 
@@ -463,6 +469,59 @@ hide_legend: true
 With the stock card a state that appears later accumulates immediately
 but must be added to the card's `entities` list to be drawn; the card
 below draws it as soon as it has statistics.
+
+### Time at places
+
+A `person` or `device_tracker` entity's state is the zone it is in —
+`home`, `Work`, `Gym`, or `not_home` for anywhere else — so it is an enum
+entity like any other, and the same statistics answer "how long at the
+office this week" and "how many trips to the gym this year". Nothing to
+configure beyond the entity:
+
+```yaml
+discrete_statistics:
+  - entity_id: person.alice
+```
+
+Hours at each place per week, stacked, with the integration's card:
+
+```yaml
+type: custom:discrete-statistics-card
+title: Alice
+entity: person.alice
+chart_type: bar-stack
+period: week
+days_to_show: 90
+```
+
+The same with the stock card, naming the places to draw. The state is the
+zone's name, and the statistic ID holds it as a token — lower case, spaces
+and punctuation dropped — so a zone named *Work* is `work` and *Mum's
+House* is `mumshouse`:
+
+```yaml
+type: statistics-graph
+title: Alice
+chart_type: bar-stack
+period: week
+days_to_show: 90
+stat_types:
+  - change
+entities:
+  - discrete_statistics:person_alice_home_duration
+  - discrete_statistics:person_alice_work_duration
+  - discrete_statistics:person_alice_not_home_duration
+```
+
+Trips are the count statistic: `discrete_statistics:person_alice_gym_count`
+per month is how often the gym was visited, and a [period
+sensor](#period-sensors) over the `gym` state with the count measure and
+*This year* puts that number in a tile. A zone is a state from the moment
+its entity crosses the boundary, so a phone that reports its position
+every few minutes gives an arrival time accurate to that interval, and a
+short excursion out of a zone and back is a state change like any other —
+`min_duration` with `ignore_short` on `not_home` smooths those out.
+
 
 ## The card
 
@@ -748,22 +807,23 @@ idempotent and the next run catches up.
 ## Compared with `history_stats`
 
 Home Assistant's own [`history_stats`](https://www.home-assistant.io/integrations/history_stats/)
-answers a different question. It is a sensor whose value is *how much of a
-window* an entity spent in some states — the window being whatever its
-`start`/`end` templates render to right now — and it reads that from the
-recorder each time. This component writes the answer for every hour, once,
-into statistics that outlive the recorder. Each is the right tool for a
-specific job.
+answers the same questions — how long an entity spent in some states over
+a window, what share of the window that was, how often it entered them —
+and, over a window whose hours the recorder still holds, from the same
+rows, to the same result. The two approach it from opposite ends.
 
-The two are built the other way round from each other. `history_stats` is
-sensor first: the number is what it makes, and long-term statistics of it
-are optional, a `state_class` on the sensor for the recorder to sum. This
-component is statistics first: the hourly rows are the product, and a
+`history_stats` is sensor first. Its sensor is the product: on every
+refresh it reads the recorder's raw states for whatever window its
+templates render to now, and long-term statistics of that number are
+optional, a `state_class` on the sensor for the recorder to sum. This
+component is statistics first. The hourly rows are the product, compiled
+once from the raw states and kept past the recorder's retention, and a
 sensor over them is optional, a period sensor on the entry. That order is
 what lets the recorder's retention be short — a few days is enough, since
 the statistics are compiled from the history while it is still there — and
 what makes a long range cheap: a year is twelve rows a state, not a year of
-state changes read back.
+state changes read back. The difference between the two is where the
+number lives between readings.
 
 ### The same chart, both ways
 
@@ -813,118 +873,152 @@ discrete_statistics:
 ```
 
 ```yaml
-type: statistics-graph
+type: custom:discrete-statistics-card
+entity: binary_sensor.grid_status
 period: day
 days_to_show: 365
-stat_types:
-  - change
-entities:
-  - discrete_statistics:binary_sensor_grid_status_off_duration
-  - discrete_statistics:binary_sensor_grid_status_off_count
+metric: count
+states:
+  - "off"
 ```
 
-The two cards look alike. The first one is wrong in ways that are hard to
-see:
+and the same card with `metric: duration` for the hours off-grid.
 
-- **It starts today.** The sensors have no value before they exist, so the
-  chart is empty for the past year and fills in from now. The second reaches
-  back as far as the recorder held history when the entity was first
-  compiled.
-- **Midnight is detected, not known.** `total_increasing` has no reset
-  signal; the recorder infers one when the value drops below 90 % of the
-  previous reading. Whether an outage that spans midnight is counted once
-  or twice therefore depends on the day before: after a day with one outage
-  the count reads `1` on both sides of midnight, no drop, no reset, counted
-  once; after a day with two it drops from `2` to `1`, a reset, and the
-  outage is counted again. The second card credits it to the hour it began.
-- **A restart during the outage splits it.** `unavailable` is not `off`, so
-  the interval closes and a new one opens, the count goes up, and the
-  downtime is attributed to nothing. The second card carries `off` across
-  it.
-- **Three more states means six more sensors**, each with the same window
-  templates to keep right, and a state the entity has not shown yet has no
-  sensor at all.
-- **The value is a sensor's state**, so it is recorded to the recorder like
-  any other, purged like any other, and the statistics are derived from
-  samples of it rather than from the transitions themselves.
+The charts look alike; the foundation shows at the edges:
 
-None of that is a defect in `history_stats`: it was built to show a live
-figure, and the long-term statistics are a by-product of giving that figure
-a `state_class`. Writing the statistics directly is the point of this
-component.
+- **Where the series begins.** A sensor's statistics begin when the sensor
+  is created; compiled statistics begin where the recorder's history did.
+- **Midnight.** A `total_increasing` sensor resets by inference — the
+  recorder notices a drop below 90 % of the previous reading — so an outage
+  that spans midnight is counted once or twice depending on the day before:
+  after a day with one outage the count reads `1` on both sides of it, no
+  drop, counted once; after a day with two it drops from `2` to `1`, a
+  reset, counted again. A compiled hour credits a change to the hour it
+  happened in.
+- **A restart.** During an outage the entity is briefly `unavailable`; to a
+  sensor over `off` that is the end of one interval and the start of
+  another, and the downtime belongs to neither. Here `unavailable` carries
+  the previous state forward, so the outage stays one outage.
+- **More states.** Each state × measure × window is another sensor to
+  configure, with the same window templates to keep right; here every state
+  of the entity is recorded from one entry, including one it starts
+  reporting next year.
+- **What is stored.** A sensor's statistics are samples of its value, taken
+  as the recorder takes them; compiled statistics are the transitions
+  themselves, so every hour's durations add up to the hour.
 
-### Things this component does that `history_stats` cannot
+`history_stats` was built to show a live figure, and does; its long-term
+statistics are what the recorder makes of any sensor. This component
+starts from the statistics, and ensures those are accurately recorded over
+time.
 
-**Every state of an enum, from one line.** A heat pump's `hvac_action` has
+### What the foundation gives
+
+**High performance.** The statistics are precompiled, so a reading is
+arithmetic on a handful of rows: the sum at the window's last edge minus the
+sum at its first. The recorder's raw states are read only for what is not
+compiled yet — the hour in progress — and for a rolling or custom window,
+the hour an edge falls in: two hours of state changes at most, for a window
+of a day or a year alike. `history_stats` reads the whole window's state
+changes on every refresh, so a year-long window fetches a year of raw data
+every minute.
+
+**Long-term correctness.** Over a window whose hours the recorder still
+holds, both read the same state rows: no difference. Past the recorder's
+retention window `history_stats` is missing data - and the calculations
+become incorrect. Here the historical hours are already compiled, so
+long-term calculations stay correct. For sub-hour accuracy covering purged
+data (e.g. Last 365 days, with 7 day recorder retention) - we estimate the
+first partial hour by pro-rating that hour's statistics: see `estimated`.
+
+
+**Enables short recorder history (`purge_keep_days`).** Statistics are never
+purged. This component stores its key data in long-term statistics, so the
+recorder can be set to purge after a few days, with no impact to its graphs
+or sensors (save sub-hour pro-rating). `history_stats` requires a long recorder storage to function
+over long windows.
+
+**Every state from a single config.** A heat pump's `hvac_action` has
 `heating`, `cooling`, `idle`, `defrosting` and whatever next year's firmware
 adds. One entry here records all of them, duration and count, and a state
 that appears later gets its statistics the first hour it is seen.
 `history_stats` matches one set of states per sensor and merges the set into
 one figure, so *time in each of N states* is N sensors, counts are N more,
-and a new state is a new sensor you have to know to create.
+and a new state is two more to be manually added.
 
-**Survives `purge_keep_days`.** Statistics are never purged. A
-`history_stats` window that reaches past the recorder's retention returns
-a smaller number, silently: `0` hours over a range that was never recorded
-looks exactly like `0` hours in the state. Once this component has compiled
-the history, retention can be shortened without losing the series.
 
 **Hours that sum to the day.** Every state's duration is written for every
-hour, so a stacked bar of all of an entity's states is 24 h tall, and
-`mean` and `max` over a day are the average and the busiest hour — with quiet
-hours counted as quiet, not skipped.
+hour, so a stacked bar of all of an entity's states is always 24 h tall, and
+`mean` and `max` over a day are the average and the busiest hour — with
+quiet hours counted as quiet, not skipped.
 
-### Things `history_stats` does that this component cannot
+**Transitions counted.** `history_stats` counts the intervals in which a
+state was present within its window, not the transitions into it. This
+component counts transitions, so a light turned on once and left on all day
+is one transition in the hour it happened and one for the day, and the day
+is the sum of its hours. Summed into long-term statistics, a `history_stats`
+count depends on the window it was configured with: the same single
+switch-on is 1 with a daily window and 24 with an hourly one, since the
+light is present in every hour. Counting transitions gives meaningful
+long-term statistics.
 
-**A window to the second.** `history_stats` reads the recorder's raw
-states, so a window can start and end at any second and is exact within
-it for as long as the recorder keeps those states. A period sensor here
-takes the same `start`/`end`/`duration` templates, and a rolling window
-of the fixed lengths, but the hours are the statistics': a part hour is
-exact only while the recorder still holds it, and estimated after.
+**State masking.** This component enables arbitrary masking/combining of
+states - so if it's known that e.g. `unavailable` means `off`, it can be
+recorded that way.
 
-Its `ratio` type is not on that list. Hours per hour is already a fraction:
-the `mean` of a duration statistic over any period *is* the share of that
-period spent in the state - a `mean` of `0.4` is 40 % - and it is what the last
-chart under *Charts* draws.
+### What stays with `history_stats`
+
+**Matching a numeric value.** `history_stats` can count the time a sensor
+read `21.5`; this component only records entities whose state is a label
+(discrete values).
+
+**No compile step.** A `history_stats` sensor reads at creation. Here the
+first number waits for the first compile — a minute or two for a new entry,
+while its history is read — and a chart fills in an hour at a time.
 
 ### Side by side
 
 | | `history_stats` | `discrete_statistics` |
 |---|---|---|
-| Produces | one sensor: a value for the current window | per-state duration and count statistics, per hour; period sensors over them |
-| Freshness | on change, at least every minute | statistics after each hour closes; a period sensor on change and every minute |
-| Resolution | seconds, within the window | hourly buckets |
+| Produces | one sensor: a value for the current window | per-state, per-hour duration and count statistics; period sensors on top |
+| Freshness | on change, at least every minute | statistics after each hour closes; period sensors on change and every minute |
+| Resolution | seconds, within the window | the same, while the recorder holds the window's hours; hourly on the charts |
 | Reach into the past | as far as the recorder's retention | whole retained history on first run, kept forever after |
 | Backfill | none — begins when the sensor is created | first run, and `recompute` for any range with history |
-| After purge | window silently shrinks toward `0` | statistics unaffected |
+| After purge | the window shrinks with the retained history | statistics unaffected; an edge inside a purged hour is estimated |
 | States per entity | one set per sensor, merged into one number | every state, automatically |
-| A new state | a new sensor, when you notice | recorded from its first hour |
+| A new state | a new sensor | recorded from its first hour |
 | Count means | intervals in the window; a state active at the start counts | transitions into the state, in the hour they happen |
-| `unavailable` / `unknown` | not in the list, so they break the interval | carry the previous state forward; configurable |
+| `unavailable` / `unknown` | not in the list, so they break the interval | recorded or carry the previous state forward; configurable |
 | State mapping | none | `states:` map, `default`, `blank` |
 | Window | any template; two of `start`/`end`/`duration` | calendar periods; the last hour, 24 h, 7, 30 or 365 days; or two of `start`/`end`/`duration` templates |
 | Share of time | `ratio` % | `share` sensor, or the `mean` of a duration: hours per hour is a fraction |
 | Debounce | `min_state_duration` | `ignore_short` with `min_duration`, per state or as the default |
 | Usable in automations | yes, it is a sensor | yes, a period sensor |
 | Configuration | UI with live preview, or YAML; one sensor per state × metric × window | UI or YAML; one entry per entity, sensors added to it |
-| Long-term statistics | of the sensor's own value (`measurement`), or `total_increasing` with reset detection | are the product |
+| Long-term statistics | of the sensor's own value: `measurement`, or `total_increasing` with the reset inferred | are the product |
 
-Use `history_stats` for a window only a template can say; this component
-for the history, the chart, and the numbers over named periods that a
-purge cannot shrink.
+Both do the job they were built for. `history_stats` is built in and
+needs nothing compiled: a live figure the moment its YAML loads, over an
+entity whose history the recorder keeps, or a numeric value. This
+component is for the series — every state, every hour, kept past the
+purge horizon — with the same numbers as sensors over it.
 
 ## Limitations
 
-- Hourly buckets only. The external statistics API writes only to the
-  hourly table.
-- An in-progress state change is not charted until its hour closes; a
-  period sensor with the current hour included shows it.
-- A state committed later than the trailing window needs a manual
-  `recompute`.
-- The stock statistics-graph card names its statistics explicitly, so a
-  newly appearing state must be added to it by hand; the integration's own
-  card draws it as soon as it has statistics.
-- Hours the component was not running for, beyond the recorder's
-  `purge_keep_days`, are recorded only when its own last row can vouch for
-  the state; otherwise they stay empty (see *Gaps*).
+- The statistics are hourly: the external statistics API writes only to
+  the hourly table, so a chart's finest bucket is an hour. A period sensor
+  reads the recorder for the hours not yet compiled and for a window edge
+  inside an hour it still holds, so a number is exact to the state change
+  and, with the current hour included, current to it; only the charts are
+  hourly, and an hour reaches them once it closes.
+- Each hourly run recompiles the trailing three hours, so a state the
+  recorder commits within three hours of when it happened is picked up. One
+  committed later than that needs a manual `recompute`. That takes a state
+  committed after states that happened later than it, which the recorder's
+  own queue makes close to impossible.
+- If the component is disabled, or Home Assistant is down, for longer than
+  the recorder's `purge_keep_days`, the hours the recorder has purged by the
+  time it runs again cannot be compiled and leave a hole in the statistics
+  (see *Gaps*) — unless the entity did not change at all across them, which
+  its own last row can vouch for.
