@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from homeassistant.components.recorder import get_instance
+from homeassistant.components.recorder.models import StatisticMeanType
 from homeassistant.components.recorder.statistics import (
     async_add_external_statistics,
     get_metadata,
@@ -2189,3 +2190,46 @@ async def test_ignore_short_as_the_default_debounces_end_to_end(recorder, freeze
     assert await read_sums(hass, COUNT_ON, start, end) == [1]
     assert await read_sums(hass, COUNT_OFF, start, end) == [1]
     assert await read_sums(hass, DURATION_ON, start, end) == pytest.approx([600 / 3600])
+
+
+async def test_dense_rows_already_written_are_carried_across(recorder, freezer):
+    """A database compiled before sparse rows keeps working.
+
+    The dense rows stand, so they are rewritten wherever a window covers
+    them; nothing is deleted; the metadata loses its mean on the next
+    compile.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    await _seed_two_states(hass, freezer, start)
+
+    # Rows as the old compiler wrote them: every hour, with a mean.
+    dense = {**metadata_for(METRIC_DURATION, DURATION_ON, "Grid Status: on (h)")}
+    dense.update(has_mean=True, mean_type=StatisticMeanType.ARITHMETIC)
+    async_add_external_statistics(
+        hass,
+        dense,
+        [
+            # Hours 1-3 carry a wrong sum, so the rewrite is observable.
+            {
+                "start": start + timedelta(hours=h),
+                "sum": 1.0 if h == 0 else 0.9,
+                "mean": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+            }
+            for h in range(4)
+        ],
+    )
+    await async_wait_recording_done(hass)
+
+    freezer.move_to(start + timedelta(hours=6))
+    await Compiler(hass).async_compile(cfg(), start.timestamp())
+
+    on = await read_rows(hass, DURATION_ON, start, start + timedelta(hours=6))
+    # Hours 0-3 stood and are rewritten; hours 4-5 never held a row.
+    assert on == [(start.timestamp() + h * HOUR, 1.0) for h in range(4)]
+    metadata = await get_instance(hass).async_add_executor_job(
+        ft.partial(get_metadata, hass, statistic_ids={DURATION_ON})
+    )
+    assert metadata[DURATION_ON][1]["mean_type"] is StatisticMeanType.NONE
