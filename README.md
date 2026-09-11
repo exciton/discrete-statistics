@@ -908,14 +908,14 @@ time.
 
 ### What the foundation gives
 
-**As exact as `history_stats`, and an answer after it.** Over a window
-whose hours the recorder still holds, both read the same state rows: the
-compiled hours from the compile of those rows, a window edge inside an
-hour from the compiler's own reading of that hour cut at the edge, the
-hours since the last compile from the recorder directly — to the
-microsecond. Past the recorder's retention `history_stats` has no rows and
-its window shrinks; here the hours are already compiled, and only an edge
-inside a purged hour is estimated from that hour's total, which the
+**The same number while the recorder holds the hours, and still a number
+after.** Over a window whose hours the recorder still holds, both read the
+same state rows — the compiled hours from the compile of those rows, an
+edge inside an hour from the compiler's own reading of that hour cut at
+the edge, the hours since the last compile from the recorder directly — to
+the microsecond. Past the recorder's retention `history_stats` has no rows
+and its window shrinks; here the hours are already compiled, and only an
+edge inside a purged hour is estimated from that hour's total, which the
 `estimated` attribute says.
 
 **Every state of an enum, from one line.** A heat pump's `hvac_action` has
