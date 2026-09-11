@@ -1,8 +1,8 @@
 """Cut a statistic's cumulative sums into per-period buckets.
 
-The sums are cumulative and dense, so the change over a bucket is the
-difference between the rows at its two edges - thirteen rows for a year of
-months, not eight thousand hourly ones reduced in Python. This module is
+The sums are cumulative, so the change over a bucket is the difference
+between the rows at its two edges - thirteen rows for a year of months,
+not eight thousand hourly ones reduced in Python. This module is
 the arithmetic; `websocket` fetches the rows.
 
 Every edge resolves to the newest row before it, whose sum is the sum at

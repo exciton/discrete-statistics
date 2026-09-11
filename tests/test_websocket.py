@@ -13,7 +13,11 @@ from pytest_homeassistant_custom_component.components.recorder.common import (
 )
 from sqlalchemy import event as sqlalchemy_event
 
-from custom_components.discrete_statistics.const import DOMAIN, METRIC_DURATION
+from custom_components.discrete_statistics.const import (
+    DOMAIN,
+    METRIC_COUNT,
+    METRIC_DURATION,
+)
 from custom_components.discrete_statistics.payload import metadata_for
 
 ENTITY = "binary_sensor.grid_status"
@@ -21,6 +25,8 @@ ON = "discrete_statistics:binary_sensor_grid_status_on_duration"
 OFF = "discrete_statistics:binary_sensor_grid_status_off_duration"
 OTHER = "discrete_statistics:binary_sensor_porch_light_on_duration"
 OTHER_OFF = "discrete_statistics:binary_sensor_porch_light_off_duration"
+ON_COUNT = "discrete_statistics:binary_sensor_grid_status_on_count"
+OFF_COUNT = "discrete_statistics:binary_sensor_grid_status_off_count"
 CONFIG = {DOMAIN: [{"entity_id": ENTITY, "name": "Grid Status"}]}
 TZ = ZoneInfo("Australia/Sydney")
 
@@ -54,13 +60,17 @@ def ms(when: datetime) -> float:
     return when.timestamp() * 1000
 
 
-def seed(hass, statistic_id: str, start: datetime, sums: list[float | None]) -> None:
+def seed(
+    hass,
+    statistic_id: str,
+    start: datetime,
+    sums: list[float | None],
+    metric: str = METRIC_DURATION,
+) -> None:
     """Write one row per hour from start; None leaves that hour a hole."""
     async_add_external_statistics(
         hass,
-        metadata_for(
-            METRIC_DURATION, statistic_id, f"Grid Status: On ({METRIC_DURATION})"
-        ),
+        metadata_for(metric, statistic_id, f"Grid Status: On ({metric})"),
         [
             {"start": start + timedelta(hours=i), "sum": value}
             for i, value in enumerate(sums)
@@ -239,11 +249,14 @@ async def test_hours_are_the_rows_themselves(hass, client):
     }
 
 
-async def test_an_unknown_statistic_is_absent(hass, client):
+async def test_an_unknown_statistic_is_absent(hass, client, statements):
+    statements.clear()
     response = await ask(client, [ON], local(2026, 3, 2), local(2026, 3, 3))
 
     assert response["success"]
     assert response["result"] == {}
+    # Nothing was asked for that we hold, so no row is read at all.
+    assert statements == []
 
 
 async def test_bad_times_are_refused(hass, client):
@@ -355,9 +368,10 @@ async def test_buckets_match_the_recorder(hass, client, zone, span):
         mine, stock_ = inside(ours["result"]), inside(theirs)
         for statistic_id in (ON, OFF):
             by_start = {b["start"]: b for b in mine[statistic_id]}
-            assert [by_start[b["start"]] for b in stock_[statistic_id]] == stock_[
-                statistic_id
-            ], (period, statistic_id)
+            for theirs_ in stock_[statistic_id]:
+                mine_ = by_start.get(theirs_["start"])
+                assert mine_ is not None, (period, statistic_id, theirs_["start"])
+                assert mine_ == theirs_, (period, statistic_id, theirs_["start"])
             extra = [
                 b
                 for b in mine[statistic_id]
@@ -484,3 +498,26 @@ async def test_two_entities_are_each_judged_on_their_own_rows(hass, client):
     # OFF's entity was compiled both months, OTHER_OFF's only in January.
     assert [b["change"] for b in response["result"][OFF]] == [0.0, 0.0]
     assert [b["start"] for b in response["result"][OTHER_OFF]] == [ms(jan)]
+
+
+async def test_an_entity_with_no_duration_statistic_is_judged_on_all_it_was_asked(
+    hass, client
+):
+    # Both metrics of a state can be deleted, leaving counts alone; the
+    # entity is then judged on every count asked for, not the first.
+    await hass.config.async_set_time_zone("UTC")
+    jan, feb, mar = utc(2026, 1, 1), utc(2026, 2, 1), utc(2026, 3, 1)
+    seed(hass, ON_COUNT, jan + timedelta(days=5), [1.0], METRIC_COUNT)
+    seed(hass, OFF_COUNT, feb + timedelta(days=5), [1.0], METRIC_COUNT)
+    await async_wait_recording_done(hass)
+
+    response = await ask(client, [ON_COUNT, OFF_COUNT], jan, mar, "month")
+
+    assert response["result"][ON_COUNT] == [
+        {"start": ms(jan), "end": ms(feb), "change": 1.0},
+        {"start": ms(feb), "end": ms(mar), "change": 0.0},
+    ]
+    assert response["result"][OFF_COUNT] == [
+        {"start": ms(jan), "end": ms(feb), "change": 0.0},
+        {"start": ms(feb), "end": ms(mar), "change": 1.0},
+    ]

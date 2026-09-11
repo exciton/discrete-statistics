@@ -64,7 +64,8 @@ class _ChunkState(NamedTuple):
 
     `existing` is every statistic the entity has, including any this chunk
     created - which the recorder cannot report yet, and which the next chunk
-    needs in order to stay dense.
+    needs to relabel every statistic and to know which standing rows it
+    must rewrite.
 
     `carried` is the state in effect at the chunk's end, which the next
     chunk opens in. It is also simply more accurate than any query: the
@@ -170,8 +171,8 @@ class Compiler:
         # query, but this read happens before _async_watermark's round-trips
         # and only the later one in async_compile reliably reflects a
         # statistic deleted moments earlier. Merging them makes the deletion
-        # tests flaky one run in three, and a stale view leaves statistics
-        # sparse, which cannot be repaired.
+        # tests flaky one run in three, and a stale view leaves a statistic
+        # unrelabelled and its standing rows unrewritten.
         return await self.async_compile(cfg, start)
 
     async def async_compile(
@@ -226,8 +227,9 @@ class Compiler:
             # async_add_external_statistics only enqueues, and the standing
             # rows and the metadata are read live. In `finally` because a chunk
             # that raises leaves earlier chunks' writes queued: the next
-            # compile would then see half of them, leave the rest sparse, and
-            # the window after that would restart those at zero.
+            # compile would then see half of them, leave the rest
+            # unrewritten, and the window after that would restart those at
+            # zero.
             await get_instance(self._hass).async_block_till_done()
 
         if compiled:

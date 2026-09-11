@@ -142,20 +142,22 @@ def _buckets(
         instance = get_instance(hass)
         ours = get_metadata_with_session(instance, session, statistic_source=DOMAIN)
         requested = {sid for sid in statistic_ids if sid in ours}
+        if not requested:
+            return {}
+        durations: dict[str, set[str]] = {}
+        for sid in ours:
+            parts = parse(sid)
+            if parts is not None and parts[2] == METRIC_DURATION:
+                durations.setdefault(parts[0], set()).add(sid)
         judges: dict[str, set[str]] = {}
         for statistic_id in requested:
             family = _family(statistic_id)
-            judges.setdefault(family, set()).update(
-                sid
-                for sid in ours
-                if _family(sid) == family
-                and (parts := parse(sid)) is not None
-                and parts[2] == METRIC_DURATION
-            )
-        # An entity with no duration statistic left is judged on what was asked.
-        for statistic_id in requested:
-            family = _family(statistic_id)
-            judges[family] = judges[family] or {statistic_id}
+            judges.setdefault(family, set()).update(durations.get(family, ()))
+        # An entity with no duration statistic left is judged on what was
+        # asked of it: every requested ID of that entity, not just one.
+        for family, judged in judges.items():
+            if not judged:
+                judges[family] = {sid for sid in requested if _family(sid) == family}
         wanted = requested.union(*judges.values())
         ids = {sid: ours[sid][0] for sid in wanted}
 
