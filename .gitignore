@@ -14,3 +14,6 @@ script/verify
 
 # Local working notes: references specific installation detail
 /TODO.md
+
+# Local-only: database backups and the rows extracted from them
+/backups/
