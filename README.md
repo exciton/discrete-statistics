@@ -866,17 +866,18 @@ discrete_statistics:
 ```
 
 ```yaml
-type: statistics-graph
+type: custom:discrete-statistics-card
+entity: binary_sensor.grid_status
 period: day
 days_to_show: 365
-stat_types:
-  - change
-entities:
-  - discrete_statistics:binary_sensor_grid_status_off_duration
-  - discrete_statistics:binary_sensor_grid_status_off_count
+metric: count
+states:
+  - "off"
 ```
 
-The two cards look alike. The first one is wrong in ways that are hard to
+and the same card with `metric: duration` for the hours off-grid.
+
+The charts look alike. The first is wrong in ways that are hard to
 see:
 
 - **It starts today.** The sensors have no value before they exist, so the
@@ -889,10 +890,10 @@ see:
   or twice therefore depends on the day before: after a day with one outage
   the count reads `1` on both sides of midnight, no drop, no reset, counted
   once; after a day with two it drops from `2` to `1`, a reset, and the
-  outage is counted again. The second card credits it to the hour it began.
+  outage is counted again. The second chart credits it to the hour it began.
 - **A restart during the outage splits it.** `unavailable` is not `off`, so
   the interval closes and a new one opens, the count goes up, and the
-  downtime is attributed to nothing. The second card carries `off` across
+  downtime is attributed to nothing. The second chart carries `off` across
   it.
 - **Three more states means six more sensors**, each with the same window
   templates to keep right, and a state the entity has not shown yet has no
