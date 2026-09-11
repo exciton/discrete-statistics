@@ -925,6 +925,13 @@ long-term calculations stay correct. For sub-hour accuracy covering purged
 data (e.g. Last 365 days, with 7 day recorder retention) - we estimate the
 first partial hour by pro-rating that hour's statistics: see `estimated`.
 
+
+**Enables short recorder history (`purge_keep_days`).** Statistics are never
+purged. This component stores its key data in long-term statistics, so the
+recorder can be set to purge after a few days, with no impact to its graphs
+or sensors (save sub-hour pro-rating). `history_stats` requires a long recorder storage to function
+over long windows.
+
 **Every state from a single config.** A heat pump's `hvac_action` has
 `heating`, `cooling`, `idle`, `defrosting` and whatever next year's firmware
 adds. One entry here records all of them, duration and count, and a state
@@ -933,11 +940,6 @@ that appears later gets its statistics the first hour it is seen.
 one figure, so *time in each of N states* is N sensors, counts are N more,
 and a new state is two more to be manually added.
 
-**Enables short recorder history (`purge_keep_days`).** Statistics are never
-purged. This component stores its key data in long-term statistics, so the
-recorder can be set to purge after a few days, with no impact to its graphs
-or sensors. `history_stats` requires a long recorder storage to function
-over long windows.
 
 **Hours that sum to the day.** Every state's duration is written for every
 hour, so a stacked bar of all of an entity's states is always 24 h tall, and
@@ -972,8 +974,8 @@ while its history is read — and a chart fills in an hour at a time.
 
 | | `history_stats` | `discrete_statistics` |
 |---|---|---|
-| Produces | one sensor: a value for the current window | per-state duration and count statistics, per hour; period sensors over them |
-| Freshness | on change, at least every minute | statistics after each hour closes; a period sensor on change and every minute |
+| Produces | one sensor: a value for the current window | per-state, per-hour duration and count statistics; period sensors on top |
+| Freshness | on change, at least every minute | statistics after each hour closes; period sensors on change and every minute |
 | Resolution | seconds, within the window | the same, while the recorder holds the window's hours; hourly on the charts |
 | Reach into the past | as far as the recorder's retention | whole retained history on first run, kept forever after |
 | Backfill | none — begins when the sensor is created | first run, and `recompute` for any range with history |
@@ -981,7 +983,7 @@ while its history is read — and a chart fills in an hour at a time.
 | States per entity | one set per sensor, merged into one number | every state, automatically |
 | A new state | a new sensor | recorded from its first hour |
 | Count means | intervals in the window; a state active at the start counts | transitions into the state, in the hour they happen |
-| `unavailable` / `unknown` | not in the list, so they break the interval | carry the previous state forward; configurable |
+| `unavailable` / `unknown` | not in the list, so they break the interval | recorded or carry the previous state forward; configurable |
 | State mapping | none | `states:` map, `default`, `blank` |
 | Window | any template; two of `start`/`end`/`duration` | calendar periods; the last hour, 24 h, 7, 30 or 365 days; or two of `start`/`end`/`duration` templates |
 | Share of time | `ratio` % | `share` sensor, or the `mean` of a duration: hours per hour is a fraction |
@@ -990,11 +992,11 @@ while its history is read — and a chart fills in an hour at a time.
 | Configuration | UI with live preview, or YAML; one sensor per state × metric × window | UI or YAML; one entry per entity, sensors added to it |
 | Long-term statistics | of the sensor's own value: `measurement`, or `total_increasing` with the reset inferred | are the product |
 
-Both do the job they were built for. `history_stats` is the lighter tool
-for a live figure over an entity whose history the recorder keeps, or a
-numeric value. This component is for the series — every state, every
-hour, kept past the purge horizon — with the same numbers as sensors over
-it.
+Both do the job they were built for. `history_stats` is built in and
+needs nothing compiled: a live figure the moment its YAML loads, over an
+entity whose history the recorder keeps, or a numeric value. This
+component is for the series — every state, every hour, kept past the
+purge horizon — with the same numbers as sensors over it.
 
 ## Limitations
 
