@@ -944,13 +944,15 @@ hour, so a stacked bar of all of an entity's states is always 24 h tall, and
 `mean` and `max` over a day are the average and the busiest hour — with
 quiet hours counted as quiet, not skipped.
 
-**Transitions counted.** `history_stats` counts existence of a state within
-a window, not actual transitions. This component strictly looks at state
-transitions, so a light turned on once for a whole day is 1 transition that
-hour, and 1 transition that day. `history_stats` counts 1 for _each_ hour
-it's on (even if it didn't turn on). It serves a different purpose, however
-strictly counting transitions is more useful when looking at long-term data.
-The maths always adds up the same.
+**Transitions counted.** `history_stats` counts the intervals in which a
+state was present within its window, not the transitions into it. This
+component counts transitions, so a light turned on once and left on all day
+is one transition in the hour it happened and one for the day, and the day
+is the sum of its hours. Summed into long-term statistics, a `history_stats`
+count depends on the window it was configured with: the same single
+switch-on is 1 with a daily window and 24 with an hourly one, since the
+light is present in every hour. Counting transitions gives meaningful
+long-term statistics.
 
 **State masking.** This component enables arbitrary masking/combining of
 states - so if it's known that e.g. `unavailable` means `off`, it can be
