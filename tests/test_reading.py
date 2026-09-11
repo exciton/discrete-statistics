@@ -43,7 +43,6 @@ SUMS = {
     T0 + 2 * HOUR: {ON_D: 1.0, ON_C: 1.0, OFF_D: 1.0, OFF_C: 1.0},
     W_END: {ON_D: 1.5, ON_C: 2.0, OFF_D: 1.5, OFF_C: 1.0},
 }
-# The first hour's own timeline, as the compiler would read it.
 HOUR_0 = Timeline(T0, "off", [(T0 + 1800, "on")])
 # Then on from the watermark, off ten minutes later.
 TAIL = Timeline(W_END, "on", [(W_END + 600, "off")])
@@ -284,8 +283,7 @@ def test_a_pro_rated_part_hour_scales_the_hours_change():
 
 @pytest.mark.parametrize(
     ("start", "count"),
-    # One change in the hour: a whole one when at least half the hour is
-    # inside the window, none otherwise.
+    # Three quarters, half and a quarter of the hour inside the window.
     [(T0 + 900, 1), (T0 + 1800, 1), (T0 + 2700, 0)],
 )
 def test_a_pro_rated_count_is_rounded_half_up(start, count):

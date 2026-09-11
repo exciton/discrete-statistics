@@ -555,9 +555,8 @@ def _sensor_schema(
                     translation_key=CONF_PERIOD,
                 )
             ),
-            # The custom period's window, folded until something in it is
-            # set: a form is one fixed schema, so the fields cannot appear
-            # on the dropdown's choice, but they can stay out of the way.
+            # A form is one fixed schema, so the window cannot appear only
+            # on the dropdown's custom choice; it is folded away instead.
             vol.Optional(CONF_CUSTOM): section(
                 _custom_schema(), {"collapsed": not open_custom}
             ),
@@ -572,10 +571,9 @@ def _custom_window(
 ) -> tuple[dict[str, Any], dict[str, str]]:
     """The custom window's data from the section, and the error keeping the form open.
 
-    Two of start, end and duration, or a start alone; each template must
-    render, the same way the coordinator renders it, and the two edges
-    must be the right way round. Under any other period the section must
-    be empty, so a stale window cannot sit unread behind a calendar choice.
+    Templates are rendered the same way the coordinator renders them.
+    Under any other period the section must be empty, so a stale window
+    cannot sit unread behind a calendar choice.
     """
     start = (window.get(CONF_WINDOW_START) or "").strip() or None
     end = (window.get(CONF_WINDOW_END) or "").strip() or None

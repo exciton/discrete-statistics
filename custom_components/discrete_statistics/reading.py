@@ -1,14 +1,12 @@
 """One period sensor's value, from the sums at hour edges and a live tail.
 
 Pure: the coordinator fetches the sums, the part hours and the tail, this
-module does the arithmetic. A window is read in pieces. Its whole compiled
-hours are read as the card reads a bucket - the sum at the first edge
-against the sum at the last. A part hour, where the window starts or ends
-inside an hour, is exact when the compiler's timeline for that hour is to
-hand, cut at the edge, and estimated from the hour's compiled change
-otherwise - time in proportion, a count rounded to whole changes. The
-hours after the watermark, not yet compiled, come from the compiler's
-read path as a `Timeline` tallied per state. The pieces never overlap.
+module does the arithmetic. A window is read in pieces that never
+overlap: its whole compiled hours as the card reads a bucket, the sum at
+the first edge against the sum at the last; a part hour - an edge inside
+an hour - exact from the compiler's timeline for that hour when it is to
+hand and estimated from the hour's compiled change otherwise; the hours
+after the watermark from a live `Timeline` tallied per state.
 """
 
 from __future__ import annotations
@@ -158,10 +156,8 @@ def _ceil_hour(timestamp: float) -> float:
 def pieces(start: float, end: float, watermark_end: float, now: float) -> Pieces:
     """Split [start, end) into what the statistics answer and what the tail does.
 
-    The statistics reach to the watermark end, the tail to now, and a
-    window to whichever of its end and now comes first. Inside the
-    statistics' reach, an edge that is not on the hour leaves a part hour
-    on its side of the boundary; both edges in one hour leave one.
+    Inside the statistics' reach, an edge that is not on the hour leaves a
+    part hour on its side of the boundary; both edges in one hour leave one.
     """
     until = min(end, now)
     if until <= start:
@@ -234,8 +230,8 @@ def prorate(
 ) -> PartialValue:
     """The hour's compiled change, scaled by the part of it inside the window.
 
-    Counts are rounded half up: one change in an hour is a whole change
-    when at least half the hour is inside the window, and none otherwise.
+    Counts round half up, so a lone change in the hour is counted when at
+    least half of it is inside the window.
     """
     fraction = partial.fraction
     return PartialValue(
@@ -258,11 +254,9 @@ def compute(
 ) -> Reading:
     """The sensor's value as of now.
 
-    The whole compiled hours come from the sums at their edges, each part
-    hour from `partial_at` - the coordinator's exact or estimated answer,
-    or None for an hour nobody can speak for - and the tail from the
-    timeline, for a live sensor. Rounded to what the display shows, so a
-    tick where nothing changed writes nothing to the recorder.
+    `partial_at` answers None for a part hour nobody can speak for.
+    Rounded to what the display shows, so a tick where nothing changed
+    writes nothing to the recorder.
     """
     start, end = _window(spec, frame, now, tz, window)
     period_end = None if end == math.inf else end

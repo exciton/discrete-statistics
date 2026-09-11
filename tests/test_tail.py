@@ -163,7 +163,7 @@ async def test_compile_signals_what_it_wrote(recorder, freezer):
     freezer.move_to(T0 + timedelta(hours=2))
     await compiler.async_compile(cfg(), T0.timestamp())
     await hass.async_block_till_done()
-    # The hours written: T0 and the one after it, up to the hour in progress.
+    # Up to the hour in progress, not into it.
     assert heard == [(T0.timestamp(), T0.timestamp() + 2 * HOUR)]
 
 

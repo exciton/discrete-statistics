@@ -177,9 +177,8 @@ class DiscreteStatisticsSensor(CoordinatorEntity[PeriodCoordinator], SensorEntit
         if reading is None:
             return {}
         assert self._spec is not None
-        # A rolling or custom window moves with the clock; its edges are
-        # shown to the minute so they move with the value, once a minute,
-        # rather than jittering with the seconds of each refresh.
+        # A moving window's edges are shown to the minute, so they change
+        # with the value rather than with each refresh's seconds.
         moving = is_rolling(self._spec.period) or is_custom(self._spec.period)
         return {
             "period_start": _iso(reading.period_start, moving),

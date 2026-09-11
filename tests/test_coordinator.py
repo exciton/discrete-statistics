@@ -273,14 +273,11 @@ async def test_a_compile_during_a_refresh_does_not_seed_the_new_cache(
         if not fired:
             fired.append(True)
             # `sums_at` runs in the executor and the signal is the loop's,
-            # so the read waits for the loop to have delivered it. The
-            # race under test is a compile landing after the frame is read
-            # and before the sums are written; a signal merely queued from
-            # here is delivered whenever the loop next looks, which under
-            # load is as easily after this refresh has written both edges
-            # - a different race, in which keeping the sum at an edge at
-            # or before the compiled range is right and one read is
-            # enough.
+            # so the read waits for it to have been delivered. The race
+            # under test is a compile landing after the frame is read and
+            # before the sums are written; a merely queued signal arrives
+            # whenever the loop next looks, which under load is as easily
+            # after both edges are written - a different race.
             delivered = threading.Event()
 
             def send() -> None:
@@ -458,9 +455,8 @@ async def test_a_statistic_that_comes_back_drops_every_cached_sum(recorder, free
     """A deleted statistic that recurs is rewritten from a base of zero.
 
     The compile's range says which edges it rewrote, not that a series
-    restarted, and a sum cached at an older edge outlives the statistic
-    itself - so the reading would be a new base against an old one. The
-    set of known statistics changing is the signal.
+    restarted, so a sum cached at an older edge would be read against a
+    new base. The set of known statistics changing is the signal.
     """
     hass = recorder
     coordinator = await compiled_entry(
@@ -563,10 +559,8 @@ async def test_one_sensor_failing_leaves_the_rest_of_the_entry_reading(
 ):
     """A window that explodes at refresh time is one sensor's problem.
 
-    A template can render to something no window arithmetic survives, and
-    only at refresh time - the value it reads has moved on since the
-    dialog saved it. Failing the refresh would take every sensor on the
-    entry down with it.
+    Only the refresh finds out: what a template reads has moved on since
+    the dialog saved it, and failing would take the whole entry down.
     """
     hass = recorder
     coordinator = await compiled_entry(
@@ -659,8 +653,8 @@ def test_render_datetime_takes_a_datetime_string_or_a_timestamp(hass):
         render_datetime(hass, "{{ 'soon' }}")
     with pytest.raises(ValueError):
         render_datetime(hass, "{{ nonsense( }}")
-    # A number is not a timestamp merely for being one: these reach hour
-    # arithmetic that raises out of the whole entry's refresh.
+    # A number is not a timestamp merely for being a number: each of these
+    # reaches hour arithmetic that raises out of the whole entry's refresh.
     for text in (
         "{{ 'inf' | float }}",
         "{{ 'nan' | float }}",

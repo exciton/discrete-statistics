@@ -1430,7 +1430,7 @@ async def test_the_period_dropdown_offers_rolling_and_custom_periods(recorder):
         "last_365_days",
         "custom",
     ]
-    # The section is there, folded, until something in it is set.
+    # Folded until something in it is set.
     assert _field(result, CONF_CUSTOM).options["collapsed"] is True
 
 
@@ -1507,7 +1507,7 @@ async def test_a_custom_window_that_does_not_hold_keeps_the_form_open(
     )
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": error}
-    # And the section comes back open, with what was typed.
+    # And the section comes back open unless nothing was typed in it.
     assert _field(result, CONF_CUSTOM).options["collapsed"] is (window == {})
     assert not entry.subentries
 
