@@ -120,8 +120,8 @@
                 "duration": "Duration"
               },
               "data_description": {
-                "start": "A template, for example {{ today_at('09:00') }} or {{ state_attr('sun.sun', 'next_rising') }}.",
-                "end": "A template, for example {{ now() }} or {{ today_at('17:30') }}.",
+                "start": "A template rendering to a date and time, such as today_at('09:00') or state_attr('sun.sun', 'next_rising'), inside the usual double braces.",
+                "end": "A template rendering to a date and time, such as now() or today_at('17:30'), inside the usual double braces.",
                 "duration": "How long the window is, counted from Start or back from End."
               }
             }
@@ -154,8 +154,8 @@
                 "duration": "Duration"
               },
               "data_description": {
-                "start": "A template, for example {{ today_at('09:00') }} or {{ state_attr('sun.sun', 'next_rising') }}.",
-                "end": "A template, for example {{ now() }} or {{ today_at('17:30') }}.",
+                "start": "A template rendering to a date and time, such as today_at('09:00') or state_attr('sun.sun', 'next_rising'), inside the usual double braces.",
+                "end": "A template rendering to a date and time, such as now() or today_at('17:30'), inside the usual double braces.",
                 "duration": "How long the window is, counted from Start or back from End."
               }
             }
