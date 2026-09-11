@@ -908,57 +908,63 @@ time.
 
 ### What the foundation gives
 
-**The same number while the recorder holds the hours, and still a number
-after.** Over a window whose hours the recorder still holds, both read the
-same state rows — the compiled hours from the compile of those rows, an
-edge inside an hour from the compiler's own reading of that hour cut at
-the edge, the hours since the last compile from the recorder directly — to
-the microsecond. Past the recorder's retention `history_stats` has no rows
-and its window shrinks; here the hours are already compiled, and only an
-edge inside a purged hour is estimated from that hour's total, which the
-`estimated` attribute says.
+**High performance.** The statistics are precompiled, so a reading is
+arithmetic on a handful of rows: the sum at the window's last edge minus the
+sum at its first. The recorder's raw states are read only for what is not
+compiled yet — the hour in progress — and for a rolling or custom window,
+the hour an edge falls in: two hours of state changes at most, for a window
+of a day or a year alike. `history_stats` reads the whole window's state
+changes on every refresh, so a year-long window fetches a year of raw data
+every minute.
 
-**A couple of hours of raw history, however long the window.** The
-statistics are precompiled, so a reading is arithmetic on a handful of
-rows: the sum at the window's first edge against the sum at its last. The
-recorder's raw states are read only for what is not compiled yet — the
-hour in progress — and for an edge inside an hour, one hour each: two or
-three hours of state changes at most, for a window of a day or a year
-alike, and the same again on every refresh. `history_stats` reads the
-whole window's state changes on every refresh, so a year-long window costs
-a year of rows a minute.
+**Long-term correctness.** Over a window whose hours the recorder still
+holds, both read the same state rows: no difference. Past the recorder's
+retention window `history_stats` is missing data - and the calculations
+become incorrect. Here the historical hours are already compiled, so
+long-term calculations stay correct. For sub-hour accuracy covering purged
+data (e.g. Last 365 days, with 7 day recorder retention) - we estimate the
+first partial hour by pro-rating that hour's statistics: see `estimated`.
 
-**Every state of an enum, from one line.** A heat pump's `hvac_action` has
+**Every state from a single config.** A heat pump's `hvac_action` has
 `heating`, `cooling`, `idle`, `defrosting` and whatever next year's firmware
 adds. One entry here records all of them, duration and count, and a state
 that appears later gets its statistics the first hour it is seen.
 `history_stats` matches one set of states per sensor and merges the set into
 one figure, so *time in each of N states* is N sensors, counts are N more,
-and a new state is one more.
+and a new state is two more to be manually added.
 
-**Survives `purge_keep_days`.** Statistics are never purged. A
-`history_stats` window that reaches past the recorder's retention covers
-only the part the recorder still holds, and `0` hours over a range with no
-rows reads the same as `0` hours in the state. Once this component has
-compiled the history, retention can be shortened without losing the series.
+**Enables short recorder history (`purge_keep_days`).** Statistics are never
+purged. This component stores its key data in long-term statistics, so the
+recorder can be set to purge after a few days, with no impact to its graphs
+or sensors. `history_stats` requires a long recorder storage to function
+over long windows.
 
 **Hours that sum to the day.** Every state's duration is written for every
-hour, so a stacked bar of all of an entity's states is 24 h tall, and
-`mean` and `max` over a day are the average and the busiest hour — with quiet
-hours counted as quiet, not skipped.
+hour, so a stacked bar of all of an entity's states is always 24 h tall, and
+`mean` and `max` over a day are the average and the busiest hour — with
+quiet hours counted as quiet, not skipped.
+
+**Transitions counted.** `history_stats` counts existence of a state within
+a window, not actual transitions. This component strictly looks at state
+transitions, so a light turned on once for a whole day is 1 transition that
+hour, and 1 transition that day. `history_stats` counts 1 for _each_ hour
+it's on (even if it didn't turn on). It serves a different purpose, however
+strictly counting transitions is more useful when looking at long-term data.
+The maths always adds up the same.
+
+**State masking.** This component enables arbitrary masking/combining of
+states - so if it's known that e.g. `unavailable` means `off`, it can be
+recorded that way.
 
 ### What stays with `history_stats`
 
 **Matching a numeric value.** `history_stats` can count the time a sensor
-read `21.5`; this component records entities whose state is a label.
+read `21.5`; this component only records entities whose state is a label
+(discrete values).
 
 **No compile step.** A `history_stats` sensor reads at creation. Here the
-first number waits for the first compile — a minute or two for a new
-entry, while its history is read — and a chart fills in an hour at a time.
-
-Its `ratio` type is not on that list: the `share` measure is the same
-figure, and the `mean` of a duration statistic over any period is the same
-share again — hours per hour is a fraction, and a `mean` of `0.4` is 40 %.
+first number waits for the first compile — a minute or two for a new entry,
+while its history is read — and a chart fills in an hour at a time.
 
 ### Side by side
 
