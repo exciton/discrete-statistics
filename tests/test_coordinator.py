@@ -522,6 +522,42 @@ async def test_sums_at_edges_a_later_plan_does_not_want_are_dropped(recorder, fr
     }
 
 
+async def test_hour_timelines_a_moved_window_no_longer_wants_are_dropped(
+    recorder, freezer
+):
+    hass = recorder
+    coordinator = await compiled_entry(
+        hass,
+        freezer,
+        [
+            custom(
+                "sensor.mid_hour",
+                "{{ '2026-01-01T01:30:00+00:00' }}",
+                duration=5400.0,
+            )
+        ],
+    )
+    await coordinator.async_refresh()
+    assert set(coordinator._hours) == {(T0 + timedelta(hours=1)).timestamp()}
+
+    # The subentry's start now points into a different hour; nothing will
+    # ask for the old hour's timeline again.
+    entry = coordinator.config_entry
+    subentry = entry.subentries["sensor.mid_hour"]
+    hass.config_entries.async_update_subentry(
+        entry,
+        subentry,
+        data={
+            **subentry.data,
+            "start": "{{ '2026-01-01T02:15:00+00:00' }}",
+            "duration": 1800.0,
+        },
+    )
+    await hass.async_block_till_done()
+    await coordinator.async_refresh()
+    assert set(coordinator._hours) == {(T0 + timedelta(hours=2)).timestamp()}
+
+
 async def test_one_sensor_failing_leaves_the_rest_of_the_entry_reading(
     recorder, freezer
 ):

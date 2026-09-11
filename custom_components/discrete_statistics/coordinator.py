@@ -339,10 +339,12 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
                 sums[(statistic_id, edge)] = at_edge.get(statistic_id, 0.0)
 
         partials: dict[Partial, PartialValue] = {}
+        used_hours: set[float] = set()
         for pieces in plans.values():
             if pieces is None:
                 continue
             for partial in pieces.partials:
+                used_hours.add(partial.hour)
                 if partial not in partials:
                     partials[partial] = await self._partial(
                         cfg, frame, sums, hours, partial
@@ -369,6 +371,10 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
 
         # Only the edges this refresh planned are worth keeping: a rolling
         # window leaves one behind every hour, and nothing else evicts them.
+        # The hour timelines behind the partials are pruned the same way:
+        # a custom template whose window moves every refresh would
+        # otherwise add one entry per refresh forever.
         if self._sums is sums:
             self._sums = {k: v for k, v in sums.items() if k[1] in edges}
+            self._hours = {h: t for h, t in hours.items() if h in used_hours}
         return readings
