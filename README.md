@@ -970,15 +970,21 @@ purge cannot shrink.
 
 ## Limitations
 
-- Hourly buckets only. The external statistics API writes only to the
-  hourly table.
-- An in-progress state change is not charted until its hour closes; a
-  period sensor with the current hour included shows it.
-- A state committed later than the trailing window needs a manual
-  `recompute`.
-- The stock statistics-graph card names its statistics explicitly, so a
-  newly appearing state must be added to it by hand; the integration's own
-  card draws it as soon as it has statistics.
-- Hours the component was not running for, beyond the recorder's
-  `purge_keep_days`, are recorded only when its own last row can vouch for
-  the state; otherwise they stay empty (see *Gaps*).
+- The statistics are hourly: the external statistics API writes only to
+  the hourly table, so a chart's finest bucket is an hour. A period sensor
+  reads the recorder for the hours not yet compiled and for a window edge
+  inside an hour it still holds, so a number is exact to the state change;
+  only the charts are hourly.
+- The statistics are written when an hour closes. A chart shows the hour in
+  progress once it is compiled; a period sensor with the current hour
+  included shows it as it happens.
+- Each hourly run recompiles the trailing three hours, so a state the
+  recorder commits within three hours of when it happened is picked up. One
+  committed later than that needs a manual `recompute`. That takes a state
+  committed after states that happened later than it, which the recorder's
+  own queue makes close to impossible.
+- If the component is disabled, or Home Assistant is down, for longer than
+  the recorder's `purge_keep_days`, the hours the recorder has purged by the
+  time it runs again cannot be compiled and leave a hole in the statistics
+  (see *Gaps*) — unless the entity did not change at all across them, which
+  its own last row can vouch for.
