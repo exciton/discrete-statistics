@@ -31,7 +31,7 @@ from .const import (
     METRIC_COUNT,
     METRIC_DURATION,
 )
-from .periods import bounds, is_custom
+from .periods import bounds, is_custom, is_rolling
 from .statistic_ids import parse, state_token
 
 if TYPE_CHECKING:
@@ -184,7 +184,15 @@ def _window(
         if window is None:
             raise ValueError("a custom period needs its rendered window")
         return window
-    start, end = bounds(spec.period, now, tz)
+    # A rolling window that leaves the current hour out is anchored on the
+    # watermark instead of now: exactly its length, ending at the last
+    # compiled hour, so it moves once an hour rather than every minute.
+    anchor = (
+        frame.watermark_end
+        if is_rolling(spec.period) and not spec.live and frame.watermark_end is not None
+        else now
+    )
+    start, end = bounds(spec.period, anchor, tz)
     return (frame.series_start if start is None else start), end
 
 

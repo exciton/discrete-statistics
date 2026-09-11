@@ -108,7 +108,7 @@
             "metric": "Time is in hours. Share is the time as a percentage of the period so far.",
             "period": "Periods start at midnight, on Monday, on the first of the month or the first of January, in this Home Assistant's time zone. The last hour, 24 hours or 7, 30 or 365 days end now. A window that starts or ends part-way through an hour is exact while the recorder still holds that hour, and estimated from the hour's total afterwards - time in proportion, a count rounded to whole changes.",
             "name": "Leave blank for a name made from the entity, the states and the period.",
-            "live": "Statistics are compiled hourly. With this on, the sensor follows the entity's changes since the last compiled hour as they happen; with it off, it updates once an hour."
+            "live": "Statistics are compiled hourly. With this on, the sensor follows the entity's changes since the last compiled hour as they happen; with it off, it updates once an hour. For a rolling period with this off, the window is the last hours already compiled, ending at the last compiled hour."
           },
           "sections": {
             "custom": {
@@ -142,7 +142,7 @@
             "metric": "Time is in hours. Share is the time as a percentage of the period so far.",
             "period": "Periods start at midnight, on Monday, on the first of the month or the first of January, in this Home Assistant's time zone. The last hour, 24 hours or 7, 30 or 365 days end now. A window that starts or ends part-way through an hour is exact while the recorder still holds that hour, and estimated from the hour's total afterwards - time in proportion, a count rounded to whole changes.",
             "name": "Leave blank for a name made from the entity, the states and the period.",
-            "live": "Statistics are compiled hourly. With this on, the sensor follows the entity's changes since the last compiled hour as they happen; with it off, it updates once an hour."
+            "live": "Statistics are compiled hourly. With this on, the sensor follows the entity's changes since the last compiled hour as they happen; with it off, it updates once an hour. For a rolling period with this off, the window is the last hours already compiled, ending at the last compiled hour."
           },
           "sections": {
             "custom": {

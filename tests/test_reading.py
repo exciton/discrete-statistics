@@ -368,6 +368,29 @@ def test_a_rolling_period_is_read_like_any_other():
     assert reading.period_end == NOW
 
 
+def test_a_rolling_period_not_live_is_anchored_on_the_watermark():
+    # The last compiled hour, whole: the window is its length and moves
+    # only when a compile does.
+    reading = compute(
+        cfg(),
+        spec(period="last_hour", live=False),
+        FRAME,
+        sum_at,
+        no_partial,
+        TAIL,
+        NOW,
+        UTC,
+    )
+    assert reading.value == 0.5
+    assert reading.period_start == T0 + 2 * HOUR
+    assert reading.period_end == W_END
+    assert reading.estimated is False
+    assert edges_of(plan(spec(period="last_hour", live=False), FRAME, NOW, UTC)) == {
+        T0 + 2 * HOUR,
+        W_END,
+    }
+
+
 def test_a_custom_period_needs_its_window():
     spec_, _ = custom(None)
     with pytest.raises(ValueError):

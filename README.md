@@ -601,7 +601,10 @@ for the entity and choose **Add sensor**:
   hours since the last compiled one and updating on every change and once
   a minute, exactly as the next compile will record them — a state that
   has to last a minimum duration is left out until it has. Off, the sensor
-  moves once an hour and is a pure function of the statistics.
+  moves once an hour and is a pure function of the statistics; a rolling
+  period is then the last hours already compiled — exactly its length,
+  ending at the last compiled hour and moving only when a compile does,
+  so it never includes an estimated end.
 
 ![The Add a period sensor dialog: a States picker with On chosen, the Measure and Period dropdowns, the Name box showing the composed name greyed out, and the Include the current hour switch](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/sensor-dialog.png)
 
@@ -618,8 +621,9 @@ from `purge_keep_days`. A calendar period in a time zone on the whole hour
 starts and ends on the hour and is never estimated; in a time zone on the
 half hour — Asia/Kolkata, Australia/Adelaide, America/St_Johns — its two
 edges fall at :30 UTC, and the half hours on either side are read like
-any other part hour. A rolling window moves with the clock, so its value
-and edges change every minute — that is what it is for.
+any other part hour. A rolling window that includes the current hour
+moves with the clock, so its value and edges change every minute — that
+is what it is for.
 
 The sensor belongs to the entry: its settings are edited from the entry's
 page and deleting it there removes the sensor. The entry itself still has

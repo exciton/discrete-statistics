@@ -41,6 +41,7 @@ ON_COUNT = "sensor.discrete_binary_sensor_grid_status_on_count_today"
 ON_SHARE = "sensor.discrete_binary_sensor_grid_status_on_share_today"
 ON_YESTERDAY = "sensor.discrete_binary_sensor_grid_status_on_duration_yesterday"
 ON_COUNT_LAST_HOUR = "sensor.discrete_binary_sensor_grid_status_on_count_last_hour"
+ON_LAST_HOUR = "sensor.discrete_binary_sensor_grid_status_on_duration_last_hour"
 
 
 @pytest.fixture(autouse=True)
@@ -469,6 +470,34 @@ async def test_a_rolling_sensor_slides_with_the_clock(recorder, freezer):
         == (T0 + timedelta(hours=3, minutes=20)).isoformat()
     )
     assert state.attributes["estimated"] is False
+
+
+async def test_a_rolling_sensor_that_is_not_live_moves_only_with_a_compile(
+    recorder, freezer
+):
+    hass = recorder
+    await seeded(
+        hass,
+        freezer,
+        [sensor("on last hour", ["on"], period="last_hour", live=False)],
+    )
+    # The last compiled hour, whole: on throughout the third hour.
+    state = hass.states.get(ON_LAST_HOUR)
+    assert state.state == "1.0"
+    assert state.attributes["period_start"] == (T0 + timedelta(hours=2)).isoformat()
+    assert state.attributes["period_end"] == (T0 + timedelta(hours=3)).isoformat()
+
+    # Twenty minutes on, with nothing compiled: the window has not moved,
+    # so the sensor writes nothing.
+    with no_hourly_compile():
+        freezer.move_to(T0 + timedelta(hours=3, minutes=20, seconds=30))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done(wait_background_tasks=True)
+    after = hass.states.get(ON_LAST_HOUR)
+    assert after.state == "1.0"
+    assert after.attributes["period_start"] == (T0 + timedelta(hours=2)).isoformat()
+    assert after.attributes["period_end"] == (T0 + timedelta(hours=3)).isoformat()
+    assert after.last_updated == state.last_updated
 
 
 async def test_a_part_hour_the_recorder_has_lost_is_estimated(recorder, freezer):

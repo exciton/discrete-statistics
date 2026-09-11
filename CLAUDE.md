@@ -124,7 +124,9 @@ compiler's own timeline of that hour (`async_tail` over the hour, cached
 per hour until a compile) is tallied and, when the tail opens, the answer
 is exact; an hour inside the retained range that no source can open is
 pro-rated like any other. Otherwise the hour's compiled change is
-pro-rated by the part inside and the reading is marked `estimated`. Custom
+pro-rated by the part inside and the reading is marked `estimated`. A
+rolling window with `live` off is anchored on the watermark end rather
+than now, so it is exactly its length and moves once an hour. Custom
 windows are rendered in the coordinator, on every refresh, through
 `render_datetime` — the same call the dialog validates with. The compile
 signal carries the range written, and the coordinator drops cached sums
