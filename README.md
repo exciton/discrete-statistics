@@ -464,6 +464,59 @@ With the stock card a state that appears later accumulates immediately
 but must be added to the card's `entities` list to be drawn; the card
 below draws it as soon as it has statistics.
 
+### Time at places
+
+A `person` or `device_tracker` entity's state is the zone it is in —
+`home`, `Work`, `Gym`, or `not_home` for anywhere else — so it is an enum
+entity like any other, and the same statistics answer "how long at the
+office this week" and "how many trips to the gym this year". Nothing to
+configure beyond the entity:
+
+```yaml
+discrete_statistics:
+  - entity_id: person.alice
+```
+
+Hours at each place per week, stacked, with the integration's card:
+
+```yaml
+type: custom:discrete-statistics-card
+title: Alice
+entity: person.alice
+chart_type: bar-stack
+period: week
+days_to_show: 90
+```
+
+The same with the stock card, naming the places to draw. The state is the
+zone's name, and the statistic ID holds it as a token — lower case, spaces
+and punctuation dropped — so a zone named *Work* is `work` and *Mum's
+House* is `mumshouse`:
+
+```yaml
+type: statistics-graph
+title: Alice
+chart_type: bar-stack
+period: week
+days_to_show: 90
+stat_types:
+  - change
+entities:
+  - discrete_statistics:person_alice_home_duration
+  - discrete_statistics:person_alice_work_duration
+  - discrete_statistics:person_alice_not_home_duration
+```
+
+Trips are the count statistic: `discrete_statistics:person_alice_gym_count`
+per month is how often the gym was visited, and a [period
+sensor](#period-sensors) over the `gym` state with the count measure and
+*This year* puts that number in a tile. A zone is a state from the moment
+its entity crosses the boundary, so a phone that reports its position
+every few minutes gives an arrival time accurate to that interval, and a
+short excursion out of a zone and back is a state change like any other —
+`min_duration` with `ignore_short` on `not_home` smooths those out.
+
+
 ## The card
 
 The integration ships its own card, so nothing needs adding under
