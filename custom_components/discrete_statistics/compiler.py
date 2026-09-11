@@ -507,9 +507,8 @@ class Compiler:
     async def _async_watermark(self, statistic_ids: Collection[str]) -> float | None:
         """Return the newest compiled hour for an entity, or None.
 
-        Takes the max across every one of the entity's statistics: density
-        is guaranteed only for statistics that existed when a window was
-        compiled, so any single ID can lag the others.
+        Takes the max across every one of the entity's statistics: the rows
+        are sparse, so any single ID can lag the others by any distance.
         """
         if not statistic_ids:
             return None
