@@ -973,11 +973,9 @@ purge cannot shrink.
 - The statistics are hourly: the external statistics API writes only to
   the hourly table, so a chart's finest bucket is an hour. A period sensor
   reads the recorder for the hours not yet compiled and for a window edge
-  inside an hour it still holds, so a number is exact to the state change;
-  only the charts are hourly.
-- The statistics are written when an hour closes. A chart shows the hour in
-  progress once it is compiled; a period sensor with the current hour
-  included shows it as it happens.
+  inside an hour it still holds, so a number is exact to the state change
+  and, with the current hour included, current to it; only the charts are
+  hourly, and an hour reaches them once it closes.
 - Each hourly run recompiles the trailing three hours, so a state the
   recorder commits within three hours of when it happened is picked up. One
   committed later than that needs a manual `recompute`. That takes a state
