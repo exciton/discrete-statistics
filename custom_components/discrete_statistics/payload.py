@@ -1,8 +1,8 @@
-"""Convert bucketed values into cumulative statistic payloads."""
+"""Convert bucketed values into cumulative statistic payloads, one row where something changed."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from datetime import datetime, timezone
 from typing import Any, NamedTuple
 
@@ -79,10 +79,11 @@ def readable_state(stored_name: str, token: str) -> str:
 def metadata_for(metric: str, statistic_id: str, name: str) -> dict[str, Any]:
     """Return StatisticMetaData for one statistic."""
     return {
-        # Both: the sum is what `stat_types: change` reads, the mean/min/max
-        # are what the day/week/month rollup averages.
-        "has_mean": True,
-        "mean_type": StatisticMeanType.ARITHMETIC,
+        # The sum is what `stat_types: change` reads. No mean: the recorder's
+        # reduction skips absent rows, so over sparse rows a mean would be
+        # over the hours the state occurred, never over the period.
+        "has_mean": False,
+        "mean_type": StatisticMeanType.NONE,
         "has_sum": True,
         "name": name,
         "source": DOMAIN,
@@ -122,15 +123,16 @@ def build_payloads(
     existing: Mapping[str, str] | None = None,
     display: str | None = None,
     translate: Callable[[str], str] | None = None,
+    standing: Mapping[str, Collection[float]] | None = None,
 ) -> dict[str, Payload]:
     """Return {statistic_id: (metadata, rows)} with cumulative sums.
 
-    Rows are dense over every statistic this entity ALREADY HAS, not merely
-    the states seen in this window: `existing` maps its statistic IDs to the
-    names the recorder holds, and each gets a row in every hour, carrying its
-    sum forward at a zero hourly value. A statistic left out of an hour loses
-    its cumulative base on the next window - the caller reads that base from
-    the preceding hour, finds nothing, and restarts from zero.
+    A row is written where the hour's value is non-zero, and wherever a
+    row already stands - a recompile that finds a state absent from an
+    hour it was written into must rewrite that row with the carried sum,
+    or its old sum stands ahead of every later one. The running sum
+    advances whether or not a row is written, so a statistic with nothing
+    to write returns no rows and its sum is unchanged.
     """
     existing = existing or {}
     # The caller resolves this: it is the entity's own name where there is
@@ -170,27 +172,20 @@ def build_payloads(
     payloads: dict[str, Payload] = {}
     for statistic_id, plan in sorted(planned.items()):
         index, scale = (0, 1.0 / HOUR) if plan.metric == METRIC_DURATION else (1, 1.0)
+        stands = standing.get(statistic_id, ()) if standing else ()
         running = base_sums.get(statistic_id, 0.0)
         rows: list[dict[str, Any]] = []
         for hour in hours:
             # Seconds to hours, converted once: a solid hour reads as 1.0.
             value = folded.get((plan.token, hour), (0.0, 0))[index] * scale
             running += value
-            rows.append(
-                {
-                    "start": datetime.fromtimestamp(hour, tz=timezone.utc),
-                    "sum": running,
-                    # An hour holds one value, so mean, min and max are all
-                    # of them it. They only become interesting after the
-                    # recorder reduces hours to a day: the average hourly
-                    # on-time, and the quietest and busiest hours.
-                    # `_reduce_statistics` reads the min and max columns
-                    # rather than deriving them, so all three are needed.
-                    "mean": value,
-                    "min": value,
-                    "max": value,
-                }
-            )
+            if value or hour in stands:
+                rows.append(
+                    {
+                        "start": datetime.fromtimestamp(hour, tz=timezone.utc),
+                        "sum": running,
+                    }
+                )
         payloads[statistic_id] = (
             metadata_for(plan.metric, statistic_id, plan.name),
             rows,
