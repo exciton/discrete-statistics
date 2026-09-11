@@ -801,28 +801,23 @@ idempotent and the next run catches up.
 ## Compared with `history_stats`
 
 Home Assistant's own [`history_stats`](https://www.home-assistant.io/integrations/history_stats/)
-answers a different question. It is a sensor whose value is *how much of a
-window* an entity spent in some states — the window being whatever its
-`start`/`end` templates render to right now — and it reads that from the
-recorder each time. This component writes the answer for every hour, once,
-into statistics that outlive the recorder. Each is the right tool for a
-specific job.
+answers the same questions — how long an entity spent in some states over
+a window, what share of the window that was, how often it entered them —
+and, over a window whose hours the recorder still holds, from the same
+rows, to the same result. The two approach it from opposite ends.
 
-The two are built the other way round from each other. `history_stats` is
-sensor first: the number is what it makes, and long-term statistics of it
-are optional, a `state_class` on the sensor for the recorder to sum. This
-component is statistics first: the hourly rows are the product, and a
+`history_stats` is sensor first. Its sensor is the product: on every
+refresh it reads the recorder's raw states for whatever window its
+templates render to now, and long-term statistics of that number are
+optional, a `state_class` on the sensor for the recorder to sum. This
+component is statistics first. The hourly rows are the product, compiled
+once from the raw states and kept past the recorder's retention, and a
 sensor over them is optional, a period sensor on the entry. That order is
 what lets the recorder's retention be short — a few days is enough, since
 the statistics are compiled from the history while it is still there — and
 what makes a long range cheap: a year is twelve rows a state, not a year of
-state changes read back.
-
-Since 0.4.0 the two answer the same questions — a number over a calendar
-period, a rolling window or a window templates describe, for one state or
-a set of them, as time, share or count — and, over a window whose hours the
-recorder still holds, from the same rows, to the same result. The
-difference is where the number lives between readings.
+state changes read back. The difference between the two is where the
+number lives between readings.
 
 ### The same chart, both ways
 
