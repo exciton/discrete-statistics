@@ -1,32 +1,37 @@
-"""One period sensor's value, from the sums at two edges and a live tail.
+"""One period sensor's value, from the sums at hour edges and a live tail.
 
-Pure: the coordinator fetches the sums and the tail, this module does the
-arithmetic. A period is read as the card reads a bucket - the sum at its
-start against the sum at its end - and the hours after the watermark, not
-yet compiled, come from the compiler's own read path as a `Timeline`
-tallied per state. The two never overlap: the statistics answer up to
-the watermark end, the tail from it.
+Pure: the coordinator fetches the sums, the part hours and the tail, this
+module does the arithmetic. A window is read in pieces that never
+overlap: its whole compiled hours as the card reads a bucket, the sum at
+the first edge against the sum at the last; a part hour - an edge inside
+an hour - exact from the compiler's timeline for that hour when it is to
+hand and estimated from the hour's compiled change otherwise; the hours
+after the watermark from a live `Timeline` tallied per state.
 """
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Mapping
 from datetime import tzinfo
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from homeassistant.util import slugify
 
-from .bucketer import tally
+from .bucketer import hour_start, tally
 from .config import CONF_STATES, EntityConfig
 from .const import (
     CONF_LIVE,
     CONF_METRIC,
     CONF_PERIOD,
+    CONF_WINDOW_DURATION,
+    CONF_WINDOW_END,
+    CONF_WINDOW_START,
     HOUR,
     METRIC_COUNT,
     METRIC_DURATION,
 )
-from .periods import bounds
+from .periods import bounds, is_custom, is_rolling
 from .statistic_ids import parse, state_token
 
 if TYPE_CHECKING:
@@ -36,7 +41,15 @@ if TYPE_CHECKING:
 # resolves to nothing under the entry's settings and none was ever
 # recorded, so there is no series to read and the tail would never
 # contribute.
-REASON_NOT_RECORDED = "not recorded by this entry's settings"
+REASON_NOT_RECORDED = "its states are not recorded by this entry's settings"
+
+
+class Custom(NamedTuple):
+    """A custom period's window as the subentry stores it: templates, seconds."""
+
+    start: str | None
+    end: str | None
+    duration: float | None
 
 
 class Spec(NamedTuple):
@@ -46,6 +59,7 @@ class Spec(NamedTuple):
     metric: str
     period: str
     live: bool
+    custom: Custom | None = None
 
 
 class Frame(NamedTuple):
@@ -54,6 +68,8 @@ class Frame(NamedTuple):
     existing: dict[str, str]
     watermark_end: float | None
     series_start: float | None
+    # The oldest retained state: a part hour after it can be read exactly.
+    earliest: float | None = None
 
 
 class Reading(NamedTuple):
@@ -61,14 +77,54 @@ class Reading(NamedTuple):
     period_start: float | None
     period_end: float | None
     reason: str | None
+    estimated: bool = False
+
+
+class Partial(NamedTuple):
+    """The part of an hour inside a window."""
+
+    hour: float
+    start: float
+    end: float
+
+    @property
+    def fraction(self) -> float:
+        return (self.end - self.start) / HOUR
+
+
+class PartialValue(NamedTuple):
+    """Seconds and changes per state token inside a part hour."""
+
+    seconds: dict[str, float]
+    counts: dict[str, int]
+    exact: bool
+
+
+class Pieces(NamedTuple):
+    """A window against the watermark: whole hours, part hours, the tail."""
+
+    compiled: tuple[float, float] | None
+    partials: tuple[Partial, ...]
+    tail: tuple[float, float] | None
 
 
 def spec_from(data: Mapping[str, Any]) -> Spec:
+    period = data.get(CONF_PERIOD, "this_month")
+    custom = (
+        Custom(
+            data.get(CONF_WINDOW_START) or None,
+            data.get(CONF_WINDOW_END) or None,
+            data.get(CONF_WINDOW_DURATION),
+        )
+        if is_custom(period)
+        else None
+    )
     return Spec(
         tuple(data.get(CONF_STATES) or ()),
         data.get(CONF_METRIC, METRIC_DURATION),
-        data.get(CONF_PERIOD, "this_month"),
+        period,
         data.get(CONF_LIVE, True),
+        custom,
     )
 
 
@@ -92,24 +148,105 @@ def _source_metric(spec: Spec) -> str:
     return METRIC_COUNT if spec.metric == METRIC_COUNT else METRIC_DURATION
 
 
-def _span(
-    spec: Spec, frame: Frame, now: float, tz: tzinfo
-) -> tuple[float | None, float, float | None]:
-    """(start, end, lts_end): the period, and where the compiled part of it ends."""
-    start, end = bounds(spec.period, now, tz)
-    if start is None:
-        start = frame.series_start
+def _ceil_hour(timestamp: float) -> float:
+    floor = hour_start(timestamp)
+    return floor if floor == timestamp else floor + HOUR
+
+
+def pieces(start: float, end: float, watermark_end: float, now: float) -> Pieces:
+    """Split [start, end) into what the statistics answer and what the tail does.
+
+    Inside the statistics' reach, an edge that is not on the hour leaves a
+    part hour on its side of the boundary; both edges in one hour leave one.
+    """
+    until = min(end, now)
+    if until <= start:
+        return Pieces(None, (), None)
+    if start >= watermark_end:
+        return Pieces(None, (), (start, until))
+    compiled_until = min(until, watermark_end)
+    first = _ceil_hour(start)
+    last = hour_start(compiled_until)
+    partials: list[Partial] = []
+    if start < first:
+        partials.append(Partial(hour_start(start), start, min(first, compiled_until)))
+    if last < compiled_until and last >= first:
+        partials.append(Partial(last, last, compiled_until))
+    compiled = (first, last) if last > first else None
+    tail = (max(start, watermark_end), until) if until > watermark_end else None
+    return Pieces(compiled, tuple(partials), tail)
+
+
+def _window(
+    spec: Spec, frame: Frame, now: float, tz: tzinfo, window: tuple[float, float] | None
+) -> tuple[float | None, float]:
+    if is_custom(spec.period):
+        if window is None:
+            raise ValueError("a custom period needs its rendered window")
+        return window
+    # A rolling window that leaves the current hour out is anchored on the
+    # watermark instead of now: exactly its length, ending at the last
+    # compiled hour, so it moves once an hour rather than every minute.
+    anchor = (
+        frame.watermark_end
+        if is_rolling(spec.period) and not spec.live and frame.watermark_end is not None
+        else now
+    )
+    start, end = bounds(spec.period, anchor, tz)
+    return (frame.series_start if start is None else start), end
+
+
+def plan(
+    spec: Spec,
+    frame: Frame,
+    now: float,
+    tz: tzinfo,
+    window: tuple[float, float] | None = None,
+) -> Pieces | None:
+    """The pieces `compute` will read, or None when nothing is compiled yet."""
+    start, end = _window(spec, frame, now, tz, window)
     if start is None or frame.watermark_end is None:
-        return start, end, None
-    return start, end, min(end, frame.watermark_end)
+        return None
+    return pieces(start, end, frame.watermark_end, now)
 
 
-def edges(spec: Spec, frame: Frame, now: float, tz: tzinfo) -> set[float]:
-    """The edges whose sums `compute` will ask for."""
-    start, _, lts_end = _span(spec, frame, now, tz)
-    if start is None or lts_end is None or lts_end <= start:
+def edges_of(pieces_: Pieces | None) -> set[float]:
+    """The edges whose sums the pieces need: the whole hours' and each part hour's."""
+    if pieces_ is None:
         return set()
-    return {start, lts_end}
+    edges: set[float] = set(pieces_.compiled or ())
+    for partial in pieces_.partials:
+        edges |= {partial.hour, partial.hour + HOUR}
+    return edges
+
+
+def exact_partial(partial: Partial, timeline: Timeline) -> PartialValue:
+    """The hour's timeline, cut at the window's edge."""
+    seconds: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    for state, (state_seconds, count) in tally(
+        timeline.carried, timeline.transitions, partial.start, partial.end
+    ).items():
+        token = state_token(state)
+        seconds[token] = seconds.get(token, 0.0) + state_seconds
+        counts[token] = counts.get(token, 0) + count
+    return PartialValue(seconds, counts, True)
+
+
+def prorate(
+    partial: Partial, seconds: Mapping[str, float], counts: Mapping[str, float]
+) -> PartialValue:
+    """The hour's compiled change, scaled by the part of it inside the window.
+
+    Counts round half up, so a lone change in the hour is counted when at
+    least half of it is inside the window.
+    """
+    fraction = partial.fraction
+    return PartialValue(
+        {token: value * fraction for token, value in seconds.items()},
+        {token: math.floor(count * fraction + 0.5) for token, count in counts.items()},
+        False,
+    )
 
 
 def compute(
@@ -117,62 +254,77 @@ def compute(
     spec: Spec,
     frame: Frame,
     sum_at: Callable[[str, float], float],
+    partial_at: Callable[[Partial], PartialValue | None],
     timeline: Timeline | None,
     now: float,
     tz: tzinfo,
+    window: tuple[float, float] | None = None,
 ) -> Reading:
     """The sensor's value as of now.
 
-    The statistics answer [start, min(end, watermark end)); the tail
-    answers the rest up to now for a live sensor, and nothing otherwise.
+    `partial_at` answers None for a part hour nobody can speak for.
     Rounded to what the display shows, so a tick where nothing changed
     writes nothing to the recorder.
     """
-    start, end, lts_end = _span(spec, frame, now, tz)
-    period_end = None if end == float("inf") else end
-    if start is None or lts_end is None:
+    start, end = _window(spec, frame, now, tz, window)
+    period_end = None if end == math.inf else end
+    if start is None or frame.watermark_end is None:
         return Reading(None, start, period_end, None)
 
     ids = statistic_ids(spec, frame.existing, _source_metric(spec))
     if spec.states and not ids and all(cfg.resolve(s) is None for s in spec.states):
         return Reading(None, start, period_end, REASON_NOT_RECORDED)
 
-    compiled = (
-        sum(sum_at(sid, lts_end) - sum_at(sid, start) for sid in ids)
-        if lts_end > start
-        else 0.0
-    )
+    wanted = tokens_of(spec)
 
-    live = spec.live and end > (frame.watermark_end or 0.0)
-    tail_seconds, tail_count = 0.0, 0
+    def counted(token: str) -> bool:
+        return not wanted or token in wanted
+
+    parts = pieces(start, end, frame.watermark_end, now)
+    compiled = 0.0
+    if parts.compiled is not None:
+        first, last = parts.compiled
+        compiled = sum(sum_at(sid, last) - sum_at(sid, first) for sid in ids)
+
+    seconds, count, estimated = 0.0, 0, False
+    for partial in parts.partials:
+        if (value := partial_at(partial)) is None:
+            continue
+        estimated = estimated or not value.exact
+        seconds += sum(s for token, s in value.seconds.items() if counted(token))
+        count += sum(c for token, c in value.counts.items() if counted(token))
+
+    live = spec.live and parts.tail is not None
     if live and timeline is not None:
-        wanted = tokens_of(spec)
-        for state, (seconds, count) in tally(
+        tail_start, tail_end = parts.tail
+        for state, (state_seconds, state_count) in tally(
             timeline.carried,
             timeline.transitions,
-            max(start, timeline.start),
-            min(end, now),
+            max(tail_start, timeline.start),
+            tail_end,
         ).items():
-            if not wanted or state_token(state) in wanted:
-                tail_seconds += seconds
-                tail_count += count
+            if counted(state_token(state)):
+                seconds += state_seconds
+                count += state_count
 
     if spec.metric == METRIC_COUNT:
-        return Reading(round(compiled) + tail_count, start, period_end, None)
+        return Reading(round(compiled) + count, start, period_end, None, estimated)
 
-    hours = compiled + tail_seconds / HOUR
+    hours = compiled + seconds / HOUR
     if spec.metric == METRIC_DURATION:
-        return Reading(round(hours, 2), start, period_end, None)
+        return Reading(round(hours, 2), start, period_end, None, estimated)
 
     # Share: of the time actually read - up to now when live, else up to
     # the watermark - and from the series start when the period reaches
     # back before it, since before then the state had no time to be in.
-    as_of = min(end, now) if live else lts_end
+    as_of = parts.tail[1] if live else min(end, now, frame.watermark_end)
     since = start if frame.series_start is None else max(start, frame.series_start)
     elapsed = as_of - since
     if elapsed <= 0:
-        return Reading(None, start, period_end, None)
-    return Reading(round(hours * HOUR / elapsed * 100, 1), start, period_end, None)
+        return Reading(None, start, period_end, None, estimated)
+    return Reading(
+        round(hours * HOUR / elapsed * 100, 1), start, period_end, None, estimated
+    )
 
 
 def suggested_entity_id(entity_id: str, spec: Spec) -> str:

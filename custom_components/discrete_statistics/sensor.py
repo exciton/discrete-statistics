@@ -10,12 +10,16 @@ is the user's own `recorder:` config - so what this module can do is
 give a tick nothing to write: the value is rounded to what is shown,
 the attributes change only when the period or the watermark does, and
 all of them are unrecorded. The README asks for `sensor.discrete_*`
-to be excluded outright.
+to be excluded outright. A rolling or custom window's value and edges do
+change every minute - the window moves through recorded time - and that
+is the feature; `estimated` says when a part hour of it was scaled from
+the hour's total rather than read.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
@@ -27,6 +31,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, METRIC_DURATION, METRIC_SHARE, SUBENTRY_SENSOR
 from .coordinator import PeriodCoordinator
+from .periods import is_custom, is_rolling
 from .reading import Reading, Spec, spec_from, suggested_entity_id
 
 _LOGGER = logging.getLogger(__name__)
@@ -102,10 +107,12 @@ async def async_setup_entry(
     entry.async_on_unload(entry.add_update_listener(updated))
 
 
-def _iso(timestamp: float | None) -> str | None:
-    return (
-        None if timestamp is None else dt_util.utc_from_timestamp(timestamp).isoformat()
-    )
+def _iso(timestamp: float | None, whole_minutes: bool = False) -> str | None:
+    if timestamp is None:
+        return None
+    if whole_minutes:
+        timestamp = math.floor(timestamp / 60) * 60
+    return dt_util.utc_from_timestamp(timestamp).isoformat()
 
 
 class DiscreteStatisticsSensor(CoordinatorEntity[PeriodCoordinator], SensorEntity):
@@ -170,11 +177,15 @@ class DiscreteStatisticsSensor(CoordinatorEntity[PeriodCoordinator], SensorEntit
         if reading is None:
             return {}
         assert self._spec is not None
+        # A moving window's edges are shown to the minute, so they change
+        # with the value rather than with each refresh's seconds.
+        moving = is_rolling(self._spec.period) or is_custom(self._spec.period)
         return {
-            "period_start": _iso(reading.period_start),
-            "period_end": _iso(reading.period_end),
+            "period_start": _iso(reading.period_start, moving),
+            "period_end": _iso(reading.period_end, moving),
             "compiled_until": _iso(self.coordinator.compiled_until),
             "live": self._spec.live,
+            "estimated": reading.estimated,
         }
 
     @callback
@@ -184,11 +195,7 @@ class DiscreteStatisticsSensor(CoordinatorEntity[PeriodCoordinator], SensorEntit
         reading = self._reading
         if reading is not None and reading.reason is not None:
             if not self._warned:
-                _LOGGER.warning(
-                    "%s is unavailable: its states are %s",
-                    self.entity_id,
-                    reading.reason,
-                )
+                _LOGGER.warning("%s is unavailable: %s", self.entity_id, reading.reason)
                 self._warned = True
         else:
             self._warned = False

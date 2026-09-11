@@ -29,9 +29,13 @@ from custom_components.discrete_statistics.config import (
 )
 from custom_components.discrete_statistics.config_flow import DISPOSITION_DEFAULT
 from custom_components.discrete_statistics.const import (
+    CONF_CUSTOM,
     CONF_LIVE,
     CONF_METRIC,
     CONF_PERIOD,
+    CONF_WINDOW_DURATION,
+    CONF_WINDOW_END,
+    CONF_WINDOW_START,
     DEFAULT_IGNORE,
     DEFAULT_IGNORE_SHORT,
     DEFAULT_IGNORE_SHORT_UNKNOWN,
@@ -1261,6 +1265,9 @@ async def test_the_sensor_flow_creates_a_subentry_and_its_sensor(recorder):
         CONF_PERIOD: "today",
         CONF_LIVE: True,
         CONF_NAME: None,
+        CONF_WINDOW_START: None,
+        CONF_WINDOW_END: None,
+        CONF_WINDOW_DURATION: None,
     }
     assert hass.states.get(ON_TODAY) is not None
 
@@ -1383,3 +1390,169 @@ async def test_reconfiguring_a_sensor_keeps_its_entity(recorder, entity_registry
     # even though the suggested one would now differ.
     assert entity_registry.async_get(ON_TODAY).unique_id == subentry_id
     assert hass.states.get(ON_TODAY) is not None
+
+
+# --- rolling and custom periods --------------------------------------------
+
+
+def _field(result, key):
+    [field] = [v for k, v in result["data_schema"].schema.items() if k == key]
+    return field
+
+
+def _custom_suggested(result, key):
+    [marker] = [k for k in _field(result, CONF_CUSTOM).schema.schema if k == key]
+    return (marker.description or {}).get("suggested_value")
+
+
+def _custom_input(start=None, end=None, duration=None, period="custom", **rest):
+    window = {}
+    if start is not None:
+        window[CONF_WINDOW_START] = start
+    if end is not None:
+        window[CONF_WINDOW_END] = end
+    if duration is not None:
+        window[CONF_WINDOW_DURATION] = duration
+    return _sensor_input(period=period, **{CONF_CUSTOM: window}, **rest)
+
+
+async def test_the_period_dropdown_offers_rolling_and_custom_periods(recorder):
+    hass = recorder
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+    result = await _sensor_form(hass, entry)
+    # The period selector's options are the period names themselves.
+    offered = list(_field(result, CONF_PERIOD).config["options"])
+    assert offered[-6:] == [
+        "last_hour",
+        "last_24_hours",
+        "last_7_days",
+        "last_30_days",
+        "last_365_days",
+        "custom",
+    ]
+    # Folded until something in it is set.
+    assert _field(result, CONF_CUSTOM).options["collapsed"] is True
+
+
+async def test_a_rolling_sensor_is_titled_by_its_length(recorder):
+    hass = recorder
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+    result = await _sensor_form(hass, entry)
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], _sensor_input(period="last_24_hours")
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == "Grid Status on time last 24 hours"
+    [subentry] = entry.subentries.values()
+    assert subentry.data[CONF_WINDOW_START] is None
+    assert subentry.data[CONF_WINDOW_DURATION] is None
+
+
+async def test_a_custom_sensor_from_a_start_alone(recorder):
+    hass = recorder
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+    result = await _sensor_form(hass, entry)
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], _custom_input(start="{{ today_at('09:00') }}")
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == "Grid Status on time custom"
+    [subentry] = entry.subentries.values()
+    assert subentry.data[CONF_PERIOD] == "custom"
+    assert subentry.data[CONF_WINDOW_START] == "{{ today_at('09:00') }}"
+    assert subentry.data[CONF_WINDOW_END] is None
+    assert subentry.data[CONF_WINDOW_DURATION] is None
+
+
+@pytest.mark.parametrize(
+    ("window", "error"),
+    [
+        ({}, "custom_needs_two"),
+        ({"end": "{{ now() }}"}, "custom_needs_two"),
+        ({"duration": {"hours": 1}}, "custom_needs_two"),
+        (
+            {
+                "start": "{{ today_at('09:00') }}",
+                "end": "{{ now() }}",
+                "duration": {"hours": 1},
+            },
+            "custom_needs_two",
+        ),
+        # Rendered, not compiled: the template selector refuses one that
+        # will not parse before the flow sees it.
+        ({"start": "{{ nonsense() }}"}, "template_invalid_start"),
+        (
+            {"start": "{{ 'soon' }}", "duration": {"hours": 1}},
+            "template_invalid_start",
+        ),
+        # A float is not a timestamp merely for being a float.
+        (
+            {"start": "{{ 'inf' | float }}", "duration": {"hours": 1}},
+            "template_invalid_start",
+        ),
+        (
+            {
+                "start": "2026-01-01T09:00:00+00:00",
+                "end": "{{ 'soon' }}",
+            },
+            "template_invalid_end",
+        ),
+        (
+            {
+                "start": "2026-01-01T10:00:00+00:00",
+                "end": "2026-01-01T09:00:00+00:00",
+            },
+            "custom_empty",
+        ),
+    ],
+)
+async def test_a_custom_window_that_does_not_hold_keeps_the_form_open(
+    recorder, window, error
+):
+    hass = recorder
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+    result = await _sensor_form(hass, entry)
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], _custom_input(**window)
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": error}
+    # The section comes back open even when the error left it looking
+    # empty, so the fields the error names are visible.
+    assert _field(result, CONF_CUSTOM).options["collapsed"] is False
+    assert not entry.subentries
+
+
+async def test_templates_are_refused_under_a_calendar_period(recorder):
+    hass = recorder
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+    result = await _sensor_form(hass, entry)
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        _custom_input(start="{{ today_at('09:00') }}", period="today"),
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "custom_only"}
+
+
+async def test_reconfiguring_offers_the_window_back(recorder):
+    hass = recorder
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+    result = await _sensor_form(hass, entry)
+    await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        _custom_input(start="{{ today_at('09:00') }}", duration={"hours": 8}),
+    )
+    await hass.async_block_till_done()
+    [subentry_id] = entry.subentries
+    assert entry.subentries[subentry_id].data[CONF_WINDOW_DURATION] == 28800.0
+
+    result = await _sensor_form(hass, entry, subentry_id)
+    assert _field(result, CONF_CUSTOM).options["collapsed"] is False
+    assert _custom_suggested(result, CONF_WINDOW_START) == "{{ today_at('09:00') }}"
+    assert _custom_suggested(result, CONF_WINDOW_END) is None
+    assert _custom_suggested(result, CONF_WINDOW_DURATION) == {
+        "hours": 8,
+        "minutes": 0,
+        "seconds": 0,
+    }

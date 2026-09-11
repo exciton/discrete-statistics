@@ -106,9 +106,25 @@
           "data_description": {
             "states": "Pick one or more states to combine, or type in a custom state. Leave empty to count changes between every state.",
             "metric": "Time is in hours. Share is the time as a percentage of the period so far.",
-            "period": "Periods start at midnight, on Monday, on the first of the month or the first of January, in this Home Assistant's time zone.",
+            "period": "Periods start at midnight, on Monday, on the first of the month or the first of January, in this Home Assistant's time zone. The last hour, 24 hours or 7, 30 or 365 days end now. A window that starts or ends part-way through an hour is exact while the recorder still holds that hour, and estimated from the hour's total afterwards - time in proportion, a count rounded to whole changes.",
             "name": "Leave blank for a name made from the entity, the states and the period.",
-            "live": "Statistics are compiled hourly. With this on, the sensor follows the entity's changes since the last compiled hour as they happen; with it off, it updates once an hour."
+            "live": "Statistics are compiled hourly. With this on, the sensor follows the entity's changes since the last compiled hour as they happen; with it off, it updates once an hour. For a rolling period with this off, the window is the last hours already compiled, ending at the last compiled hour."
+          },
+          "sections": {
+            "custom": {
+              "name": "Custom period",
+              "description": "Used when Period is Custom. Fill in any two, or Start alone to run to now. Start and End render to a date and time.",
+              "data": {
+                "start": "Start",
+                "end": "End",
+                "duration": "Duration"
+              },
+              "data_description": {
+                "start": "A template rendering to a date and time, such as today_at('09:00') or state_attr('sun.sun', 'next_rising'), inside the usual double braces.",
+                "end": "A template rendering to a date and time, such as now() or today_at('17:30'), inside the usual double braces.",
+                "duration": "How long the window is, counted from Start or back from End."
+              }
+            }
           }
         },
         "reconfigure": {
@@ -124,16 +140,37 @@
           "data_description": {
             "states": "Pick one or more states to combine, or type in a custom state. Leave empty to count changes between every state.",
             "metric": "Time is in hours. Share is the time as a percentage of the period so far.",
-            "period": "Periods start at midnight, on Monday, on the first of the month or the first of January, in this Home Assistant's time zone.",
+            "period": "Periods start at midnight, on Monday, on the first of the month or the first of January, in this Home Assistant's time zone. The last hour, 24 hours or 7, 30 or 365 days end now. A window that starts or ends part-way through an hour is exact while the recorder still holds that hour, and estimated from the hour's total afterwards - time in proportion, a count rounded to whole changes.",
             "name": "Leave blank for a name made from the entity, the states and the period.",
-            "live": "Statistics are compiled hourly. With this on, the sensor follows the entity's changes since the last compiled hour as they happen; with it off, it updates once an hour."
+            "live": "Statistics are compiled hourly. With this on, the sensor follows the entity's changes since the last compiled hour as they happen; with it off, it updates once an hour. For a rolling period with this off, the window is the last hours already compiled, ending at the last compiled hour."
+          },
+          "sections": {
+            "custom": {
+              "name": "Custom period",
+              "description": "Used when Period is Custom. Fill in any two, or Start alone to run to now. Start and End render to a date and time.",
+              "data": {
+                "start": "Start",
+                "end": "End",
+                "duration": "Duration"
+              },
+              "data_description": {
+                "start": "A template rendering to a date and time, such as today_at('09:00') or state_attr('sun.sun', 'next_rising'), inside the usual double braces.",
+                "end": "A template rendering to a date and time, such as now() or today_at('17:30'), inside the usual double braces.",
+                "duration": "How long the window is, counted from Start or back from End."
+              }
+            }
           }
         }
       },
       "error": {
         "state_ignored": "That state is not recorded under this entry's settings, so a sensor over it would never move. Change the entry's states first, or pick a recorded one.",
         "state_unusable": "A state name needs letters or digits.",
-        "all_states_count_only": "With no states picked, only the number of changes can be measured. Add a state above, or select number of changes below."
+        "all_states_count_only": "With no states picked, only the number of changes can be measured. Add a state above, or select number of changes below.",
+        "custom_needs_two": "A custom period needs two of Start, End and Duration - or Start alone, to run to now.",
+        "custom_only": "Start, End and Duration are read only when the period is Custom. Clear them, or choose Custom.",
+        "custom_empty": "The end is not after the start.",
+        "template_invalid_start": "Start did not render to a date and time. Check it in Developer tools > Template.",
+        "template_invalid_end": "End did not render to a date and time. Check it in Developer tools > Template."
       },
       "abort": {
         "reconfigure_successful": "The sensor was updated."
@@ -172,7 +209,13 @@
         "last_month": "Last month",
         "this_year": "This year",
         "last_year": "Last year",
-        "all_time": "All time"
+        "all_time": "All time",
+        "last_hour": "Last hour",
+        "last_24_hours": "Last 24 hours",
+        "last_7_days": "Last 7 days",
+        "last_30_days": "Last 30 days",
+        "last_365_days": "Last 365 days",
+        "custom": "Custom"
       }
     },
     "disposition": {

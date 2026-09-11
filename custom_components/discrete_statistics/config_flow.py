@@ -53,9 +53,13 @@ from .config import (
     uses_ignore_short,
 )
 from .const import (
+    CONF_CUSTOM,
     CONF_LIVE,
     CONF_METRIC,
     CONF_PERIOD,
+    CONF_WINDOW_DURATION,
+    CONF_WINDOW_END,
+    CONF_WINDOW_START,
     DEFAULT_IGNORE_SHORT,
     DEFAULT_IGNORE_SHORT_UNKNOWN,
     DEFAULT_MIN_DURATION,
@@ -70,6 +74,7 @@ from .const import (
     SENSOR_METRICS,
     SUBENTRY_SENSOR,
 )
+from .coordinator import render_datetime
 from .naming import (
     async_warm_state_translations,
     describe,
@@ -78,8 +83,8 @@ from .naming import (
     state_translator,
 )
 from .payload import readable_state
-from .periods import PERIODS
-from .reading import Spec, spec_from
+from .periods import PERIODS, is_custom
+from .reading import Custom, Spec, spec_from
 from .statistic_ids import build, is_blank, parse, state_token
 
 # `ignore` is deliberately absent. With no per-state mapping to supply
@@ -511,8 +516,20 @@ def _sensor_states(
     return states, {}
 
 
+def _custom_schema() -> vol.Schema:
+    return vol.Schema(
+        {
+            vol.Optional(CONF_WINDOW_START): selector.TemplateSelector(),
+            vol.Optional(CONF_WINDOW_END): selector.TemplateSelector(),
+            vol.Optional(CONF_WINDOW_DURATION): selector.DurationSelector(
+                selector.DurationSelectorConfig(enable_day=False)
+            ),
+        }
+    )
+
+
 def _sensor_schema(
-    offered: list[selector.SelectOptionDict], default_name: str
+    offered: list[selector.SelectOptionDict], default_name: str, open_custom: bool
 ) -> vol.Schema:
     return vol.Schema(
         {
@@ -538,10 +555,54 @@ def _sensor_schema(
                     translation_key=CONF_PERIOD,
                 )
             ),
+            # A form is one fixed schema, so the window cannot appear only
+            # on the dropdown's custom choice; it is folded away instead.
+            vol.Optional(CONF_CUSTOM): section(
+                _custom_schema(), {"collapsed": not open_custom}
+            ),
             vol.Optional(CONF_NAME): _name_field(default_name),
             vol.Required(CONF_LIVE, default=True): selector.BooleanSelector(),
         }
     )
+
+
+def _custom_window(
+    hass: HomeAssistant, period: str, window: Mapping[str, Any]
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """The custom window's data from the section, and the error keeping the form open.
+
+    Templates are rendered the same way the coordinator renders them.
+    Under any other period the section must be empty, so a stale window
+    cannot sit unread behind a calendar choice.
+    """
+    start = (window.get(CONF_WINDOW_START) or "").strip() or None
+    end = (window.get(CONF_WINDOW_END) or "").strip() or None
+    duration = _seconds(window.get(CONF_WINDOW_DURATION)) or None
+    data = {
+        CONF_WINDOW_START: start,
+        CONF_WINDOW_END: end,
+        CONF_WINDOW_DURATION: duration,
+    }
+    given = sum(value is not None for value in data.values())
+    if not is_custom(period):
+        return dict.fromkeys(data), {"base": "custom_only"} if given else {}
+    if given == 3 or given == 0 or (given == 1 and start is None):
+        return data, {"base": "custom_needs_two"}
+    rendered: dict[str, float] = {}
+    # Start is checked first, so a template broken in both fields is blamed
+    # on Start - the field a person reads first, and the one whose error
+    # would otherwise be masked by End's.
+    for key, text in ((CONF_WINDOW_START, start), (CONF_WINDOW_END, end)):
+        if text is None:
+            continue
+        try:
+            rendered[key] = render_datetime(hass, text)
+        except ValueError:
+            field = "start" if key == CONF_WINDOW_START else "end"
+            return data, {"base": f"template_invalid_{field}"}
+    if len(rendered) == 2 and rendered[CONF_WINDOW_END] <= rendered[CONF_WINDOW_START]:
+        return data, {"base": "custom_empty"}
+    return data, {}
 
 
 class SensorSubentryFlow(ConfigSubentryFlow):
@@ -576,6 +637,7 @@ class SensorSubentryFlow(ConfigSubentryFlow):
             cfg.entity_id
         )
         errors: dict[str, str] = {}
+        custom_errors: dict[str, str] = {}
         if user_input is not None:
             states, errors = _sensor_states(
                 cfg, existing, user_input.get(CONF_STATES, [])
@@ -585,20 +647,27 @@ class SensorSubentryFlow(ConfigSubentryFlow):
                 # Time in "any state" is the whole period; only the count
                 # of changes means something over every state.
                 errors[CONF_METRIC] = "all_states_count_only"
+            window, custom_errors = _custom_window(
+                self.hass, user_input[CONF_PERIOD], user_input.get(CONF_CUSTOM) or {}
+            )
+            errors.update(custom_errors)
             if not errors:
+                period = user_input[CONF_PERIOD]
                 spec = Spec(
                     tuple(states),
                     metric,
-                    user_input[CONF_PERIOD],
+                    period,
                     user_input[CONF_LIVE],
+                    Custom(**window) if is_custom(period) else None,
                 )
                 name = user_input.get(CONF_NAME) or None
                 data = {
                     CONF_STATES: states,
                     CONF_METRIC: metric,
-                    CONF_PERIOD: spec.period,
+                    CONF_PERIOD: period,
                     CONF_LIVE: spec.live,
                     CONF_NAME: name,
+                    **window,
                 }
                 title = name or sensor_title(self.hass, cfg, spec)
                 if subentry is None:
@@ -609,18 +678,37 @@ class SensorSubentryFlow(ConfigSubentryFlow):
 
         # What is in the box, or was stored, is what the greyed-out name
         # describes; a stored name of None is left out so the box stays
-        # empty rather than suggesting "None".
-        current = user_input or {
-            k: v
-            for k, v in (subentry.data if subentry else {}).items()
-            if v is not None
-        }
+        # empty rather than suggesting "None". The window is a section of
+        # the form, so it is nested back under its key.
+        if user_input is not None:
+            current = user_input
+        else:
+            stored = subentry.data if subentry else {}
+            current = {
+                k: v
+                for k, v in stored.items()
+                if v is not None
+                and k not in (CONF_WINDOW_START, CONF_WINDOW_END, CONF_WINDOW_DURATION)
+            }
+            window = {
+                CONF_WINDOW_START: stored.get(CONF_WINDOW_START),
+                CONF_WINDOW_END: stored.get(CONF_WINDOW_END),
+                CONF_WINDOW_DURATION: _duration(stored.get(CONF_WINDOW_DURATION)),
+            }
+            current[CONF_CUSTOM] = {k: v for k, v in window.items() if v is not None}
+        # Open on anything set, or on the error naming the fields in it -
+        # an all-empty section that just failed would otherwise stay
+        # collapsed and hide the fields the error is about.
+        open_custom = bool(custom_errors) or any(
+            (current.get(CONF_CUSTOM) or {}).values()
+        )
         return self.async_show_form(
             step_id=step_id,
             data_schema=self.add_suggested_values_to_schema(
                 _sensor_schema(
                     await async_offered_states(self.hass, cfg, existing),
                     sensor_title(self.hass, cfg, spec_from(current)),
+                    open_custom,
                 ),
                 current,
             ),

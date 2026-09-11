@@ -44,3 +44,10 @@ SENSOR_METRICS = (METRIC_DURATION, METRIC_SHARE, METRIC_COUNT)
 CONF_METRIC = "metric"
 CONF_PERIOD = "period"
 CONF_LIVE = "live"
+
+# The custom period and its window, a section of the sensor dialog.
+PERIOD_CUSTOM = "custom"
+CONF_CUSTOM = "custom"
+CONF_WINDOW_START = "start"
+CONF_WINDOW_END = "end"
+CONF_WINDOW_DURATION = "duration"

@@ -86,6 +86,14 @@ _PERIOD_WORDS = {
     "this_year": "this year",
     "last_year": "last year",
     "all_time": "all time",
+    "last_hour": "last hour",
+    "last_24_hours": "last 24 hours",
+    "last_7_days": "last 7 days",
+    "last_30_days": "last 30 days",
+    "last_365_days": "last 365 days",
+    # Nothing shorter describes an arbitrary window; the Name box is for
+    # the real name.
+    "custom": "custom",
 }
 _METRIC_WORDS = {METRIC_DURATION: "time", METRIC_SHARE: "share", METRIC_COUNT: "count"}
 

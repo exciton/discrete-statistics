@@ -580,8 +580,26 @@ for the entity and choose **Add sensor**:
 - **Measure** — time in the states in hours, the share of the period spent
   in them as a percentage, or the number of changes into them.
 - **Period** — today, yesterday, this week, last week, this month, last
-  month, this year, last year, or all time. Weeks start on Monday, days at
-  midnight in Home Assistant's own time zone.
+  month, this year, last year, or all time; weeks start on Monday, days at
+  midnight in Home Assistant's own time zone. Or the last hour, 24 hours,
+  7, 30 or 365 days, ending now — exactly that long, across a clock change
+  too. Or *Custom*, for a window the section below describes.
+
+  ![The Period dropdown open: the nine calendar periods, then Last hour, Last 24 hours, Last 7 days, Last 30 days, Last 365 days and Custom](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/sensor-dialog-period-options.png)
+
+- **Custom period** — a folded section with **Start**, **End** and
+  **Duration**. Fill in any two, or Start alone to run to now. Start and
+  End are templates that render to a date and time —
+  `{{ today_at('09:00') }}`, `{{ state_attr('sun.sun', 'next_rising') }}`,
+  `{{ now() - timedelta(hours=8) }}` — and Duration is a length. The
+  templates are rendered again on every refresh, so one that reads
+  another entity follows it within the minute; a template that does not
+  render makes the sensor `unavailable`, with the error in the log. A
+  window whose end is not after its start when it is rendered holds no
+  time, so a time or count sensor over it reads `0.0`.
+
+  ![The dialog with Period set to Custom and the Custom period section open: a Start template of today_at('09:00'), an empty End, and a Duration of eight hours](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/custom-period.png)
+
 - **Name** — optional; the default is made from the entity, the states,
   the measure and the period, "Front Door open time this month".
 - **Include the current hour** — statistics are compiled hourly. On, the
@@ -589,9 +607,29 @@ for the entity and choose **Add sensor**:
   hours since the last compiled one and updating on every change and once
   a minute, exactly as the next compile will record them — a state that
   has to last a minimum duration is left out until it has. Off, the sensor
-  moves once an hour and is a pure function of the statistics.
+  moves once an hour and is a pure function of the statistics; a rolling
+  period is then the last hours already compiled — exactly its length,
+  ending at the last compiled hour and moving only when a compile does,
+  so it never includes an estimated end.
 
-![The Add a period sensor dialog: a States picker with On chosen, the Measure and Period dropdowns, the Name box showing the composed name greyed out, and the Include the current hour switch](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/sensor-dialog.png)
+![The period sensor dialog: a States picker with On chosen, the Measure and Period dropdowns, the folded Custom period section, the Name box showing the composed name greyed out, and the Include the current hour switch](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/sensor-dialog.png)
+
+**Part hours.** The statistics are hourly, and a rolling or custom window
+usually starts or ends part-way through an hour. That hour is read
+*exactly* while the recorder still holds its history — the same reading
+the compile made of it, cut at the edge — and *estimated* once purge has
+taken it: the hour's total scaled by the part inside the window, time in
+proportion and a count rounded to whole changes, so one change in an hour
+counts as one when at least half the hour is inside and as none
+otherwise. The `estimated` attribute says which a sensor's value is,
+decided from what the recorder holds, re-read after each compile, never
+from `purge_keep_days`. A calendar period in a time zone on the whole hour
+starts and ends on the hour and is never estimated; in a time zone on the
+half hour — Asia/Kolkata, Australia/Adelaide, America/St_Johns — its two
+edges fall at :30 UTC, and the half hours on either side are read like
+any other part hour. A rolling window that includes the current hour
+moves with the clock, so its value and edges change every minute — that
+is what it is for.
 
 The sensor belongs to the entry: its settings are edited from the entry's
 page and deleting it there removes the sensor. The entry itself still has
@@ -600,15 +638,17 @@ no entities.
 A time sensor is a duration in hours with two decimals, a share a
 percentage with one, a count a whole number. Each carries `period_start`
 and `period_end`, `compiled_until` — the end of the last compiled hour,
-which is where the statistics stop and the live reading starts — and
-`live`. A period that starts before the entity's statistics do is measured
-from where they start, and the share is of the time actually measured, so
-a sensor over all time on an entity with a month of statistics reads the
+which is where the statistics stop and the live reading starts —
+`live`, and `estimated` (see *Part hours*). A rolling or custom window's
+edges are shown to the minute. A period that starts before the entity's
+statistics do is measured from where they start, and the share is of the
+time actually measured, so a sensor over all time on an entity with a
+month of statistics reads the
 share of that month. A sensor whose states are all ignored by the entry,
 or whose entity has no statistics yet, is `unavailable`, with the reason in
-the log.
+the log — as is a custom sensor whose templates do not render.
 
-![A count sensor's details: state 38, with Period start, Period end, Compiled until and Live attributes](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/sensor-details.png)
+![A time sensor's details: 38 h 15 m this month, with Period start, Period end, Compiled until, Live and Estimated attributes](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/sensor-details.png)
 
 **Count.** A count is the number of changes *into* the states inside the
 period, as the statistics record them. A spell already in progress when
@@ -836,13 +876,12 @@ hours counted as quiet, not skipped.
 
 ### Things `history_stats` does that this component cannot
 
-**Any window.** The last thirty minutes, since sunrise, until 4 pm:
-whatever a template can render. The period sensors here have nine named
-periods, each aligned to the clock, and the charts hourly buckets.
-
-**Seconds.** A `history_stats` window can start and end at any second, and
-its value is exact to the second within it. A period sensor is exact too,
-but only for the named periods, and its chart is hourly.
+**A window to the second.** `history_stats` reads the recorder's raw
+states, so a window can start and end at any second and is exact within
+it for as long as the recorder keeps those states. A period sensor here
+takes the same `start`/`end`/`duration` templates, and a rolling window
+of the fixed lengths, but the hours are the statistics': a part hour is
+exact only while the recorder still holds it, and estimated after.
 
 Its `ratio` type is not on that list. Hours per hour is already a fraction:
 the `mean` of a duration statistic over any period *is* the share of that
@@ -864,7 +903,7 @@ chart under *Charts* draws.
 | Count means | intervals in the window; a state active at the start counts | transitions into the state, in the hour they happen |
 | `unavailable` / `unknown` | not in the list, so they break the interval | carry the previous state forward; configurable |
 | State mapping | none | `states:` map, `default`, `blank` |
-| Window | any template; two of `start`/`end`/`duration` | today, yesterday, this/last week, month, year, all time |
+| Window | any template; two of `start`/`end`/`duration` | calendar periods; the last hour, 24 h, 7, 30 or 365 days; or two of `start`/`end`/`duration` templates |
 | Share of time | `ratio` % | `share` sensor, or the `mean` of a duration: hours per hour is a fraction |
 | Debounce | `min_state_duration` | `ignore_short` with `min_duration`, per state or as the default |
 | Usable in automations | yes, it is a sensor | yes, a period sensor |
