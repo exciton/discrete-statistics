@@ -72,6 +72,9 @@ git push -q -u origin "$BRANCH"
 PR="$(gh pr create --base main --head "$BRANCH" --label skip-changelog \
   --title "Release $VERSION" --body "Bump the manifest version to $VERSION.")"
 echo "Opened $PR; waiting for its checks..." >&2
+# The checks are registered a few seconds after the push; asked before
+# that, `gh pr checks` reports none and fails.
+until gh pr checks "$BRANCH" >/dev/null 2>&1; do sleep 10; done
 if ! gh pr checks "$BRANCH" --watch --fail-fast >/dev/null; then
   git checkout -q main
   echo "checks failed on $PR: fix and merge it, then rerun to tag" >&2

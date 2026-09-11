@@ -509,9 +509,16 @@ async def test_sums_at_edges_a_later_plan_does_not_want_are_dropped(recorder, fr
         (T0 + timedelta(hours=3)).timestamp(),
     }
     # An hour later the window has moved off its old start; nothing will
-    # ask for that edge again, and a rolling sensor sheds one an hour.
-    freezer.move_to(T0 + timedelta(hours=4))
-    await coordinator.async_refresh()
+    # ask for that edge again, and a rolling sensor sheds one an hour. The
+    # clock move also brings the hourly compile due, whose signal would
+    # drop edges of its own; it is held off so the prune is the only thing
+    # touching the cache.
+    with patch(
+        "custom_components.discrete_statistics.Compiler.async_compile_incremental",
+        return_value=0,
+    ):
+        freezer.move_to(T0 + timedelta(hours=4))
+        await coordinator.async_refresh()
     assert {edge for _, edge in coordinator._sums} == {
         (T0 - timedelta(hours=20)).timestamp(),
         (T0 + timedelta(hours=3)).timestamp(),
