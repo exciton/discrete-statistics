@@ -918,6 +918,16 @@ and its window shrinks; here the hours are already compiled, and only an
 edge inside a purged hour is estimated from that hour's total, which the
 `estimated` attribute says.
 
+**A couple of hours of raw history, however long the window.** The
+statistics are precompiled, so a reading is arithmetic on a handful of
+rows: the sum at the window's first edge against the sum at its last. The
+recorder's raw states are read only for what is not compiled yet — the
+hour in progress — and for an edge inside an hour, one hour each: two or
+three hours of state changes at most, for a window of a day or a year
+alike, and the same again on every refresh. `history_stats` reads the
+whole window's state changes on every refresh, so a year-long window costs
+a year of rows a minute.
+
 **Every state of an enum, from one line.** A heat pump's `hvac_action` has
 `heating`, `cooling`, `idle`, `defrosting` and whatever next year's firmware
 adds. One entry here records all of them, duration and count, and a state
