@@ -903,7 +903,8 @@ The charts look alike; the foundation shows at the edges:
 
 `history_stats` was built to show a live figure, and does; its long-term
 statistics are what the recorder makes of any sensor. This component
-starts from the statistics.
+starts from the statistics, and ensures those are accurately recorded over
+time.
 
 ### What the foundation gives
 
