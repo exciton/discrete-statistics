@@ -589,6 +589,11 @@ Verified against 2026.8.3.
   own drain has the same property, so a read scheduled straight after it
   can still see the watermark from before the commit; the coordinator's
   live tail covers that gap and the next compile corrects it.
+- hassfest validates `strings.json` only for placeholder *names*, not
+  content. The frontend renders every string through ICU MessageFormat, so a
+  literal `{` or `}` anywhere in a string — a template example in a
+  description, say — passes CI and shows as `Translation error:
+  MALFORMED_ARGUMENT` in the dialog.
 
 ## Units
 

@@ -169,7 +169,8 @@
         "custom_needs_two": "A custom period needs two of Start, End and Duration - or Start alone, to run to now.",
         "custom_only": "Start, End and Duration are read only when the period is Custom. Clear them, or choose Custom.",
         "custom_empty": "The end is not after the start.",
-        "template_invalid": "That template did not render to a date and time. Check it in Developer tools > Template."
+        "template_invalid_start": "Start did not render to a date and time. Check it in Developer tools > Template.",
+        "template_invalid_end": "End did not render to a date and time. Check it in Developer tools > Template."
       },
       "abort": {
         "reconfigure_successful": "The sensor was updated."

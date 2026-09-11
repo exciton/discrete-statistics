@@ -1480,12 +1480,22 @@ async def test_a_custom_sensor_from_a_start_alone(recorder):
         ),
         # Rendered, not compiled: the template selector refuses one that
         # will not parse before the flow sees it.
-        ({"start": "{{ nonsense() }}"}, "template_invalid"),
-        ({"start": "{{ 'soon' }}", "duration": {"hours": 1}}, "template_invalid"),
+        ({"start": "{{ nonsense() }}"}, "template_invalid_start"),
+        (
+            {"start": "{{ 'soon' }}", "duration": {"hours": 1}},
+            "template_invalid_start",
+        ),
         # A float is not a timestamp merely for being a float.
         (
             {"start": "{{ 'inf' | float }}", "duration": {"hours": 1}},
-            "template_invalid",
+            "template_invalid_start",
+        ),
+        (
+            {
+                "start": "2026-01-01T09:00:00+00:00",
+                "end": "{{ 'soon' }}",
+            },
+            "template_invalid_end",
         ),
         (
             {
@@ -1507,8 +1517,9 @@ async def test_a_custom_window_that_does_not_hold_keeps_the_form_open(
     )
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": error}
-    # And the section comes back open unless nothing was typed in it.
-    assert _field(result, CONF_CUSTOM).options["collapsed"] is (window == {})
+    # The section comes back open even when the error left it looking
+    # empty, so the fields the error names are visible.
+    assert _field(result, CONF_CUSTOM).options["collapsed"] is False
     assert not entry.subentries
 
 

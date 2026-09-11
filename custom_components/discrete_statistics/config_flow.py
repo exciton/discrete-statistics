@@ -589,13 +589,17 @@ def _custom_window(
     if given == 3 or given == 0 or (given == 1 and start is None):
         return data, {"base": "custom_needs_two"}
     rendered: dict[str, float] = {}
+    # Start is checked first, so a template broken in both fields is blamed
+    # on Start - the field a person reads first, and the one whose error
+    # would otherwise be masked by End's.
     for key, text in ((CONF_WINDOW_START, start), (CONF_WINDOW_END, end)):
         if text is None:
             continue
         try:
             rendered[key] = render_datetime(hass, text)
         except ValueError:
-            return data, {"base": "template_invalid"}
+            field = "start" if key == CONF_WINDOW_START else "end"
+            return data, {"base": f"template_invalid_{field}"}
     if len(rendered) == 2 and rendered[CONF_WINDOW_END] <= rendered[CONF_WINDOW_START]:
         return data, {"base": "custom_empty"}
     return data, {}
@@ -633,6 +637,7 @@ class SensorSubentryFlow(ConfigSubentryFlow):
             cfg.entity_id
         )
         errors: dict[str, str] = {}
+        custom_errors: dict[str, str] = {}
         if user_input is not None:
             states, errors = _sensor_states(
                 cfg, existing, user_input.get(CONF_STATES, [])
@@ -691,7 +696,12 @@ class SensorSubentryFlow(ConfigSubentryFlow):
                 CONF_WINDOW_DURATION: _duration(stored.get(CONF_WINDOW_DURATION)),
             }
             current[CONF_CUSTOM] = {k: v for k, v in window.items() if v is not None}
-        open_custom = any((current.get(CONF_CUSTOM) or {}).values())
+        # Open on anything set, or on the error naming the fields in it -
+        # an all-empty section that just failed would otherwise stay
+        # collapsed and hide the fields the error is about.
+        open_custom = bool(custom_errors) or any(
+            (current.get(CONF_CUSTOM) or {}).values()
+        )
         return self.async_show_form(
             step_id=step_id,
             data_schema=self.add_suggested_values_to_schema(
