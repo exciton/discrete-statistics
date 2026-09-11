@@ -8,15 +8,18 @@ the arithmetic; `websocket` fetches the rows.
 Every edge resolves to the newest row before it, whose sum is the sum at
 the edge, and adjacent buckets share it: a bucket's `change` is `sum(left
 of its end) - sum(left of its start)`, over the whole period between the
-edges. A statistic has no time in its state before its series begins,
-and a hole is time in no state, so the period's length is the right thing
-for a ratio to divide by whichever of those falls inside it.
+edges. The rows are sparse, so which reads settle which edges is tracked
+in `Known`; `websocket` drives the reads and this module only resolves.
+A statistic has no time in its state before its series begins, and a
+hole is time in no state, so the period's length is the right thing for
+a ratio to divide by whichever of those falls inside it.
 """
 
 from __future__ import annotations
 
+import bisect
 import math
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta, tzinfo
 from itertools import pairwise
 from typing import Literal, NamedTuple
@@ -113,54 +116,113 @@ def row_before(edge: float) -> float:
     return (math.ceil(edge / HOUR) - 1) * HOUR
 
 
-Lookup = Callable[[float], Row | None]
+# Rows fetched per seek: one index seek whatever the count, and enough
+# that a rare state's whole series usually comes back in one.
+LOOKUP_ROWS = 16
+# How many rows a seek is worth. A seek is a round trip, a row a few
+# microseconds of Python; below this many rows per unsettled edge, one
+# range read beats the seeks it saves.
+SEEK_WORTH = 8
+
+
+class Known:
+    """One statistic's rows as found so far, and which edges they settle.
+
+    An edge is settled when the newest row before it is certainly held: a
+    row at `row_before(edge)` settles that edge alone; a run taken at the
+    newest unsettled edge settles every edge down to the run's oldest row,
+    and every edge at all when the run came back short; a range read
+    settles every edge down to its oldest row.
+    """
+
+    def __init__(self, rows: Iterable[Row] = ()) -> None:
+        self._rows: dict[float, Row] = {}
+        self._starts: list[float] = []
+        self.floor = math.inf
+        self.add(rows)
+
+    def add(self, rows: Iterable[Row]) -> None:
+        for row in rows:
+            if row.start not in self._rows:
+                bisect.insort(self._starts, row.start)
+            self._rows[row.start] = row
+
+    def seek(self, rows: list[Row]) -> None:
+        """Take a newest-first run fetched at the newest unsettled edge."""
+        self.add(rows)
+        exhausted = len(rows) < LOOKUP_ROWS
+        self.floor = min(self.floor, -math.inf if exhausted else rows[-1].start)
+
+    def ranged(self, rows: Iterable[Row]) -> None:
+        """Take every row of a span that starts at or below the newest unsettled edge."""
+        rows = list(rows)
+        self.add(rows)
+        if rows:
+            self.floor = min(self.floor, min(row.start for row in rows))
+
+    def settled(self, edge: float) -> bool:
+        return edge > self.floor or row_before(edge) in self._rows
+
+    def before(self, edge: float) -> Row | None:
+        """The newest held row before the edge."""
+        index = bisect.bisect_left(self._starts, edge)
+        return self._rows[self._starts[index - 1]] if index else None
+
+
+def blanks(known: Known, edges_: list[float]) -> list[float]:
+    """The edges not yet settled, newest first."""
+    return [edge for edge in reversed(edges_) if not known.settled(edge)]
+
+
+def wants_range(
+    known: Known, edges_: list[float], run: list[Row]
+) -> tuple[float, float] | None:
+    """The span to read whole instead of seeking on, or None.
+
+    A full run's density says how many rows the unsettled span holds;
+    under `SEEK_WORTH` per unsettled edge, one range read is the cheaper
+    way to settle them.
+    """
+    if len(run) < LOOKUP_ROWS:
+        return None
+    blank = blanks(known, edges_)
+    if not blank:
+        return None
+    lo, hi = row_before(blank[-1]), row_before(blank[0]) + HOUR
+    density = LOOKUP_ROWS / (run[0].start - run[-1].start + HOUR)
+    if density * (hi - lo) < SEEK_WORTH * len(blank):
+        return lo, hi
+    return None
+
+
+def has_row(known: Known, start: float, end: float) -> bool:
+    row = known.before(end)
+    return row is not None and row.start >= start
 
 
 def cut(
     edges_: list[float],
-    at: Mapping[float, Row],
-    newest_before: Lookup,
+    known: Known,
+    compiled: Callable[[float, float], bool],
 ) -> list[Bucket]:
-    """Cut the buckets between consecutive edges.
+    """Cut the buckets between consecutive edges. Every edge must be settled.
 
-    `at` holds `row_before` each edge - one row per edge, whose sum is
-    the sum at the edge - and answers almost every edge in one query. The lookup fills in for an edge with no row, which
-    is a hole or the start or end of the series, and is asked at most
-    once per hole: the row found for one edge answers every edge between
-    it and the next found row.
-
-    A bucket with no row inside it is left out; the card draws that as a
-    gap. The sum before a statistic's first row is zero, which is where
-    its series began.
+    `compiled` says whether the entity was compiled inside a bucket - the
+    caller judges that on the entity's duration rows as a whole - so a
+    statistic with no row of its own in a compiled bucket reads zero, and
+    only a hole is left out for the card to draw as a gap. The sum before
+    a statistic's first row is zero, which is where its series began.
     """
-    if len(edges_) < 2:
-        return []
-
-    # Newest row before each edge, walked from the last edge back so that
-    # one lookup's answer covers the edges it also precedes.
-    lefts: dict[float, Row | None] = {}
-    known: Row | None = None
-    known_for: float | None = None
-    for edge in reversed(edges_):
-        row = at.get(row_before(edge))
-        if row is None:
-            if known_for is None or (known is not None and known.start >= edge):
-                known = newest_before(edge)
-                known_for = edge
-            row = known
-        lefts[edge] = row
-
     buckets: list[Bucket] = []
     for a, b in pairwise(edges_):
-        last = lefts[b]
-        if last is None or last.start < a:
+        if not compiled(a, b):
             continue
-        base = lefts[a]
+        last, base = known.before(b), known.before(a)
         buckets.append(
             Bucket(
                 start=a,
                 end=b,
-                change=last.sum - (base.sum if base is not None else 0.0),
+                change=(last.sum if last else 0.0) - (base.sum if base else 0.0),
             )
         )
     return buckets

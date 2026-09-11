@@ -7,12 +7,18 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from custom_components.discrete_statistics.buckets import (
+    LOOKUP_ROWS,
+    SEEK_WORTH,
     Bucket,
+    Known,
     Row,
+    blanks,
     cut,
     edges,
+    has_row,
     hours_wanted,
     row_before,
+    wants_range,
 )
 from custom_components.discrete_statistics.const import HOUR
 
@@ -83,18 +89,6 @@ def test_an_edge_at_half_past_wants_the_hour_running_through_it():
     assert row_before(0.0) == -HOUR
 
 
-def _lookup(rows: list[Row]):
-    """The newest-before lookup over a sorted list of rows, counting calls."""
-    calls = [0]
-
-    def newest_before(edge: float) -> Row | None:
-        calls[0] += 1
-        found = [r for r in rows if r.start < edge]
-        return found[-1] if found else None
-
-    return newest_before, calls
-
-
 def _dense(hours: range, per_hour: float = 0.25) -> list[Row]:
     return [Row(h * HOUR, per_hour * (i + 1)) for i, h in enumerate(hours)]
 
@@ -104,151 +98,154 @@ def _running(rows: list[Row]) -> list[Row]:
     return [Row(rows[0].start - HOUR, 0.0), *rows]
 
 
-def _at(rows: list[Row], edges_: list[float]) -> dict[float, Row]:
-    wanted = hours_wanted(edges_)
-    return {r.start: r for r in rows if r.start in wanted}
+H = HOUR
+
+
+def _run(newest_hour: int, count: int, per_row: float = 1.0) -> list[Row]:
+    """A newest-first run of `count` rows ending at `newest_hour`."""
+    return [
+        Row((newest_hour - i) * H, per_row * (newest_hour - i)) for i in range(count)
+    ]
+
+
+class TestKnown:
+    def test_a_row_at_the_hour_before_an_edge_settles_that_edge_alone(self):
+        known = Known([Row(23 * H, 1.0)])
+        assert known.settled(24 * H)
+        assert not known.settled(48 * H)
+        assert not known.settled(0.0)
+
+    def test_a_full_run_settles_every_edge_down_to_its_oldest_row(self):
+        known = Known()
+        known.seek(_run(47, LOOKUP_ROWS))
+        assert known.floor == (47 - LOOKUP_ROWS + 1) * H
+        assert known.settled(48 * H)
+        assert known.settled(40 * H)
+        assert not known.settled(24 * H)
+
+    def test_a_short_run_settles_everything(self):
+        known = Known()
+        known.seek(_run(47, 3))
+        assert known.settled(0.0)
+        known = Known()
+        known.seek([])
+        assert known.settled(0.0)
+
+    def test_a_range_settles_every_edge_down_to_its_oldest_row(self):
+        known = Known()
+        known.ranged([Row(30 * H, 1.0), Row(35 * H, 2.0)])
+        assert known.floor == 30 * H
+        assert known.settled(36 * H)
+        assert not known.settled(24 * H)
+        known.ranged([])
+        assert known.floor == 30 * H
+
+    def test_before_is_the_newest_row_strictly_before_the_edge(self):
+        known = Known([Row(10 * H, 1.0), Row(20 * H, 2.0)])
+        assert known.before(20 * H) == Row(10 * H, 1.0)
+        assert known.before(21 * H) == Row(20 * H, 2.0)
+        assert known.before(10 * H) is None
+
+    def test_rows_are_deduplicated_by_start(self):
+        known = Known([Row(10 * H, 1.0)])
+        known.add([Row(10 * H, 1.0), Row(5 * H, 0.5)])
+        assert known.before(11 * H) == Row(10 * H, 1.0)
+        assert known.before(10 * H) == Row(5 * H, 0.5)
+
+
+DAYS_60 = [d * 24 * H for d in range(61)]
+MONTHS_3 = [0.0, 30 * 24 * H, 60 * 24 * H, 90 * 24 * H]
+
+
+class TestBlanks:
+    def test_blanks_are_the_unsettled_edges_newest_first(self):
+        known = Known([Row(row_before(MONTHS_3[1]), 1.0)])
+        assert blanks(known, MONTHS_3) == [MONTHS_3[3], MONTHS_3[2], MONTHS_3[0]]
+
+    def test_nothing_is_blank_below_a_short_run(self):
+        known = Known()
+        known.seek(_run(5, 2))
+        assert blanks(known, MONTHS_3) == []
+
+
+class TestWantsRange:
+    def test_a_short_run_never_wants_a_range(self):
+        known = Known()
+        run = _run(24 * 89, 3)
+        known.seek(run)
+        assert wants_range(known, MONTHS_3, run) is None
+
+    def test_a_busy_statistic_under_monthly_edges_keeps_seeking(self):
+        # Rows every hour: the three months left hold thousands of rows.
+        known = Known()
+        run = _run(24 * 90 - 1, LOOKUP_ROWS)
+        known.seek(run)
+        assert blanks(known, MONTHS_3) == [MONTHS_3[2], MONTHS_3[1], MONTHS_3[0]]
+        assert wants_range(known, MONTHS_3, run) is None
+
+    def test_a_daily_statistic_under_daily_edges_wants_the_span(self):
+        # Four rows a day, 18:00 to 21:00, over sixty days.
+        rows = [
+            Row((d * 24 + h) * H, float(d * 4 + h - 17))
+            for d in range(60)
+            for h in (18, 19, 20, 21)
+        ]
+        known = Known()
+        run = list(reversed(rows))[:LOOKUP_ROWS]
+        known.seek(run)
+        blank = blanks(known, DAYS_60)
+        assert len(blank) == 57
+        span = wants_range(known, DAYS_60, run)
+        assert span == (row_before(blank[-1]), row_before(blank[0]) + H)
+        # Its estimate is well under SEEK_WORTH rows per blank edge.
+        density = LOOKUP_ROWS / (run[0].start - run[-1].start + H)
+        assert density * (span[1] - span[0]) < SEEK_WORTH * len(blank)
+
+    def test_nothing_blank_wants_nothing(self):
+        known = Known()
+        run = _run(24 * 90 - 1, LOOKUP_ROWS)
+        known.seek(run)
+        assert wants_range(known, [MONTHS_3[3]], run) is None
 
 
 class TestCut:
-    def test_dense_rows_need_no_lookups(self):
+    def test_change_is_between_the_sums_at_the_edges(self):
         rows = _running(_dense(range(48)))
-        e = [0.0, 24 * HOUR, 48 * HOUR]
-        before, calls = _lookup(rows)
+        known = Known(rows)
+        e = [0.0, 24 * H, 48 * H]
+        assert cut(e, known, lambda a, b: True) == [
+            Bucket(0.0, 24 * H, 6.0),
+            Bucket(24 * H, 48 * H, 6.0),
+        ]
 
-        result = cut(e, _at(rows, e), before)
-
+    def test_a_compiled_bucket_with_no_row_is_zero_and_an_uncompiled_one_is_left_out(
+        self,
+    ):
+        known = Known([Row(23 * H, 2.0), Row(72 * H, 5.0)])
+        known.floor = -float("inf")  # every edge settled
+        e = [0.0, 24 * H, 48 * H, 72 * H, 96 * H]
+        result = cut(e, known, lambda a, b: a != 24 * H)
         assert result == [
-            Bucket(0.0, 24 * HOUR, 6.0),
-            Bucket(24 * HOUR, 48 * HOUR, 6.0),
+            Bucket(0.0, 24 * H, 2.0),
+            Bucket(48 * H, 72 * H, 0.0),
+            Bucket(72 * H, 96 * H, 3.0),
         ]
-        assert calls == [0]
 
-    def test_edges_at_half_past_still_need_no_lookups(self):
-        tz = ZoneInfo("Asia/Kolkata")
-        e = edges(
-            datetime(2026, 6, 1, tzinfo=tz).timestamp(),
-            datetime(2026, 6, 3, tzinfo=tz).timestamp(),
-            "day",
-            tz,
-        )
-        # Rows start on UTC hours; the first here is the hour running
-        # through the first edge.
-        first = e[0] - 1800
-        assert first % HOUR == 0
-        rows = [Row(first + i * HOUR, float(i)) for i in range(49)]
-        before, calls = _lookup(rows)
-
-        result = cut(e, _at(rows, e), before)
-
-        assert [b.change for b in result] == [24.0, 24.0]
-        assert calls == [0]
-
-    def test_a_series_beginning_inside_a_bucket_starts_from_zero(self):
-        # A new state has no time in it before its first row, so the base
-        # is zero and the bucket is a whole period, as its siblings are.
-        rows = _dense(range(10, 48))
-        e = [0.0, 24 * HOUR, 48 * HOUR]
-        before, calls = _lookup(rows)
-
-        result = cut(e, _at(rows, e), before)
-
-        assert result == [
-            Bucket(0.0, 24 * HOUR, 14 * 0.25),
-            Bucket(24 * HOUR, 48 * HOUR, 24 * 0.25),
+    def test_before_the_series_the_sum_is_zero(self):
+        known = Known([Row(30 * H, 1.5)])
+        known.floor = -float("inf")
+        assert cut([0.0, 24 * H, 48 * H], known, lambda a, b: True) == [
+            Bucket(0.0, 24 * H, 0.0),
+            Bucket(24 * H, 48 * H, 1.5),
         ]
-        assert calls == [1]
 
-    def test_a_base_before_the_first_edge_is_looked_up(self):
-        rows = [
-            Row(-5 * HOUR, 100.0),
-            *[Row(h * HOUR, 100.0 + h + 1) for h in range(24)],
-        ]
-        e = [0.0, 24 * HOUR]
-        before, _ = _lookup(rows)
 
-        result = cut(e, _at(rows, e), before)
-
-        assert result == [Bucket(0.0, 24 * HOUR, 24.0)]
-
-    def test_a_hole_straddling_an_edge_lands_in_neither_bucket(self):
-        # Rows for hours 0-19 and 30-47: the hole 20-29 crosses the edge at
-        # 24. The left bucket's change ends at the last row before the
-        # hole and the right one's begins there, because the sum carried:
-        # both buckets are whole periods with the hole's time in neither.
-        rows = _running(
-            [Row(h * HOUR, float(h + 1)) for h in range(20)]
-            + [Row(h * HOUR, 20.0 + (h - 29)) for h in range(30, 48)]
-        )
-        e = [0.0, 24 * HOUR, 48 * HOUR]
-        before, calls = _lookup(rows)
-
-        result = cut(e, _at(rows, e), before)
-
-        assert result == [
-            Bucket(0.0, 24 * HOUR, 20.0),
-            Bucket(24 * HOUR, 48 * HOUR, 18.0),
-        ]
-        assert calls == [1]
-
-    def test_a_hole_inside_a_bucket_stays_in_its_span(self):
-        rows = [Row(h * HOUR, float(h + 1)) for h in range(10)] + [
-            Row(h * HOUR, 10.0 + (h - 13)) for h in range(14, 24)
-        ]
-        e = [0.0, 24 * HOUR]
-        before, _ = _lookup(rows)
-
-        assert cut(e, _at(rows, e), before) == [Bucket(0.0, 24 * HOUR, 20.0)]
-
-    def test_a_hole_starting_on_an_edge_stays_in_the_bucket_after_it(self):
-        # Rows for hours 0-23 and 30-47: the row before the edge at 24 is
-        # there, so no lookup is needed and the hole is inside the second
-        # bucket, as any inner hole is.
-        rows = _running(
-            [Row(h * HOUR, float(h + 1)) for h in range(24)]
-            + [Row(h * HOUR, 24.0 + (h - 29)) for h in range(30, 48)]
-        )
-        e = [0.0, 24 * HOUR, 48 * HOUR]
-        before, calls = _lookup(rows)
-
-        result = cut(e, _at(rows, e), before)
-
-        assert result == [
-            Bucket(0.0, 24 * HOUR, 24.0),
-            Bucket(24 * HOUR, 48 * HOUR, 18.0),
-        ]
-        assert calls == [0]
-
-    def test_an_empty_bucket_is_left_out(self):
-        rows = _dense(range(24)) + [
-            Row(h * HOUR, 6.0 + 0.25 * (h - 47)) for h in range(48, 72)
-        ]
-        e = [0.0, 24 * HOUR, 48 * HOUR, 72 * HOUR]
-        before, _ = _lookup(rows)
-
-        result = cut(e, _at(rows, e), before)
-
-        assert [b.start for b in result] == [0.0, 48 * HOUR]
-        assert result[1].change == 6.0
-
-    def test_a_long_run_of_empty_edges_costs_one_lookup(self):
-        # A statistic that begins in the last of ten buckets: every earlier
-        # edge misses, and one answer covers them all.
-        rows = _dense(range(9 * 24, 10 * 24))
-        e = [float(d * 24 * HOUR) for d in range(11)]
-        before, calls = _lookup(rows)
-
-        result = cut(e, _at(rows, e), before)
-
-        assert result == [Bucket(9 * 24 * HOUR, 10 * 24 * HOUR, 6.0)]
-        assert calls == [1]
-
-    def test_no_rows_at_all(self):
-        before, _ = _lookup([])
-        assert cut([0.0, HOUR], {}, before) == []
-
-    def test_fewer_than_two_edges(self):
-        before, _ = _lookup(_dense(range(2)))
-        assert cut([0.0], {}, before) == []
+class TestHasRow:
+    def test_a_row_inside_the_bucket(self):
+        known = Known([Row(30 * H, 1.0)])
+        assert has_row(known, 24 * H, 48 * H)
+        assert not has_row(known, 48 * H, 72 * H)
+        assert not has_row(known, 0.0, 24 * H)
 
 
 @pytest.mark.parametrize("period", ["hour", "day", "week", "month", "year"])
