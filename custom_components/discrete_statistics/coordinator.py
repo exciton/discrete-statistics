@@ -48,7 +48,7 @@ from .reading import (
     Frame,
     Partial,
     PartialValue,
-    Pieces,
+    Plan,
     Reading,
     Spec,
     compute,
@@ -273,7 +273,7 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
             windows[subentry_id] = window
         wanted = {k: v for k, v in specs.items() if k not in readings}
 
-        plans: dict[str, Pieces | None] = {}
+        plans: dict[str, Plan] = {}
         for subentry_id, spec in wanted.items():
             try:
                 plans[subentry_id] = plan(spec, frame, now, tz, windows[subentry_id])
@@ -285,14 +285,16 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
         # one costs no read at all.
         timeline = None
         if frame.watermark_end is not None and any(
-            spec.live and plans[subentry_id] is not None and plans[subentry_id].tail
+            spec.live
+            and (parts := plans[subentry_id].pieces) is not None
+            and parts.tail
             for subentry_id, spec in wanted.items()
         ):
             timeline = await self._compiler.async_tail(cfg, frame.watermark_end, now)
 
         edges: set[float] = set()
-        for pieces in plans.values():
-            edges |= edges_of(pieces)
+        for planned in plans.values():
+            edges |= edges_of(planned)
         # Every edge the cache does not already answer, in the one read.
         missing = {
             edge
@@ -309,10 +311,10 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
 
         partials: dict[Partial, PartialValue] = {}
         used_hours: set[float] = set()
-        for pieces in plans.values():
-            if pieces is None:
+        for planned in plans.values():
+            if planned.pieces is None:
                 continue
-            for partial in pieces.partials:
+            for partial in planned.pieces.partials:
                 used_hours.add(partial.hour)
                 if partial not in partials:
                     partials[partial] = await self._partial(
@@ -328,12 +330,11 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
                     cfg,
                     spec,
                     frame,
+                    plans[subentry_id],
                     sum_at,
                     partials.get,
                     timeline,
                     now,
-                    tz,
-                    windows[subentry_id],
                 )
             except (ArithmeticError, ValueError) as err:
                 readings[subentry_id] = self._unreadable(subentry_id, err)

@@ -467,9 +467,9 @@ async def cold_reading(compiler, hass, cfg, spec: Spec, now: float, tz):
     also reads everything it needs.
     """
     frame = await frame_of(compiler, hass, cfg.entity_id)
-    pieces_ = reading.plan(spec, frame, now, tz)
+    planned = reading.plan(spec, frame, now, tz)
     sums: dict[tuple[str, float], float] = {}
-    if (wanted := reading.edges_of(pieces_)) and frame.existing:
+    if (wanted := reading.edges_of(planned)) and frame.existing:
         at_edges = await get_instance(hass).async_add_executor_job(
             ds_rows.sums_at_edges, hass, set(frame.existing), wanted
         )
@@ -478,7 +478,7 @@ async def cold_reading(compiler, hass, cfg, spec: Spec, now: float, tz):
                 sums[(statistic_id, edge)] = at_edge.get(statistic_id, 0.0)
     partials: dict[Partial, reading.PartialValue] = {}
     hours: dict[float, object] = {}
-    for partial in pieces_.partials if pieces_ is not None else ():
+    for partial in planned.pieces.partials if planned.pieces is not None else ():
         if partial not in partials:
             partials[partial] = await _cold_partial(
                 compiler, cfg, frame, sums, hours, partial
@@ -486,8 +486,8 @@ async def cold_reading(compiler, hass, cfg, spec: Spec, now: float, tz):
     timeline = None
     if (
         spec.live
-        and pieces_ is not None
-        and pieces_.tail
+        and planned.pieces is not None
+        and planned.pieces.tail
         and frame.watermark_end is not None
     ):
         timeline = await compiler.async_tail(cfg, frame.watermark_end, now)
@@ -495,11 +495,11 @@ async def cold_reading(compiler, hass, cfg, spec: Spec, now: float, tz):
         cfg,
         spec,
         frame,
+        planned,
         lambda sid, edge: sums.get((sid, edge), 0.0),
         partials.get,
         timeline,
         now,
-        tz,
     )
 
 
@@ -728,8 +728,8 @@ async def measure(hass, cases, run: Run, now: float, tz, ws_client=None) -> Benc
 
     for case in cases.sensors:
         frame = frames[case.entity_id]
-        pieces = reading.plan(case.spec, frame, now, tz)
-        edges = sorted(reading.edges_of(pieces))
+        planned = reading.plan(case.spec, frame, now, tz)
+        edges = sorted(reading.edges_of(planned))
 
         async def one(frame=frame, edges=edges):
             # What `PeriodCoordinator._async_update_data` does with a cold
@@ -744,18 +744,18 @@ async def measure(hass, cases, run: Run, now: float, tz, ws_client=None) -> Benc
                         sums[(statistic_id, edge)] = at.get(statistic_id, 0.0)
             return sums
 
-        def value(sums, case=case, frame=frame):
+        def value(sums, case=case, frame=frame, planned=planned):
             # Anchored on the watermark, so there is no tail and no part
             # hour: the reading is the sums at the two edges.
             got = reading.compute(
                 entity_configs[case.entity_id],
                 case.spec,
                 frame,
+                planned,
                 lambda sid, edge: sums.get((sid, edge), 0.0),
                 lambda partial: None,
                 None,
                 now,
-                tz,
             )
             return {
                 "value": got.value,

@@ -69,10 +69,30 @@ def spec(states=("on",), metric="duration", period="today", live=True, custom=No
     return Spec(tuple(states), metric, period, live, custom)
 
 
-def value(spec_, frame=FRAME, timeline=TAIL, now=NOW, config=None):
+def read(
+    spec_,
+    frame=FRAME,
+    partial_at=no_partial,
+    timeline=TAIL,
+    now=NOW,
+    config=None,
+    window=None,
+):
+    """Plan, then compute over that plan - the two calls the coordinator makes."""
     return compute(
-        config or cfg(), spec_, frame, sum_at, no_partial, timeline, now, UTC
-    ).value
+        config or cfg(),
+        spec_,
+        frame,
+        plan(spec_, frame, now, UTC, window),
+        sum_at,
+        partial_at,
+        timeline,
+        now,
+    )
+
+
+def value(spec_, frame=FRAME, timeline=TAIL, now=NOW, config=None):
+    return read(spec_, frame=frame, timeline=timeline, now=now, config=config).value
 
 
 # A custom window: what the coordinator hands `compute` after rendering.
@@ -84,8 +104,15 @@ def custom(window, **kwargs):
     return spec(period="custom", **kwargs), window
 
 
-def read(spec_, window, partial_at, frame=FRAME, timeline=TAIL, now=NOW):
-    return compute(cfg(), spec_, frame, sum_at, partial_at, timeline, now, UTC, window)
+def read_custom(spec_, window, partial_at, frame=FRAME, timeline=TAIL, now=NOW):
+    return read(
+        spec_,
+        frame=frame,
+        partial_at=partial_at,
+        timeline=timeline,
+        now=now,
+        window=window,
+    )
 
 
 def test_duration_is_the_compiled_change_plus_the_live_tail():
@@ -118,9 +145,7 @@ def test_a_set_of_states_is_summed():
 
 def test_a_finished_period_reads_only_the_statistics():
     assert value(spec(period="yesterday")) == 0.0
-    reading = compute(
-        cfg(), spec(period="yesterday"), FRAME, sum_at, no_partial, TAIL, NOW, UTC
-    )
+    reading = read(spec(period="yesterday"))
     assert reading.period_start == T0 - 24 * HOUR
     assert reading.period_end == T0
 
@@ -128,24 +153,18 @@ def test_a_finished_period_reads_only_the_statistics():
 def test_all_time_starts_where_the_series_does():
     frame = Frame(EXISTING, W_END, T0 - HOUR)
     assert value(spec(period="all_time", metric="share"), frame=frame) == 38.5
-    reading = compute(
-        cfg(), spec(period="all_time"), frame, sum_at, no_partial, TAIL, NOW, UTC
-    )
+    reading = read(spec(period="all_time"), frame=frame)
     assert reading.period_start == T0 - HOUR
     assert reading.period_end is None
 
 
 def test_nothing_compiled_yet_has_no_value_and_no_reason():
-    reading = compute(
-        cfg(), spec(), Frame({}, None, None), sum_at, no_partial, None, NOW, UTC
-    )
+    reading = read(spec(), frame=Frame({}, None, None), timeline=None)
     assert reading == (None, T0, T0 + 24 * HOUR, None, False)
 
 
 def test_a_state_the_entry_ignores_and_never_recorded_is_refused():
-    reading = compute(
-        cfg(), spec(states=("unknown",)), FRAME, sum_at, no_partial, TAIL, NOW, UTC
-    )
+    reading = read(spec(states=("unknown",)))
     assert reading.value is None
     assert reading.reason == REASON_NOT_RECORDED
     # But a state the entry now ignores that has a statistic is still read;
@@ -169,8 +188,11 @@ def test_edges_are_the_period_start_and_the_end_of_the_compiled_part():
         T0 - 24 * HOUR,
         T0,
     }
-    assert plan(spec(), Frame({}, None, None), NOW, UTC) is None
-    assert plan(spec(period="all_time"), Frame(EXISTING, W_END, None), NOW, UTC) is None
+    assert plan(spec(), Frame({}, None, None), NOW, UTC).pieces is None
+    assert (
+        plan(spec(period="all_time"), Frame(EXISTING, W_END, None), NOW, UTC).pieces
+        is None
+    )
 
 
 def test_spec_from_fills_the_defaults():
@@ -347,26 +369,26 @@ def test_an_exact_part_hour_adds_to_the_whole_ones_and_the_tail():
     spec_, window = custom((T0 + 900, T0 + 24 * HOUR))
     # Half an hour on in the part hour, one whole hour on after it, ten
     # minutes on in the tail.
-    reading = read(spec_, window, exact_hour_0)
+    reading = read_custom(spec_, window, exact_hour_0)
     assert reading.value == 1.67
     assert reading.estimated is False
     assert reading.period_start == T0 + 900
     spec_, window = custom((T0 + 900, T0 + 24 * HOUR), metric="count")
-    assert read(spec_, window, exact_hour_0).value == 2
+    assert read_custom(spec_, window, exact_hour_0).value == 2
 
 
 def test_a_pro_rated_part_hour_is_marked_estimated():
     spec_, window = custom((T0 + 900, T0 + 24 * HOUR))
     # Three quarters of the hour's half hour on, then the same as above.
-    reading = read(spec_, window, prorated_hour_0)
+    reading = read_custom(spec_, window, prorated_hour_0)
     assert reading.value == 1.54
     assert reading.estimated is True
     spec_, window = custom((T0 + 2700, T0 + 24 * HOUR))
-    assert read(spec_, window, prorated_hour_0).value == 1.29
+    assert read_custom(spec_, window, prorated_hour_0).value == 1.29
     spec_, window = custom((T0 + 900, T0 + 24 * HOUR), metric="count")
-    assert read(spec_, window, prorated_hour_0).value == 2
+    assert read_custom(spec_, window, prorated_hour_0).value == 2
     spec_, window = custom((T0 + 2700, T0 + 24 * HOUR), metric="count")
-    assert read(spec_, window, prorated_hour_0).value == 1
+    assert read_custom(spec_, window, prorated_hour_0).value == 1
 
 
 def test_a_part_hour_at_the_end_of_a_finished_window():
@@ -377,7 +399,7 @@ def test_a_part_hour_at_the_end_of_a_finished_window():
         return prorate(partial, {"on": 1800.0, "off": 1800.0}, {"on": 1.0, "off": 0.0})
 
     # Two whole hours: one hour on; then half of the third hour's half hour.
-    reading = read(spec_, window, prorated_hour_2)
+    reading = read_custom(spec_, window, prorated_hour_2)
     assert reading.value == 1.25
     assert reading.estimated is True
     assert reading.period_end == T0 + 9000
@@ -385,7 +407,7 @@ def test_a_part_hour_at_the_end_of_a_finished_window():
 
 def test_a_part_hour_nobody_can_answer_contributes_nothing():
     spec_, window = custom((T0 + 900, T0 + 24 * HOUR))
-    reading = read(spec_, window, lambda partial: None)
+    reading = read_custom(spec_, window, lambda partial: None)
     assert reading.value == 1.17
     assert reading.estimated is False
 
@@ -399,9 +421,7 @@ def test_a_rolling_period_is_read_like_any_other():
             partial, Timeline(T0 + 2 * HOUR, "off", [(T0 + 9000, "on")])
         )
 
-    reading = compute(
-        cfg(), spec(period="last_hour"), FRAME, sum_at, exact_hour_2, TAIL, NOW, UTC
-    )
+    reading = read(spec(period="last_hour"), partial_at=exact_hour_2)
     assert reading.value == 0.67
     assert reading.period_start == NOW - HOUR
     assert reading.period_end == NOW
@@ -410,16 +430,7 @@ def test_a_rolling_period_is_read_like_any_other():
 def test_a_rolling_period_not_live_is_anchored_on_the_watermark():
     # The last compiled hour, whole: the window is its length and moves
     # only when a compile does.
-    reading = compute(
-        cfg(),
-        spec(period="last_hour", live=False),
-        FRAME,
-        sum_at,
-        no_partial,
-        TAIL,
-        NOW,
-        UTC,
-    )
+    reading = read(spec(period="last_hour", live=False))
     assert reading.value == 0.5
     assert reading.period_start == T0 + 2 * HOUR
     assert reading.period_end == W_END
@@ -433,7 +444,7 @@ def test_a_rolling_period_not_live_is_anchored_on_the_watermark():
 def test_a_custom_period_needs_its_window():
     spec_, _ = custom(None)
     with pytest.raises(ValueError):
-        compute(cfg(), spec_, FRAME, sum_at, no_partial, TAIL, NOW, UTC)
+        read(spec_)
 
 
 def test_spec_from_reads_the_custom_templates_only_for_a_custom_period():

@@ -108,6 +108,22 @@ class Pieces(NamedTuple):
     tail: tuple[float, float] | None
 
 
+class Plan(NamedTuple):
+    """A sensor's window and the pieces it is read in.
+
+    One resolution of the window, made once and then spent: the
+    coordinator reads the edges `edges_of` names and `compute` reads the
+    sums at those same edges, so the two cannot disagree about which.
+    `pieces` is None when nothing is compiled yet, and `start` when an
+    all-time window has no series to open at - the window is still
+    reported.
+    """
+
+    start: float | None
+    end: float
+    pieces: Pieces | None
+
+
 def spec_from(data: Mapping[str, Any]) -> Spec:
     period = data.get(CONF_PERIOD, "this_month")
     custom = (
@@ -197,20 +213,20 @@ def plan(
     now: float,
     tz: tzinfo,
     window: tuple[float, float] | None = None,
-) -> Pieces | None:
-    """The pieces `compute` will read, or None when nothing is compiled yet."""
+) -> Plan:
+    """Resolve the window and split it into the pieces `compute` will read."""
     start, end = _window(spec, frame, now, tz, window)
     if start is None or frame.watermark_end is None:
-        return None
-    return pieces(start, end, frame.watermark_end, now)
+        return Plan(start, end, None)
+    return Plan(start, end, pieces(start, end, frame.watermark_end, now))
 
 
-def edges_of(pieces_: Pieces | None) -> set[float]:
-    """The edges whose sums the pieces need: the whole hours' and each part hour's."""
-    if pieces_ is None:
+def edges_of(planned: Plan) -> set[float]:
+    """The edges whose sums the plan needs: the whole hours' and each part hour's."""
+    if planned.pieces is None:
         return set()
-    edges: set[float] = set(pieces_.compiled or ())
-    for partial in pieces_.partials:
+    edges: set[float] = set(planned.pieces.compiled or ())
+    for partial in planned.pieces.partials:
         edges |= {partial.hour, partial.hour + HOUR}
     return edges
 
@@ -276,22 +292,21 @@ def compute(
     cfg: EntityConfig,
     spec: Spec,
     frame: Frame,
+    planned: Plan,
     sum_at: Callable[[str, float], float],
     partial_at: Callable[[Partial], PartialValue | None],
     timeline: Timeline | None,
     now: float,
-    tz: tzinfo,
-    window: tuple[float, float] | None = None,
 ) -> Reading:
-    """The sensor's value as of now.
+    """The sensor's value as of now, over the pieces `plan` resolved.
 
     `partial_at` answers None for a part hour nobody can speak for.
     Rounded to what the display shows, so a tick where nothing changed
     writes nothing to the recorder.
     """
-    start, end = _window(spec, frame, now, tz, window)
+    start, end, parts = planned
     period_end = None if end == math.inf else end
-    if start is None or frame.watermark_end is None:
+    if start is None or parts is None:
         return Reading(None, start, period_end, None)
 
     ids = ids_for(spec, frame.existing, _source_metric(spec))
@@ -303,7 +318,6 @@ def compute(
     def counted(token: str) -> bool:
         return not wanted or token in wanted
 
-    parts = pieces(start, end, frame.watermark_end, now)
     compiled = 0.0
     if parts.compiled is not None:
         first, last = parts.compiled
