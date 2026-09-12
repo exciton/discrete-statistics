@@ -12,7 +12,7 @@ after the watermark from a live `Timeline` tallied per state.
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from datetime import tzinfo
 from typing import TYPE_CHECKING, Any, NamedTuple
 
@@ -132,7 +132,7 @@ def tokens_of(spec: Spec) -> tuple[str, ...]:
     return tuple(state_token(state) for state in spec.states)
 
 
-def statistic_ids(spec: Spec, existing: Mapping[str, str], metric: str) -> list[str]:
+def ids_for(spec: Spec, existing: Mapping[str, str], metric: str) -> list[str]:
     """The entity's statistics of one metric for the spec's states - all when none."""
     wanted = tokens_of(spec)
     return [
@@ -228,6 +228,32 @@ def exact_partial(partial: Partial, timeline: Timeline) -> PartialValue:
     return PartialValue(seconds, counts, True)
 
 
+def hour_change(
+    existing: Iterable[str],
+    sum_at: Callable[[str, float], float],
+    hour: float,
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Seconds and counts per state token over `[hour, hour + HOUR)`.
+
+    The sums are cumulative, so an hour's change is the difference
+    between its two edges; durations are stored in hours and answered
+    here in seconds, as a tally is. Two statistics of one token add, as
+    they do everywhere.
+    """
+    seconds: dict[str, float] = {}
+    counts: dict[str, float] = {}
+    for statistic_id in existing:
+        if (parts := parse(statistic_id)) is None:
+            continue
+        token, metric = parts[1], parts[2]
+        change = sum_at(statistic_id, hour + HOUR) - sum_at(statistic_id, hour)
+        if metric == METRIC_DURATION:
+            seconds[token] = seconds.get(token, 0.0) + change * HOUR
+        else:
+            counts[token] = counts.get(token, 0.0) + change
+    return seconds, counts
+
+
 def prorate(
     partial: Partial, seconds: Mapping[str, float], counts: Mapping[str, float]
 ) -> PartialValue:
@@ -266,7 +292,7 @@ def compute(
     if start is None or frame.watermark_end is None:
         return Reading(None, start, period_end, None)
 
-    ids = statistic_ids(spec, frame.existing, _source_metric(spec))
+    ids = ids_for(spec, frame.existing, _source_metric(spec))
     if spec.states and not ids and all(cfg.resolve(s) is None for s in spec.states):
         return Reading(None, start, period_end, REASON_NOT_RECORDED)
 

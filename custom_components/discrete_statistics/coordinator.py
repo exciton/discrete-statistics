@@ -42,7 +42,7 @@ from homeassistant.util import dt as dt_util
 from . import rows
 from .compiler import Compiler, Timeline, compiled_signal
 from .config import EntityConfig
-from .const import DOMAIN, HOUR, METRIC_DURATION, SUBENTRY_SENSOR
+from .const import DOMAIN, HOUR, SUBENTRY_SENSOR
 from .periods import custom_window
 from .reading import (
     Frame,
@@ -54,11 +54,11 @@ from .reading import (
     compute,
     edges_of,
     exact_partial,
+    hour_change,
     plan,
     prorate,
     spec_from,
 )
-from .statistic_ids import parse
 from .templates import render_datetime
 
 _LOGGER = logging.getLogger(__name__)
@@ -179,20 +179,12 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
                 )
             if (timeline := hours[partial.hour]) is not None:
                 return exact_partial(partial, timeline)
-        seconds: dict[str, float] = {}
-        counts: dict[str, float] = {}
-        for statistic_id in frame.existing:
-            if (parts := parse(statistic_id)) is None:
-                continue
-            token, metric = parts[1], parts[2]
-            change = sums.get((statistic_id, partial.hour + HOUR), 0.0) - sums.get(
-                (statistic_id, partial.hour), 0.0
-            )
-            if metric == METRIC_DURATION:
-                seconds[token] = seconds.get(token, 0.0) + change * HOUR
-            else:
-                counts[token] = counts.get(token, 0.0) + change
-        return prorate(partial, seconds, counts)
+        change = hour_change(
+            frame.existing,
+            lambda statistic_id, edge: sums.get((statistic_id, edge), 0.0),
+            partial.hour,
+        )
+        return prorate(partial, *change)
 
     async def _async_update_data(self) -> dict[str, Reading]:
         entry = self.config_entry

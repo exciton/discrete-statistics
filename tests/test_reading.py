@@ -18,6 +18,7 @@ from custom_components.discrete_statistics.reading import (
     compute,
     edges_of,
     exact_partial,
+    hour_change,
     pieces,
     plan,
     prorate,
@@ -271,6 +272,44 @@ def test_an_exact_part_hour_is_the_timeline_cut_at_the_edge():
     assert exact_partial(Partial(T0, T0 + 900, T0 + HOUR), HOUR_0) == PartialValue(
         {"off": 900.0, "on": 1800.0}, {"off": 0, "on": 1}, True
     )
+
+
+def test_hour_change_reads_durations_as_seconds_and_counts_as_counts():
+    sums = {
+        (ON_D, T0): 1.0,
+        (ON_D, T0 + HOUR): 1.5,
+        (ON_C, T0): 4.0,
+        (ON_C, T0 + HOUR): 5.0,
+        (OFF_D, T0): 2.0,
+        (OFF_D, T0 + HOUR): 2.5,
+        (OFF_C, T0): 7.0,
+        (OFF_C, T0 + HOUR): 7.0,
+    }
+    seconds, counts = hour_change(EXISTING, lambda sid, edge: sums[(sid, edge)], T0)
+    assert seconds == {"on": 1800.0, "off": 1800.0}
+    assert counts == {"on": 1.0, "off": 0.0}
+
+
+def test_hour_change_adds_two_statistics_of_one_token():
+    # Two entities' `on` durations fold into the one token, as they do
+    # everywhere the token is the key.
+    other = "discrete_statistics:binary_sensor_other_on_duration"
+    sums = {(ON_D, T0): 0.0, (ON_D, T0 + HOUR): 0.25, (other, T0): 0.0}
+    seconds, counts = hour_change(
+        [ON_D, other], lambda sid, edge: sums.get((sid, edge), 0.5), T0
+    )
+    assert seconds == {"on": 0.75 * HOUR}
+    assert counts == {}
+
+
+def test_hour_change_skips_an_id_it_cannot_parse():
+    seconds, counts = hour_change(
+        ["sensor.energy", ON_D],
+        lambda sid, edge: {T0: 0.0, T0 + HOUR: 1.0}[edge],
+        T0,
+    )
+    assert seconds == {"on": float(HOUR)}
+    assert counts == {}
 
 
 def test_a_pro_rated_part_hour_scales_the_hours_change():
