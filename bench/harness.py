@@ -33,9 +33,8 @@ from custom_components.discrete_statistics import periods, reading, websocket
 from custom_components.discrete_statistics import rows as ds_rows
 from custom_components.discrete_statistics.compiler import Compiler
 from custom_components.discrete_statistics.config import entity_config_from_entry
-from custom_components.discrete_statistics.const import HOUR, METRIC_DURATION
+from custom_components.discrete_statistics.const import HOUR
 from custom_components.discrete_statistics.reading import Frame, Partial, Spec
-from custom_components.discrete_statistics.statistic_ids import parse as parse_sid
 
 from . import cases as cases_module
 
@@ -467,20 +466,14 @@ async def _cold_partial(compiler, cfg, frame, sums, hours, partial: Partial):
             )
         if (timeline := hours[partial.hour]) is not None:
             return reading.exact_partial(partial, timeline)
-    seconds: dict[str, float] = {}
-    counts: dict[str, float] = {}
-    for statistic_id in frame.existing:
-        if (parts := parse_sid(statistic_id)) is None:
-            continue
-        token, metric = parts[1], parts[2]
-        change = sums.get((statistic_id, partial.hour + HOUR), 0.0) - sums.get(
-            (statistic_id, partial.hour), 0.0
-        )
-        if metric == METRIC_DURATION:
-            seconds[token] = seconds.get(token, 0.0) + change * HOUR
-        else:
-            counts[token] = counts.get(token, 0.0) + change
-    return reading.prorate(partial, seconds, counts)
+    return reading.prorate(
+        partial,
+        *reading.hour_change(
+            frame.existing,
+            lambda sid, edge: sums.get((sid, edge), 0.0),
+            partial.hour,
+        ),
+    )
 
 
 async def cold_reading(compiler, hass, cfg, spec: Spec, now: float, tz):
