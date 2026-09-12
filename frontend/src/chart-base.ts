@@ -2,7 +2,7 @@
 // which loads shortly after first render; creating a stock
 // statistics-graph card pulls that chunk in for a dashboard that gets
 // here sooner.
-export const CHART_BASE_TIMEOUT_MS = 10_000;
+const CHART_BASE_TIMEOUT_MS = 10_000;
 
 export async function ensureChartBase(): Promise<void> {
   if (customElements.get("ha-chart-base")) {

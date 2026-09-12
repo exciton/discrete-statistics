@@ -13,7 +13,7 @@ export interface StateStatistic {
   color?: string;
 }
 
-export const settingState = (setting: StateSetting): string =>
+const settingState = (setting: StateSetting): string =>
   typeof setting === "string" ? setting : setting.state;
 
 // An entry names a statistic by token, or — since non-Latin text has no

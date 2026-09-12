@@ -7,7 +7,7 @@
 // back to the palette rather than handing echarts a value it would reject.
 
 // The names the frontend's ui_color selector offers (compute-color.ts).
-export const THEME_COLORS = [
+const THEME_COLORS = [
   "primary", "accent", "red", "pink", "purple", "deep-purple", "indigo",
   "blue", "light-blue", "cyan", "teal", "green", "light-green", "lime",
   "yellow", "amber", "orange", "deep-orange", "brown", "light-grey",
