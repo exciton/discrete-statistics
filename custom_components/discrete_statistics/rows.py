@@ -329,9 +329,7 @@ def edge_rows(
     """
     if hourly:
         return rows_from(session, metadata_ids, edges[0], edges[-1])
-    return rows_before(
-        session, [(mid, edge) for mid in metadata_ids for edge in edges]
-    )
+    return rows_before(session, [(mid, edge) for mid in metadata_ids for edge in edges])
 
 
 def _rows_between(
