@@ -122,8 +122,11 @@ module that writes; `rows` reads — `session_scope(read_only=True)`, the
 newest row before each of a set of edges, the sums at a set of edges, the
 rows of a range and the one before it, the newest rows before one, the
 rows standing in a window, the earliest and the newest row of a series — for
-`websocket`, the compiler and the coordinator alike; and `config_flow`
-reads once per options dialog, the entity's distinct states, to draw a
+`websocket`, the compiler and the coordinator alike. Every one of those
+reads is a single statement except `rows.bases`, the compile's base read,
+which seeks once per statistic: N statements per compile chunk for an
+entity with N statistics. It has not been batched onto `rows_before` yet.
+And `config_flow` reads once per options dialog, the entity's distinct states, to draw a
 mapping row for each, and once per sensor dialog, the entity's statistics,
 to offer their states; so the invariants below are the compiler's alone.
 `Compiler.async_tail` is the compiler's *read* path — the carry chain,
