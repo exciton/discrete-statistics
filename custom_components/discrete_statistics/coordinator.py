@@ -134,7 +134,8 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
         # range still stands and one after it does not: a finished window
         # keeps its sums across every hourly compile. Hour timelines go
         # regardless - a recompile after a mapping change reads the same
-        # rows differently.
+        # rows differently. New objects rather than mutation: the refresh
+        # in flight goes on writing into the ones it captured.
         self._generation += 1
         self._frame = None
         self._sums = {k: v for k, v in self._sums.items() if k[1] <= start}
@@ -240,7 +241,10 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
         tz = dt_util.get_default_time_zone()
 
         # Everything below predates any compile that lands in one of its
-        # awaits, so it is written back only while the generation stands.
+        # awaits, so it is written back only while the generation stands:
+        # otherwise a stale sum this refresh read before the compile would
+        # land in the fresh cache, read as a hit, and hide that hour's
+        # rewrite.
         generation = self._generation
         sums = self._sums
         hours = self._hours

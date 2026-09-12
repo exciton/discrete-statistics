@@ -114,9 +114,9 @@ class Plan(NamedTuple):
     One resolution of the window, made once and then spent: the
     coordinator reads the edges `edges_of` names and `compute` reads the
     sums at those same edges, so the two cannot disagree about which.
-    `pieces` is None when nothing is compiled yet, and `start` when an
-    all-time window has no series to open at - the window is still
-    reported.
+    `pieces` is None when nothing is compiled yet, and `start` is None
+    when an all-time window has no series to open at - so only `end`
+    reaches the sensor, and the window is still reported.
     """
 
     start: float | None
@@ -144,13 +144,13 @@ def spec_from(data: Mapping[str, Any]) -> Spec:
     )
 
 
-def tokens_of(spec: Spec) -> tuple[str, ...]:
+def _tokens_of(spec: Spec) -> tuple[str, ...]:
     return tuple(state_token(state) for state in spec.states)
 
 
-def ids_for(spec: Spec, existing: Mapping[str, str], metric: str) -> list[str]:
+def _ids_for(spec: Spec, existing: Mapping[str, str], metric: str) -> list[str]:
     """The entity's statistics of one metric for the spec's states - all when none."""
-    wanted = tokens_of(spec)
+    wanted = _tokens_of(spec)
     return [
         statistic_id
         for statistic_id in existing
@@ -298,7 +298,7 @@ def compute(
     timeline: Timeline | None,
     now: float,
 ) -> Reading:
-    """The sensor's value as of now, over the pieces `plan` resolved.
+    """The sensor's value as of now, over the pieces `plan` resolved from this frame.
 
     `partial_at` answers None for a part hour nobody can speak for.
     Rounded to what the display shows, so a tick where nothing changed
@@ -309,11 +309,11 @@ def compute(
     if start is None or parts is None:
         return Reading(None, start, period_end, None)
 
-    ids = ids_for(spec, frame.existing, _source_metric(spec))
+    ids = _ids_for(spec, frame.existing, _source_metric(spec))
     if spec.states and not ids and all(cfg.resolve(s) is None for s in spec.states):
         return Reading(None, start, period_end, REASON_NOT_RECORDED)
 
-    wanted = tokens_of(spec)
+    wanted = _tokens_of(spec)
 
     def counted(token: str) -> bool:
         return not wanted or token in wanted
@@ -372,7 +372,7 @@ def suggested_entity_id(entity_id: str, spec: Spec) -> str:
     rather than a suffix, since `_this_month` is anyone's - one
     `entity_globs` exclude, `sensor.discrete_*`, covers them all.
     """
-    states = "_".join(tokens_of(spec)) or "all"
+    states = "_".join(_tokens_of(spec)) or "all"
     return (
         f"sensor.discrete_{slugify(entity_id, separator='_')}"
         f"_{states}_{spec.metric}_{spec.period}"

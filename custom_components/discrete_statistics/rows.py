@@ -150,6 +150,8 @@ def seek_statements(
     Each yields the distinct picked rows, as `(metadata_id, start_ts,
     sum)`. One statement on SQLite and Postgres; one per `SEEK_BATCH`
     arms elsewhere.
+
+    Public for the dialect tests.
     """
     if dialect in _PAIRS:
         return [_pair_seek(dialect).bindparams(pairs=json.dumps(pairs))]
@@ -321,34 +323,27 @@ def edge_rows(
     than a seek per pair and the row it opens on answers the first edge;
     at any longer period the edges are sparse in the series and the seeks
     are the read. Either way the caller resolves an edge by
-    `buckets.before_edges`.
+    `buckets.before_edges`. Not deduped here: `rows_from` and
+    `rows_before` both dedupe what they are handed, so a second pass
+    here would only repeat it.
     """
-    unique = list(dict.fromkeys(metadata_ids))
     if hourly:
-        return rows_from(session, unique, edges[0], edges[-1])
-    return rows_before(session, [(mid, edge) for mid in unique for edge in edges])
-
-
-def rows_between(
-    session: Session, metadata_ids: set[int], start: float, end: float
-) -> dict[int, dict[float, Row]]:
-    """Every statistic's rows in [start, end), in one query."""
-    return _rows(
-        session,
-        metadata_ids,
-        Statistics.start_ts >= start,
-        Statistics.start_ts < end,
+        return rows_from(session, metadata_ids, edges[0], edges[-1])
+    return rows_before(
+        session, [(mid, edge) for mid in metadata_ids for edge in edges]
     )
 
 
-def _rows(
-    session: Session, metadata_ids: set[int], *where: Any
+def _rows_between(
+    session: Session, metadata_ids: set[int], start: float, end: float
 ) -> dict[int, dict[float, Row]]:
+    """Every statistic's rows in [start, end), in one query. Used only by `standing`."""
     rows = session.execute(
         select(Statistics.metadata_id, Statistics.start_ts, Statistics.sum).where(
             Statistics.metadata_id.in_(metadata_ids),
             Statistics.sum.is_not(None),
-            *where,
+            Statistics.start_ts >= start,
+            Statistics.start_ts < end,
         )
     )
     result: dict[int, dict[float, Row]] = {}
@@ -412,7 +407,7 @@ def standing(
 ) -> dict[str, set[float]]:
     """The hours in [start, end) at which each statistic already holds a row. Executor."""
     with _ids(hass, statistic_ids) as (session, ids):
-        between = rows_between(session, set(ids), start, end)
+        between = _rows_between(session, set(ids), start, end)
         return {ids[metadata_id]: set(rows) for metadata_id, rows in between.items()}
 
 

@@ -590,10 +590,10 @@ def _custom_window(
         return dict.fromkeys(data), {"base": "custom_only"} if given else {}
     rendered: dict[str, float | None] = {CONF_WINDOW_START: None, CONF_WINDOW_END: None}
     # Rendered before the combination is judged, so a broken template is
-    # blamed on itself rather than on the combination it also breaks.
-    # Start is checked first, so a template broken in both fields is blamed
-    # on Start - the field a person reads first, and the one whose error
-    # would otherwise be masked by End's.
+    # blamed on itself rather than on the combination it also breaks; Start
+    # is checked first, so a template broken in both fields is blamed on
+    # Start - the field a person reads first, and the one whose error would
+    # otherwise be masked by End's.
     for key, text in ((CONF_WINDOW_START, start), (CONF_WINDOW_END, end)):
         if text is None:
             continue

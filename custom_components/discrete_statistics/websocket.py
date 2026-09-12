@@ -41,12 +41,15 @@ from .statistic_ids import family
 # walked on the recorder's thread.
 MAX_BUCKETS = 10_000
 # The shortest a period can be, for bounding the count before walking it.
+# A spring-forward can only cost a period one hour, however many days it
+# spans, so every period past "hour" is nominal minus one - not nominal
+# minus one per day.
 _SHORTEST: dict[Period, float] = {
     "hour": HOUR,
     "day": 23 * HOUR,
-    "week": 7 * 23 * HOUR,
-    "month": 28 * 24 * HOUR,
-    "year": 365 * 24 * HOUR,
+    "week": 7 * 24 * HOUR - HOUR,
+    "month": 28 * 24 * HOUR - HOUR,
+    "year": 365 * 24 * HOUR - HOUR,
 }
 
 COMMAND = f"{DOMAIN}/buckets"
