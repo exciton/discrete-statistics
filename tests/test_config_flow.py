@@ -335,9 +335,8 @@ async def test_a_measuring_entity_is_refused(recorder, entity_registry):
     """Each distinct reading would become its own pair of statistics.
 
     It would not fail loudly - a numeric state builds a perfectly valid ID -
-    so nothing else would stop it: hundreds of statistics, written densely,
-    forever, with 21.5 and 2.15 sharing one because the token keeps only
-    digits.
+    so nothing else would stop it: hundreds of statistics, forever, with
+    21.5 and 2.15 sharing one because the token keeps only digits.
     """
     hass = recorder
     assert await async_setup_component(hass, DOMAIN, {})

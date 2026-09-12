@@ -823,9 +823,9 @@ async def test_a_deleted_statistic_is_forgotten_not_recreated(recorder, freezer)
 async def test_deleting_one_metric_sticks_until_its_state_recurs(recorder, freezer):
     """Deletion is per statistic, not per state.
 
-    Density keyed by state would undo it on the very next compile, the
-    surviving count keeping "on" alive. Keyed by statistic it sticks - until
-    "on" actually happens again, at which point an observed state is
+    Keyed by state, the surviving count would keep "on" alive and undo
+    the deletion on the very next compile. Keyed by statistic it sticks -
+    until "on" actually happens again, at which point an observed state is
     recorded in full.
     """
     hass = recorder
@@ -856,12 +856,11 @@ async def test_deleting_one_metric_sticks_until_its_state_recurs(recorder, freez
 
 
 async def test_a_quiet_state_writes_no_rows_and_the_hours_still_tile(recorder, freezer):
-    """The invariant that replaced density.
+    """A state absent from an hour gets no row there.
 
-    A state absent from an hour gets no row there; the states present do,
-    and their changes sum to the hour. Asserted on rows, not on ID
-    membership: nothing ever removes a statistics_meta row, so membership
-    proves nothing.
+    The states present do, and their changes sum to the hour. Asserted on
+    rows, not on ID membership: nothing ever removes a statistics_meta row,
+    so membership proves nothing.
     """
     hass = recorder
     start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
@@ -963,7 +962,7 @@ async def test_two_entities_never_write_into_each_others_statistics(recorder, fr
 
     The entity IDs are chosen so one slug is a prefix of the other at an
     underscore boundary - the case a multi-token state would collide on.
-    A filter that is too broad would have each compile write dense rows into
+    A filter that is too broad would have each compile write rows into
     the other entity's series, and rename its metadata to its own name.
     """
     hass = recorder
@@ -1353,7 +1352,8 @@ async def test_a_full_recompute_still_trims_only_its_opening_chunk(
 
     on = await read_sums(hass, DURATION_ON, start, start + timedelta(hours=6))
     off = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=6))
-    # Dense from hour 1, and every hour still totals wall-clock time.
+    # Both states have a row from hour 1 on, and every hour still totals
+    # wall-clock time.
     assert len(on) == len(off) == 5
     for hour in range(5):
         spent = (on[hour] - (on[hour - 1] if hour else 0.0)) + (
@@ -2125,17 +2125,16 @@ async def test_ignore_short_as_the_default_debounces_end_to_end(recorder, freeze
 
 
 async def test_dense_rows_already_written_are_carried_across(recorder, freezer):
-    """A database compiled before sparse rows keeps working.
+    """A database holding a row per state per hour keeps working.
 
-    The dense rows stand, so they are rewritten wherever a window covers
-    them; nothing is deleted; the metadata loses its mean on the next
-    compile.
+    Those rows stand, so they are rewritten wherever a window covers them;
+    nothing is deleted; the metadata loses its mean on the next compile.
     """
     hass = recorder
     start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
     await _seed_two_states(hass, freezer, start)
 
-    # Rows as the old compiler wrote them: every hour, with a mean.
+    # A row every hour, with a mean: the scheme that came before.
     dense = {**metadata_for(METRIC_DURATION, DURATION_ON, "Grid Status: on (h)")}
     dense.update(has_mean=True, mean_type=StatisticMeanType.ARITHMETIC)
     async_add_external_statistics(

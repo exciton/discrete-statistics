@@ -166,12 +166,11 @@ class Compiler:
                 return 0
         else:
             start = watermark - (TRAILING_HOURS - 1) * HOUR
-        # `existing` is deliberately NOT handed on. It looks like a wasted
-        # query, but this read happens before _async_watermark's own read
-        # and only the later one in async_compile reliably reflects a
-        # statistic deleted moments earlier. Merging them makes the deletion
-        # tests flaky one run in three, and a stale view leaves a statistic
-        # unrelabelled and its standing rows unrewritten.
+        # `existing` is deliberately NOT handed on: this read happens
+        # before `_async_watermark`'s own, and only the later read in
+        # `async_compile` reliably reflects a statistic deleted moments
+        # earlier. A stale view leaves a statistic unrelabelled and its
+        # standing rows unrewritten.
         return await self.async_compile(cfg, start)
 
     async def async_compile(
@@ -508,10 +507,10 @@ class Compiler:
     async def _async_watermark(self, statistic_ids: Collection[str]) -> float | None:
         """Return the newest compiled hour for an entity, or None.
 
-        The max across every one of the entity's statistics: the rows are
-        dense only from a state's first appearance, so any single ID can
-        lag the others by any distance. `rows.series_end` answers all of
-        them in one read, a seek per statistic.
+        The max across every one of the entity's statistics: a statistic
+        gets a row only where it has something to record, so any single ID
+        can lag the others by any distance. `rows.series_end` answers all
+        of them in one read, a seek per statistic.
         """
         if not statistic_ids:
             return None

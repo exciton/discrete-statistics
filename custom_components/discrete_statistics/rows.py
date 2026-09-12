@@ -46,7 +46,7 @@ _PAIRS = {
         "json_extract(value, '$[1]')",
     ),
     # Nothing in CI parses this one: its syntax is verified by hand
-    # against a real server, through the EXPLAIN in the branch's report.
+    # against a real server.
     "postgresql": (
         "jsonb_array_elements(CAST(:pairs AS jsonb)) AS element(value)",
         "(value->>0)::integer",
@@ -162,14 +162,11 @@ def rows_before(
     `json_each` and Postgres with `jsonb_array_elements`, both a single
     correlated seek; MySQL/MariaDB and an engine we do not know get one
     constant-bound arm per pair, batched at `SEEK_BATCH`. Postgres plans
-    every arm separately, so expanding pays there - measured on a
-    13.9 GB database, 2,408 pairs: arms 9 ms SQLite / 163 ms Postgres,
-    expanded 10 ms SQLite / 15 ms Postgres. MySQL/MariaDB keeps the arms
-    because MariaDB will not push an outer-referenced bound into a
-    range: with the pairs handed in through `JSON_TABLE` it plans the
+    every arm separately, so expanding pays there. MySQL/MariaDB keeps
+    the arms because MariaDB will not push an outer-referenced bound
+    into a range: handed the pairs through `JSON_TABLE` it plans the
     correlated seek as `ref` on `metadata_id` alone and walks the series
-    per pair, 477 ms against the arms' 35 on 472 pairs of the sparse
-    bench database.
+    per pair. Figures in `docs/performance.md`.
 
     The rows come back distinct, without the edges that picked them, and
     a caller resolves an edge by `buckets.before_edges`: the newest
@@ -239,10 +236,9 @@ def _arms(batch: Sequence[tuple[int, float]]) -> Any:
 
     Written out rather than built from the Core, and with the bounds
     literal rather than bound: five hundred arms are five hundred
-    subqueries to construct and compile, and that Python costs more
-    than the server spends answering them - 472 pairs on MariaDB, 151 ms
-    through the Core against 35 ms as text, where the server's own share
-    of either is about 40. The bounds are coerced at the format site:
+    subqueries to construct and compile, and that Python costs more than
+    the server spends answering them (`docs/performance.md`). The bounds
+    are coerced at the format site:
     `int()` and `float()` can yield nothing but a number, so the
     rendering is not an injection, and `repr` round-trips the timestamp
     exactly.
@@ -468,8 +464,8 @@ def _bound(
 
     An aggregate over the set reads as a scan to Postgres, which walks
     `ix_statistics_start_ts` from one end of the table filtering for
-    ours - 4.6 M rows and over a second where the seeks are two index
-    lookups. A statistic with no row contributes nothing.
+    ours, where the seeks are two index lookups. A statistic with no row
+    contributes nothing.
     """
     with _ids(hass, statistic_ids) as (session, found_ids):
         ids = list(found_ids)
@@ -490,8 +486,8 @@ def series_start(hass: HomeAssistant, statistic_ids: set[str]) -> float | None:
 def series_end(hass: HomeAssistant, statistic_ids: set[str]) -> float | None:
     """The start of the newest row across the statistics, or None. Executor.
 
-    The watermark: the rows are dense only from a state's first
-    appearance, so the newest row of any one statistic can lag the
-    others by any distance.
+    The watermark: a statistic gets a row only where it has something to
+    record, so the newest row of any one can lag the others by any
+    distance.
     """
     return _bound(hass, statistic_ids, _latest, max)
