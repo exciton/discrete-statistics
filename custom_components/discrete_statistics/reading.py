@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from homeassistant.util import slugify
 
-from .bucketer import hour_start, tally
+from .bucketer import first_whole_hour, hour_start, tally
 from .config import CONF_STATES, EntityConfig
 from .const import (
     CONF_LIVE,
@@ -148,11 +148,6 @@ def _source_metric(spec: Spec) -> str:
     return METRIC_COUNT if spec.metric == METRIC_COUNT else METRIC_DURATION
 
 
-def _ceil_hour(timestamp: float) -> float:
-    floor = hour_start(timestamp)
-    return floor if floor == timestamp else floor + HOUR
-
-
 def pieces(start: float, end: float, watermark_end: float, now: float) -> Pieces:
     """Split [start, end) into what the statistics answer and what the tail does.
 
@@ -165,7 +160,7 @@ def pieces(start: float, end: float, watermark_end: float, now: float) -> Pieces
     if start >= watermark_end:
         return Pieces(None, (), (start, until))
     compiled_until = min(until, watermark_end)
-    first = _ceil_hour(start)
+    first = first_whole_hour(start)
     last = hour_start(compiled_until)
     partials: list[Partial] = []
     if start < first:
