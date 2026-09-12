@@ -1,14 +1,20 @@
 """The read-only recorder queries the sensors and the card share."""
 
+import re
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 from homeassistant.components.recorder import get_instance
-from homeassistant.components.recorder.statistics import async_add_external_statistics
+from homeassistant.components.recorder.statistics import (
+    async_add_external_statistics,
+    get_metadata_with_session,
+)
+from homeassistant.components.recorder.util import session_scope
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.components.recorder.common import (
     async_wait_recording_done,
 )
+from sqlalchemy import event as sqlalchemy_event
 
 from custom_components.discrete_statistics import rows
 from custom_components.discrete_statistics.const import METRIC_DURATION
@@ -158,3 +164,121 @@ async def test_standing_lists_the_hours_holding_a_row_inside_the_window(recorder
             (start + timedelta(hours=3)).timestamp(),
         }
     }
+
+
+@pytest.fixture
+def statements(hass, recorder_mock):
+    """The SELECTs the recorder's engine runs against the statistics table."""
+    seen: list[str] = []
+
+    def listen(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT") and re.search(
+            r"\bstatistics\b", statement
+        ):
+            seen.append(statement)
+
+    engine = get_instance(hass).engine
+    sqlalchemy_event.listen(engine, "before_cursor_execute", listen)
+    yield seen
+    sqlalchemy_event.remove(engine, "before_cursor_execute", listen)
+
+
+async def before(hass, pairs):
+    """`rows_before` over (statistic_id, datetime) pairs, keyed the same way."""
+
+    def read():
+        with session_scope(hass=hass, read_only=True) as session:
+            metadata = get_metadata_with_session(
+                get_instance(hass), session, statistic_ids={sid for sid, _ in pairs}
+            )
+            ids = {sid: metadata_id for sid, (metadata_id, _) in metadata.items()}
+            found = rows.rows_before(
+                session, [(ids[sid], edge.timestamp()) for sid, edge in pairs]
+            )
+            return {
+                (sid, edge): found.get((ids[sid], edge.timestamp()))
+                for sid, edge in pairs
+            }
+
+    return await get_instance(hass).async_add_executor_job(read)
+
+
+async def test_rows_before_answers_each_pair_with_the_newest_row_before_its_edge(
+    recorder,
+):
+    await seed(recorder, ON, T0, [0.5, 1.0, 1.5])
+    await seed(recorder, OFF, T0, [0.25, None, 0.75])
+
+    found = await before(
+        recorder,
+        [
+            (ON, T0 + timedelta(hours=2)),
+            (ON, T0 + timedelta(hours=3)),
+            (OFF, T0 + timedelta(hours=2)),
+        ],
+    )
+
+    # A row starting exactly at the edge is not before it.
+    assert found[(ON, T0 + timedelta(hours=2))] == (
+        (T0 + timedelta(hours=1)).timestamp(),
+        1.0,
+    )
+    assert found[(ON, T0 + timedelta(hours=3))] == (
+        (T0 + timedelta(hours=2)).timestamp(),
+        1.5,
+    )
+    # OFF's hole at hour 1 carries its hour-0 row forward.
+    assert found[(OFF, T0 + timedelta(hours=2))] == (T0.timestamp(), 0.25)
+
+
+async def test_rows_before_leaves_a_pair_with_nothing_before_it_absent(recorder):
+    await seed(recorder, ON, T0, [0.5])
+    assert await before(recorder, [(ON, T0)]) == {(ON, T0): None}
+
+
+async def test_rows_before_batches_at_five_hundred_pairs(recorder, statements):
+    await seed(recorder, ON, T0, [0.5])
+    edges = [T0 + timedelta(hours=i + 1) for i in range(rows.SEEK_BATCH)]
+
+    statements.clear()
+    await before(recorder, [(ON, edge) for edge in edges])
+    assert len(statements) == 1
+
+    statements.clear()
+    await before(recorder, [(ON, edge) for edge in [*edges, T0 + timedelta(days=90)]])
+    assert len(statements) == 2
+
+
+async def test_rows_from_opens_each_statistic_on_the_row_before_the_range(
+    recorder, statements
+):
+    # ON runs from before the range; OFF begins inside it; a third
+    # statistic has no row at all.
+    await seed(recorder, ON, T0, [0.5, 1.0, 1.5, 2.0])
+    await seed(recorder, OFF, T0 + timedelta(hours=2), [0.25, 0.5])
+    await seed(recorder, "discrete_statistics:nothing_on_duration", T0, [])
+
+    def read():
+        with session_scope(hass=recorder, read_only=True) as session:
+            metadata = get_metadata_with_session(
+                get_instance(recorder),
+                session,
+                statistic_ids={ON, OFF, "discrete_statistics:nothing_on_duration"},
+            )
+            ids = {sid: metadata_id for sid, (metadata_id, _) in metadata.items()}
+            found = rows.rows_from(
+                session,
+                set(ids.values()),
+                (T0 + timedelta(hours=2)).timestamp(),
+                (T0 + timedelta(hours=4)).timestamp(),
+            )
+            return {sid: found.get(mid) for sid, mid in ids.items()}
+
+    statements.clear()
+    found = await get_instance(recorder).async_add_executor_job(read)
+
+    assert len(statements) == 1
+    hours = [(T0 + timedelta(hours=i)).timestamp() for i in range(4)]
+    assert found[ON] == [(hours[1], 1.0), (hours[2], 1.5), (hours[3], 2.0)]
+    assert found[OFF] == [(hours[2], 0.25), (hours[3], 0.5)]
+    assert found["discrete_statistics:nothing_on_duration"] is None

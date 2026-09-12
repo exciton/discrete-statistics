@@ -6,11 +6,13 @@ index seek on `(metadata_id, start_ts)`. The card reads edges in bulk
 through `websocket`; the sensors read one edge at a time here; the
 compiler reads its base and the rows standing in its window. All go
 through `session_scope(read_only=True)` and none writes - `compiler` is
-the only module that does.
+the only module that does. Edges are answered by `rows_before`, one
+statement whatever the number of (statistic, edge) pairs.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from typing import Any
 
 from homeassistant.components.recorder import get_instance
@@ -18,10 +20,124 @@ from homeassistant.components.recorder.db_schema import Statistics
 from homeassistant.components.recorder.statistics import get_metadata_with_session
 from homeassistant.components.recorder.util import session_scope
 from homeassistant.core import HomeAssistant
-from sqlalchemy import func, select
+from sqlalchemy import func, literal, select, union_all
 from sqlalchemy.orm import Session
 
-from .buckets import Row, row_before
+from .buckets import Row
+
+# Pairs per statement: SQLite caps a compound SELECT at 500 terms. The
+# hourly period reads a range instead, so a batch is rarely full.
+SEEK_BATCH = 500
+
+
+def rows_before(
+    session: Session, pairs: Iterable[tuple[int, float]]
+) -> dict[tuple[int, float], Row]:
+    """The newest row strictly before each edge, per (metadata_id, edge) pair.
+
+    One index seek on `(metadata_id, start_ts)` per pair, in one round
+    trip, on SQLite, Postgres and MariaDB alike: every pair is its own
+    arm of a UNION ALL, so both bounds of its seek are constants -
+    MariaDB will not push an outer-referenced bound into a range, and
+    plans a correlated form as a walk of the series instead. Cheaper
+    per-dialect forms exist for later: a correlated `LIMIT 1` over the
+    edges as `json_each` (SQLite) or `jsonb_array_elements` (Postgres).
+
+    A pair with nothing before its edge is absent.
+    """
+    unique = list(dict.fromkeys(pairs))
+    found: dict[tuple[int, float], Row] = {}
+    for start in range(0, len(unique), SEEK_BATCH):
+        found.update(_seek(session, unique[start : start + SEEK_BATCH]))
+    return found
+
+
+def _seek_id(metadata_id: int, edge: float) -> Any:
+    """The id of the newest row before an edge, as a constant-bound seek."""
+    return (
+        select(Statistics.id)
+        .where(
+            Statistics.metadata_id == metadata_id,
+            Statistics.sum.is_not(None),
+            Statistics.start_ts < edge,
+        )
+        .order_by(Statistics.start_ts.desc())
+        .limit(1)
+        # The arm carries its own FROM: correlating it against the outer
+        # join would drop the bounds this is built for.
+        .correlate(None)
+        .scalar_subquery()
+    )
+
+
+def _seek(
+    session: Session, batch: Sequence[tuple[int, float]]
+) -> dict[tuple[int, float], Row]:
+    seeks = union_all(
+        *(
+            select(
+                literal(metadata_id).label("metadata_id"),
+                literal(edge).label("edge"),
+                _seek_id(metadata_id, edge).label("id"),
+            )
+            for metadata_id, edge in batch
+        )
+    ).subquery()
+    rows = session.execute(
+        select(
+            seeks.c.metadata_id, seeks.c.edge, Statistics.start_ts, Statistics.sum
+        ).join(Statistics, Statistics.id == seeks.c.id)
+    )
+    return {
+        (metadata_id, edge): Row(start_ts, sum_)
+        for metadata_id, edge, start_ts, sum_ in rows
+    }
+
+
+def rows_from(
+    session: Session, metadata_ids: Iterable[int], start: float, end: float
+) -> dict[int, list[Row]]:
+    """Each statistic's newest row before `start`, then its rows in [start, end).
+
+    Ascending, and a statistic with no row either side is absent. One
+    statement: the seeks are constant-bound arms as in `rows_before`,
+    and the rows inside are one index range - which is what the hourly
+    period wants, since there every row answers an edge.
+    """
+    found: dict[int, list[Row]] = {}
+    unique = list(dict.fromkeys(metadata_ids))
+    # One term of the compound is the range half; the rest are seeks.
+    for at in range(0, len(unique), SEEK_BATCH - 1):
+        found.update(_from(session, unique[at : at + SEEK_BATCH - 1], start, end))
+    return found
+
+
+def _from(
+    session: Session, batch: Sequence[int], start: float, end: float
+) -> dict[int, list[Row]]:
+    seeks = union_all(
+        *(select(_seek_id(metadata_id, start).label("id")) for metadata_id in batch)
+    ).subquery()
+    columns = (Statistics.metadata_id, Statistics.start_ts, Statistics.sum)
+    rows = session.execute(
+        union_all(
+            select(*columns).join(seeks, Statistics.id == seeks.c.id),
+            select(*columns).where(
+                Statistics.metadata_id.in_(batch),
+                Statistics.sum.is_not(None),
+                Statistics.start_ts >= start,
+                Statistics.start_ts < end,
+            ),
+        )
+    )
+    found: dict[int, list[Row]] = {}
+    for metadata_id, start_ts, sum_ in rows:
+        found.setdefault(metadata_id, []).append(Row(start_ts, sum_))
+    # Ordered here rather than in SQL: a compound select's ORDER BY is
+    # dialect-fussy, and the two halves are disjoint and already short.
+    for series in found.values():
+        series.sort()
+    return found
 
 
 def rows_at(
@@ -129,15 +245,13 @@ def sums_at(
             metadata_id: statistic_id
             for statistic_id, (metadata_id, _) in metadata.items()
         }
-        at = rows_at(session, set(ids), {row_before(edge)})
-        result: dict[str, float] = {}
-        for metadata_id, statistic_id in ids.items():
-            row = at.get(metadata_id, {}).get(row_before(edge))
-            if row is None:
-                found = newest_before(session, metadata_id, edge)
-                row = found[0] if found else None
-            result[statistic_id] = 0.0 if row is None else row.sum
-        return result
+        found = rows_before(session, [(metadata_id, edge) for metadata_id in ids])
+        return {
+            statistic_id: (
+                0.0 if (row := found.get((metadata_id, edge))) is None else row.sum
+            )
+            for metadata_id, statistic_id in ids.items()
+        }
 
 
 def series_start(hass: HomeAssistant, statistic_ids: set[str]) -> float | None:
