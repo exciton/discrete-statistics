@@ -349,8 +349,8 @@ async def test_the_last_sensor_leaving_stops_the_reads(recorder_utc, freezer):
             wraps=get_instance,
         ) as recorder_instance,
         patch(
-            "custom_components.discrete_statistics.coordinator.rows.sums_at",
-            wraps=rows_module.sums_at,
+            "custom_components.discrete_statistics.coordinator.rows.sums_at_edges",
+            wraps=rows_module.sums_at_edges,
         ) as sums_at,
         patch.object(Compiler, "async_tail") as tail,
     ):

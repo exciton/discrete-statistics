@@ -2,14 +2,14 @@
 
 The sums are cumulative, and a row stands only where something changed
 or once stood, so a value at an edge is the newest row before it - one
-index seek on `(metadata_id, start_ts)`. The card reads edges in bulk
-through `websocket`; the sensors read one edge at a time here; the
-compiler reads its base and the rows standing in its window. All go
-through `session_scope(read_only=True)` and none writes - `compiler` is
-the only module that does. Edges are answered by `rows_before`, one
-statement whatever the number of (statistic, edge) pairs - except on
-MySQL/MariaDB and an engine we do not know, where the pairs batch at
-`SEEK_BATCH`.
+index seek on `(metadata_id, start_ts)`. The card reads its edges in
+bulk through `websocket` and the sensors theirs through `sums_at_edges`,
+both on the one shape; the compiler reads its base and the rows standing
+in its window. All go through `session_scope(read_only=True)` and none
+writes - `compiler` is the only module that does. Edges are answered by
+`rows_before`, one statement whatever the number of (statistic, edge)
+pairs - except on MySQL/MariaDB and an engine we do not know, where the
+pairs batch at `SEEK_BATCH`.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from homeassistant.core import HomeAssistant
 from sqlalchemy import or_, select, text, union_all
 from sqlalchemy.orm import Session
 
-from .buckets import Row
+from .buckets import Row, before_edges
 from .const import DOMAIN
 from .statistic_ids import parse
 
@@ -391,15 +391,20 @@ def standing(
         return {ids[metadata_id]: set(rows) for metadata_id, rows in between.items()}
 
 
-def sums_at(
-    hass: HomeAssistant, statistic_ids: set[str], edge: float
-) -> dict[str, float]:
-    """The cumulative sum of each statistic at an edge. Runs in the executor.
+def sums_at_edges(
+    hass: HomeAssistant, statistic_ids: set[str], edges: set[float]
+) -> dict[float, dict[str, float]]:
+    """Each statistic's cumulative sum at each edge. Runs in the executor.
+
+    One statement for every (statistic, edge) pair, resolved per edge by
+    `before_edges` - the same read the card makes, and the reason a
+    refresh's several edges cost one statement rather than one each.
 
     Zero before a statistic's first row - a state has no time in it before
     its series begins - and absent for a statistic the recorder does not
     hold, which is how a caller tells "not yet" from "never".
     """
+    wanted = sorted(edges)
     with session_scope(hass=hass, read_only=True) as session:
         metadata = get_metadata_with_session(
             get_instance(hass), session, statistic_ids=statistic_ids
@@ -408,12 +413,21 @@ def sums_at(
             metadata_id: statistic_id
             for statistic_id, (metadata_id, _) in metadata.items()
         }
-        found = rows_before(session, [(metadata_id, edge) for metadata_id in ids])
-        # One edge per statistic, so the newest row returned for it is
-        # that edge's answer.
+        found = rows_before(
+            session,
+            [(metadata_id, edge) for metadata_id in ids for edge in wanted],
+        )
+        resolved = {
+            metadata_id: before_edges(found.get(metadata_id, ()), wanted)
+            for metadata_id in ids
+        }
         return {
-            statistic_id: (rows[-1].sum if (rows := found.get(metadata_id)) else 0.0)
-            for metadata_id, statistic_id in ids.items()
+            edge: {
+                # A row is a two-tuple, so it is truthy whatever its sum.
+                statistic_id: (row.sum if (row := resolved[metadata_id][edge]) else 0.0)
+                for metadata_id, statistic_id in ids.items()
+            }
+            for edge in wanted
         }
 
 

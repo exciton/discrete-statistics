@@ -79,11 +79,11 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
        ├─ periods           pure: a named period -> its edges, in a zone
        │        │
        ├─ rows              reads the recorder: the newest row before each
-       │        │           of many edges, per-engine SQL, the sums at an
-       │        │           edge, a range opened on the row before it, a
-       │        │           statistic's newest rows before one, the rows
-       │        │           standing in a window, where a series starts
-       │        │           and where it ends
+       │        │           of many edges, per-engine SQL, the sums at a
+       │        │           set of edges, a range opened on the row before
+       │        │           it, a statistic's newest rows before one, the
+       │        │           rows standing in a window, where a series
+       │        │           starts and where it ends
        ├─ reading           pure: a window in pieces - whole hours, part hours,
        │        │           the tail -> one sensor's value
        │        │
@@ -102,9 +102,9 @@ Everything except `compiler`, `rows`, `websocket`, `config_flow`, `naming`,
 Keep it that way: if a change needs recorder access in a lower module, the
 design is drifting. Three recorder boundaries: `compiler` is the only
 module that writes; `rows` reads — `session_scope(read_only=True)`, the
-newest row before each of a set of edges, the sums at an edge, the rows
-of a range and the one before it, the newest rows before one, the rows
-standing in a window, the earliest and the newest row of a series — for
+newest row before each of a set of edges, the sums at a set of edges, the
+rows of a range and the one before it, the newest rows before one, the
+rows standing in a window, the earliest and the newest row of a series — for
 `websocket`, the compiler and the coordinator alike; and `config_flow`
 reads once per options dialog, the entity's distinct states, to draw a
 mapping row for each, and once per sensor dialog, the entity's statistics,
@@ -140,7 +140,10 @@ signal carries the range written, and the coordinator drops cached sums
 only at edges after its start: a sum is cumulative, so a finished window's
 edges survive every hourly compile, and the tail is read only when some
 live sensor's window reaches it — a finished window costs no recorder work
-at all between the day changing and a recompute reaching back to it.
+at all between the day changing and a recompute reaching back to it. The
+edges the cache does not answer are read together, `rows.sums_at_edges`
+over all of them: the card's own shape, so a refresh pays one statement
+however many edges its sensors plan.
 
 `sensor.py` builds the entry's `PeriodCoordinator` lazily, the first time
 the entry has a `sensor` subentry, and keeps it once built. An entry

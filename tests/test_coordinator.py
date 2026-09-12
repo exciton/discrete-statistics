@@ -190,12 +190,16 @@ async def test_sums_are_fetched_once_per_edge_between_compiles(recorder_utc, fre
     await compile_by_hand(hass, T0 - timedelta(hours=1))
     coordinator = PeriodCoordinator(hass, entry, hass.data[DOMAIN]["compiler"])
     with patch(
-        "custom_components.discrete_statistics.coordinator.rows.sums_at",
-        wraps=rows_module.sums_at,
+        "custom_components.discrete_statistics.coordinator.rows.sums_at_edges",
+        wraps=rows_module.sums_at_edges,
     ) as sums_at:
         await coordinator.async_refresh()
         await coordinator.async_refresh()
-        assert sums_at.call_count == 2  # the period start and the watermark end
+        # Both edges - the period start and the watermark end - in the one
+        # read, and the second refresh reads nothing at all.
+        assert [sorted(call.args[2]) for call in sums_at.call_args_list] == [
+            [T0.timestamp(), (T0 + timedelta(hours=1)).timestamp()]
+        ]
 
 
 async def test_an_unloaded_entry_fails_the_refresh(recorder_utc, freezer):
@@ -228,17 +232,17 @@ async def test_a_compile_during_a_refresh_does_not_seed_the_new_cache(
     coordinator = PeriodCoordinator(hass, entry, hass.data[DOMAIN]["compiler"])
 
     fired = []
-    real_sums_at = rows_module.sums_at
+    real_sums_at = rows_module.sums_at_edges
 
     def compile_on_the_first_read(*args, **kwargs):
         if not fired:
             fired.append(True)
-            # `sums_at` runs in the executor and the signal is the loop's,
+            # The read runs in the executor and the signal is the loop's,
             # so the read waits for it to have been delivered. The race
             # under test is a compile landing after the frame is read and
             # before the sums are written; a merely queued signal arrives
             # whenever the loop next looks, which under load is as easily
-            # after both edges are written - a different race.
+            # after the sums are written - a different race.
             delivered = threading.Event()
 
             def send() -> None:
@@ -257,7 +261,7 @@ async def test_a_compile_during_a_refresh_does_not_seed_the_new_cache(
         return real_sums_at(*args, **kwargs)
 
     with patch(
-        "custom_components.discrete_statistics.coordinator.rows.sums_at",
+        "custom_components.discrete_statistics.coordinator.rows.sums_at_edges",
         side_effect=compile_on_the_first_read,
     ) as sums_at:
         await coordinator.async_refresh()
@@ -265,11 +269,10 @@ async def test_a_compile_during_a_refresh_does_not_seed_the_new_cache(
         # Both edges twice: the refresh racing the compile reads them into
         # the cache it started with, and the refresh that compile
         # scheduled finds the cache that compile installed empty.
-        assert sorted(call.args[2] for call in sums_at.call_args_list) == [
-            T0.timestamp(),
-            T0.timestamp(),
-            (T0 + timedelta(hours=1)).timestamp(),
-            (T0 + timedelta(hours=1)).timestamp(),
+        both = [T0.timestamp(), (T0 + timedelta(hours=1)).timestamp()]
+        assert [sorted(call.args[2]) for call in sums_at.call_args_list] == [
+            both,
+            both,
         ]
 
 
@@ -384,12 +387,20 @@ async def test_a_compile_of_the_trailing_window_keeps_older_sums(recorder_utc, f
         ],
     )
     with patch(
-        "custom_components.discrete_statistics.coordinator.rows.sums_at",
-        wraps=rows_module.sums_at,
+        "custom_components.discrete_statistics.coordinator.rows.sums_at_edges",
+        wraps=rows_module.sums_at_edges,
     ) as sums_at:
         await coordinator.async_refresh()
         # Yesterday's two edges, the boundary hour, and today's end.
-        assert sums_at.call_count == 4
+        every_edge = sorted(
+            {
+                (T0 - timedelta(days=1)).timestamp(),
+                T0.timestamp(),
+                (T0 + timedelta(hours=1)).timestamp(),
+                (T0 + timedelta(hours=3)).timestamp(),
+            }
+        )
+        assert [sorted(call.args[2]) for call in sums_at.call_args_list] == [every_edge]
         # The hourly compile rewrites the trailing hours: only the edge
         # after its start is read again.
         async_dispatcher_send(
@@ -399,10 +410,10 @@ async def test_a_compile_of_the_trailing_window_keeps_older_sums(recorder_utc, f
             (T0 + timedelta(hours=3)).timestamp(),
         )
         await hass.async_block_till_done()
-        assert sums_at.call_count == 5
-        assert (
-            sums_at.call_args_list[4].args[2] == (T0 + timedelta(hours=3)).timestamp()
-        )
+        assert [sorted(call.args[2]) for call in sums_at.call_args_list] == [
+            every_edge,
+            [(T0 + timedelta(hours=3)).timestamp()],
+        ]
         # A recompute of everything: every edge.
         async_dispatcher_send(
             hass,
@@ -411,7 +422,11 @@ async def test_a_compile_of_the_trailing_window_keeps_older_sums(recorder_utc, f
             (T0 + timedelta(hours=3)).timestamp(),
         )
         await hass.async_block_till_done()
-        assert sums_at.call_count == 9
+        assert [sorted(call.args[2]) for call in sums_at.call_args_list] == [
+            every_edge,
+            [(T0 + timedelta(hours=3)).timestamp()],
+            every_edge,
+        ]
 
 
 async def test_a_statistic_that_comes_back_drops_every_cached_sum(
@@ -452,14 +467,16 @@ async def test_a_statistic_that_comes_back_drops_every_cached_sum(
     # It recurs: the cached sums at the day's older edges are on the base
     # it had before it was deleted.
     with patch(
-        "custom_components.discrete_statistics.coordinator.rows.sums_at",
-        wraps=rows_module.sums_at,
+        "custom_components.discrete_statistics.coordinator.rows.sums_at_edges",
+        wraps=rows_module.sums_at_edges,
     ) as sums_at:
         await hourly_compile()
-        assert sorted(call.args[2] for call in sums_at.call_args_list) == [
-            (T0 - timedelta(days=1)).timestamp(),
-            T0.timestamp(),
-            (T0 + timedelta(hours=3)).timestamp(),
+        assert [sorted(call.args[2]) for call in sums_at.call_args_list] == [
+            [
+                (T0 - timedelta(days=1)).timestamp(),
+                T0.timestamp(),
+                (T0 + timedelta(hours=3)).timestamp(),
+            ]
         ]
 
 

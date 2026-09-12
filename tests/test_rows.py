@@ -46,10 +46,14 @@ async def series_end(hass, ids):
     return await get_instance(hass).async_add_executor_job(rows.series_end, hass, ids)
 
 
-async def sums_at(hass, ids, edge):
+async def sums_at_edges(hass, ids, edges):
     return await get_instance(hass).async_add_executor_job(
-        rows.sums_at, hass, ids, edge.timestamp()
+        rows.sums_at_edges, hass, ids, {edge.timestamp() for edge in edges}
     )
+
+
+async def sums_at(hass, ids, edge):
+    return (await sums_at_edges(hass, ids, [edge]))[edge.timestamp()]
 
 
 async def test_sums_at_reads_the_row_before_the_edge(recorder):
@@ -70,6 +74,22 @@ async def test_sums_at_carries_across_a_hole(recorder):
 async def test_sums_at_is_zero_before_the_series_and_absent_when_unknown(recorder):
     await seed(recorder, ON, T0, [0.5])
     assert await sums_at(recorder, {ON, OFF}, T0) == {ON: 0.0}
+
+
+async def test_sums_at_every_edge_are_one_statement(recorder, statements):
+    await seed(recorder, ON, T0, [0.5, 1.0, 1.5])
+    await seed(recorder, OFF, T0, [0.25, 0.5, 0.75])
+    edges = [T0 + timedelta(hours=1), T0 + timedelta(hours=3)]
+
+    statements.clear()
+    found = await sums_at_edges(recorder, {ON, OFF}, edges)
+
+    # Two statistics at two edges, in the one seek.
+    assert len(statements) == 1
+    assert found == {
+        edges[0].timestamp(): {ON: 0.5, OFF: 0.25},
+        edges[1].timestamp(): {ON: 1.5, OFF: 0.75},
+    }
 
 
 async def test_series_start_is_the_earliest_row_across_statistics(recorder):

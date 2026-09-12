@@ -2,8 +2,9 @@
 
 A refresh drains the recorder's write queue, then reads what it holds
 for the entity once - its statistics, the watermark, the series start -
-then the sums at each edge the sensors between them ask for, then one
-live tail from the watermark end, and computes every sensor from those.
+then the sums at the edges the sensors between them ask for - every edge
+the cache does not answer, in the one read - then one live tail from the
+watermark end, and computes every sensor from those.
 The drain belongs to the refresh rather than to any one of its triggers,
 so whichever of them asked reads rows that are already written. It runs
 after each compile (the compiler's dispatcher signal), on each change of
@@ -322,14 +323,19 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
         edges: set[float] = set()
         for pieces in plans.values():
             edges |= edges_of(pieces)
-        for edge in edges:
-            if all((sid, edge) in sums for sid in frame.existing):
-                continue
-            at_edge = await get_instance(self.hass).async_add_executor_job(
-                rows.sums_at, self.hass, set(frame.existing), edge
+        # Every edge the cache does not already answer, in the one read.
+        missing = {
+            edge
+            for edge in edges
+            if not all((sid, edge) in sums for sid in frame.existing)
+        }
+        if missing:
+            at_edges = await get_instance(self.hass).async_add_executor_job(
+                rows.sums_at_edges, self.hass, set(frame.existing), missing
             )
-            for statistic_id in frame.existing:
-                sums[(statistic_id, edge)] = at_edge.get(statistic_id, 0.0)
+            for edge, at_edge in at_edges.items():
+                for statistic_id in frame.existing:
+                    sums[(statistic_id, edge)] = at_edge.get(statistic_id, 0.0)
 
         partials: dict[Partial, PartialValue] = {}
         used_hours: set[float] = set()
