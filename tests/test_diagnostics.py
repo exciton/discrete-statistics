@@ -9,7 +9,7 @@ from custom_components.discrete_statistics.compiler import Compiler
 from custom_components.discrete_statistics.diagnostics import (
     async_get_config_entry_diagnostics,
 )
-from tests.test_sensor import ENTITY, ON_TODAY, T0, seeded, sensor
+from tests.conftest import ENTITY, ON_TODAY, T0, seeded, sensor
 
 
 async def test_the_download_reports_the_entry_end_to_end(recorder_utc, freezer):

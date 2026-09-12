@@ -1741,8 +1741,11 @@ async def test_a_recompile_that_drops_a_state_from_an_hour_rewrites_its_row(
 
 
 @pytest.fixture
-def statements(recorder):
-    """Every SQL statement the recorder's engine runs, with its parameters."""
+def all_statements(recorder):
+    """Every SQL statement the recorder's engine runs, with its parameters.
+
+    Not `conftest.statements`, which is the statistics-table SELECTs alone.
+    """
     seen: list[tuple[str, tuple]] = []
 
     def listen(conn, cursor, statement, parameters, context, executemany):
@@ -1756,7 +1759,7 @@ def statements(recorder):
 
 
 async def test_the_base_of_a_quiet_statistic_is_a_seek_not_a_scan(
-    recorder, freezer, statements
+    recorder, freezer, all_statements
 ):
     """A statistic with rows on both sides of the window costs one seek.
 
@@ -1782,7 +1785,7 @@ async def test_the_base_of_a_quiet_statistic_is_a_seek_not_a_scan(
     await compiler.async_compile(cfg(), start.timestamp())
     await async_wait_recording_done(hass)
 
-    statements.clear()
+    all_statements.clear()
     window = start + timedelta(hours=10)
     await compiler.async_compile(
         cfg(), window.timestamp(), (window + timedelta(hours=2)).timestamp()
@@ -1792,7 +1795,7 @@ async def test_the_base_of_a_quiet_statistic_is_a_seek_not_a_scan(
     floor = (window - timedelta(hours=1)).timestamp()
     selects = [
         (sql, params)
-        for sql, params in statements
+        for sql, params in all_statements
         if sql.lstrip().upper().startswith("SELECT")
         and re.search(r"\bstatistics\b", sql)
     ]

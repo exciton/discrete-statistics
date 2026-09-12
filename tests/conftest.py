@@ -7,7 +7,8 @@ error in modern pytest and breaks the whole suite.
 import functools as ft
 import logging
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pytest
 from homeassistant.components.recorder import get_instance
@@ -15,18 +16,31 @@ from homeassistant.components.recorder.statistics import (
     get_metadata,
     statistics_during_period,
 )
+from homeassistant.config_entries import ConfigSubentryData
+from homeassistant.const import CONF_ENTITY_ID, CONF_NAME
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant_custom_component.common import async_fire_time_changed
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 from pytest_homeassistant_custom_component.components.recorder.common import (
     async_wait_recording_done,
 )
 from sqlalchemy import event as sqlalchemy_event
 
-from custom_components.discrete_statistics.const import METRIC_DURATION
+from custom_components.discrete_statistics.config import CONF_DEFAULT
+from custom_components.discrete_statistics.const import (
+    DEFAULT_RECORD_KNOWN,
+    DOMAIN,
+    METRIC_DURATION,
+    SUBENTRY_SENSOR,
+)
 from custom_components.discrete_statistics.coordinator import REFRESH_COOLDOWN
 from custom_components.discrete_statistics.statistic_ids import belongs_to, parse
 
 ENTITY = "binary_sensor.grid_status"
+T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+ON_TODAY = "sensor.discrete_binary_sensor_grid_status_on_duration_today"
 
 
 @pytest.fixture(autouse=True)
@@ -211,3 +225,63 @@ def fetched(hass, recorder_mock):
     sqlalchemy_event.remove(engine, "connect", factory)
     sqlalchemy_event.remove(engine, "checkout", factory)
     sqlalchemy_event.remove(engine, "before_cursor_execute", before)
+
+
+def sensor(title, states, metric="duration", period="today", live=True, **data):
+    return ConfigSubentryData(
+        data={
+            "states": states,
+            "metric": metric,
+            "period": period,
+            "live": live,
+            **data,
+        },
+        subentry_id=title,
+        subentry_type=SUBENTRY_SENSOR,
+        title=title,
+        unique_id=None,
+    )
+
+
+async def setup_entry(hass, subentries):
+    assert await async_setup_component(hass, DOMAIN, {})
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENTITY_ID: ENTITY},
+        options={CONF_NAME: "Grid Status", CONF_DEFAULT: DEFAULT_RECORD_KNOWN},
+        unique_id=ENTITY,
+        title="Grid Status",
+        subentries_data=subentries,
+    )
+    entry.add_to_hass(hass)
+    with patch(
+        "custom_components.discrete_statistics.Compiler.async_compile_incremental",
+        return_value=0,
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    return entry
+
+
+async def compile_by_hand(hass, start):
+    cfg = next(iter(hass.data[DOMAIN]["entry_configs"].values()))
+    await hass.data[DOMAIN]["compiler"].async_compile(cfg, start.timestamp())
+    await async_wait_recording_done(hass)
+    await hass.async_block_till_done()
+
+
+TIMELINE = [
+    (T0 - timedelta(hours=1), "off"),
+    (T0 + timedelta(hours=1), "on"),
+    (T0 + timedelta(hours=1, minutes=30), "off"),
+    (T0 + timedelta(hours=2), "on"),
+]
+
+
+async def seeded(hass, freezer, subentries):
+    """Three compiled hours of today, then the entry with its sensors."""
+    await play(hass, freezer, TIMELINE)
+    freezer.move_to(T0 + timedelta(hours=3))
+    entry = await setup_entry(hass, subentries)
+    await compile_by_hand(hass, T0 - timedelta(hours=1))
+    return entry
