@@ -26,7 +26,7 @@ from homeassistant.util import dt as dt_util
 from .buckets import Bucket, Period, before_edges, cut, edges, has_row
 from .const import DOMAIN, HOUR, METRIC_DURATION
 from .rows import metadata_ids, rows_before, rows_from
-from .statistic_ids import parse
+from .statistic_ids import family, parse
 
 # The most buckets one request may ask for. A chart cannot show more, and
 # the edges and the rows grow with the count - as do the statement's arms
@@ -102,9 +102,12 @@ async def ws_buckets(
 
 
 def _family(statistic_id: str) -> str:
-    """The entity a statistic belongs to, as its ID names it."""
-    parts = parse(statistic_id)
-    return statistic_id if parts is None else parts[0]
+    """The entity a statistic belongs to, as its ID names it.
+
+    An ID we cannot parse stands for its own family, so it is judged on
+    itself alone rather than joining somebody else's.
+    """
+    return family(statistic_id) or statistic_id
 
 
 def _buckets(
@@ -124,7 +127,7 @@ def _buckets(
     """
     edges_ = edges(start, end, period, dt_util.get_default_time_zone())
     with session_scope(hass=hass, read_only=True) as session:
-        slugs = {parts[0] for sid in statistic_ids if (parts := parse(sid)) is not None}
+        slugs = {slug for sid in statistic_ids if (slug := family(sid)) is not None}
         ours = metadata_ids(session, statistic_ids, slugs)
         requested = {sid for sid in statistic_ids if sid in ours}
         if not requested:
@@ -136,13 +139,13 @@ def _buckets(
                 durations.setdefault(parts[0], set()).add(sid)
         judges: dict[str, set[str]] = {}
         for statistic_id in requested:
-            family = _family(statistic_id)
-            judges.setdefault(family, set()).update(durations.get(family, ()))
+            slug = _family(statistic_id)
+            judges.setdefault(slug, set()).update(durations.get(slug, ()))
         # An entity with no duration statistic left is judged on what was
         # asked of it: every requested ID of that entity, not just one.
-        for family, judged in judges.items():
+        for slug, judged in judges.items():
             if not judged:
-                judges[family] = {sid for sid in requested if _family(sid) == family}
+                judges[slug] = {sid for sid in requested if _family(sid) == slug}
         wanted = requested.union(*judges.values())
         ids = {sid: ours[sid] for sid in wanted}
 
@@ -158,8 +161,8 @@ def _buckets(
             sid: before_edges(found.get(mid, ()), edges_) for sid, mid in ids.items()
         }
 
-        def compiled_by(family: str):
-            judged = [before[sid] for sid in judges[family]]
+        def compiled_by(slug: str):
+            judged = [before[sid] for sid in judges[slug]]
             return lambda a, b: any(has_row(rows, a, b) for rows in judged)
 
         return {

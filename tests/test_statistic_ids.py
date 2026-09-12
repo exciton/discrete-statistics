@@ -9,6 +9,7 @@ from custom_components.discrete_statistics.statistic_ids import (
     InvalidStatisticIdError,
     belongs_to,
     build,
+    family,
     is_blank,
     parse,
     state_token,
@@ -113,6 +114,22 @@ def test_parse_rejects_ids_that_are_not_ours():
 def test_a_state_named_like_a_metric_still_parses():
     statistic_id = build("sensor.x", "count", METRIC_COUNT)
     assert parse(statistic_id) == ("sensor_x", "count", "count")
+
+
+def test_family_is_the_entity_slug_an_id_was_built_for():
+    assert family(build("climate.zone", "heat_cool", METRIC_COUNT)) == "climate_zone"
+    assert (
+        family(build("climate.zone_heat", "cool", METRIC_DURATION))
+        == "climate_zone_heat"
+    )
+
+
+@pytest.mark.parametrize(
+    "statistic_id",
+    ["sensor.energy", "discrete_statistics:climate_zone", "other:x_on_duration"],
+)
+def test_family_is_none_for_an_id_that_is_not_ours(statistic_id):
+    assert family(statistic_id) is None
 
 
 def test_belongs_to_distinguishes_nesting_entities():
