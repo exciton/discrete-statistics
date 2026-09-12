@@ -589,6 +589,8 @@ def _custom_window(
     if not is_custom(period):
         return dict.fromkeys(data), {"base": "custom_only"} if given else {}
     rendered: dict[str, float | None] = {CONF_WINDOW_START: None, CONF_WINDOW_END: None}
+    # Rendered before the combination is judged, so a broken template is
+    # blamed on itself rather than on the combination it also breaks.
     # Start is checked first, so a template broken in both fields is blamed
     # on Start - the field a person reads first, and the one whose error
     # would otherwise be masked by End's.
@@ -605,12 +607,12 @@ def _custom_window(
     # cannot render. A window running to now is judged as configured, not
     # at this instant - its end moves - so `now` is infinite here and only
     # a written end can sit before the start.
-    window = periods.custom_window(
+    resolved = periods.custom_window(
         rendered[CONF_WINDOW_START], rendered[CONF_WINDOW_END], duration, math.inf
     )
-    if window is None:
+    if resolved is None:
         return data, {"base": "custom_needs_two"}
-    if window[1] <= window[0]:
+    if resolved[1] <= resolved[0]:
         return data, {"base": "custom_empty"}
     return data, {}
 

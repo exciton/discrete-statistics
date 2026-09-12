@@ -1479,6 +1479,16 @@ async def test_a_custom_sensor_from_a_start_alone(recorder):
             },
             "template_invalid_end",
         ),
+        # A broken template is blamed before the combination it also
+        # breaks: all three given, and it is End that is named.
+        (
+            {
+                "start": "2026-01-01T09:00:00+00:00",
+                "end": "{{ 'soon' }}",
+                "duration": {"hours": 1},
+            },
+            "template_invalid_end",
+        ),
         (
             {
                 "start": "2026-01-01T10:00:00+00:00",
