@@ -73,14 +73,16 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
        │        │
        │    compiler        writes the recorder: the only module that does;
        │        │           hands out its read path as a Timeline (async_tail)
-       ├─ buckets           pure: what is known of a statistic's rows ->
+       ├─ buckets           pure: the row before each edge ->
        │        │           per-period {start, end, change}
        │        │
        ├─ periods           pure: a named period -> its edges, in a zone
        │        │
-       ├─ rows              reads the recorder: the rows at edges, the sums
-       │        │           at an edge, a statistic's newest rows before one,
-       │        │           the rows standing in a window, where a series starts
+       ├─ rows              reads the recorder: the newest row before each
+       │        │           of many edges in one statement, the sums at an
+       │        │           edge, a range opened on the row before it, a
+       │        │           statistic's newest rows before one, the rows
+       │        │           standing in a window, where a series starts
        ├─ reading           pure: a window in pieces - whole hours, part hours,
        │        │           the tail -> one sensor's value
        │        │
@@ -99,8 +101,9 @@ Everything except `compiler`, `rows`, `websocket`, `config_flow`, `naming`,
 Keep it that way: if a change needs recorder access in a lower module, the
 design is drifting. Three recorder boundaries: `compiler` is the only
 module that writes; `rows` reads — `session_scope(read_only=True)`, the
-rows at a set of edges, the sums at an edge, the newest rows before one,
-the rows standing in a window, the earliest row of a series — for
+newest row before each of a set of edges, the sums at an edge, the rows
+of a range and the one before it, the newest rows before one, the rows
+standing in a window, the earliest row of a series — for
 `websocket`, the compiler and the coordinator alike; and `config_flow`
 reads once per options dialog, the entity's distinct states, to draw a
 mapping row for each, and once per sensor dialog, the entity's statistics,
@@ -234,25 +237,21 @@ The card fetches through `discrete_statistics/buckets`, not
 bucket's `change` is the difference between the rows at its two edges,
 and `websocket` reads only the rows that answer the edges. The rows are
 sparse — a state has a row only in an hour it had time in — so an edge
-is answered by the newest row before it, and `buckets.Known` tracks
-which edges the reads so far settle: one `IN` query over `row_before`
-every edge for every statistic, then per statistic still blank a seek
-of `LOOKUP_ROWS` before its newest blank edge, then — when a full run's
-density says the blank span holds fewer than `SEEK_WORTH` rows per
-blank edge — one range read batched over every such statistic, then
-seeks again until nothing is blank. Every read is an index seek on
-`(metadata_id, start_ts)` and none is proportional to the range — except
-at the hourly period, where every row in the range answers an edge and
-one range read fetches the lot. Gap or zero is judged on the entity's
-duration statistics as a whole, which ride along in the reads: a bucket
-is compiled when any of them has a row inside it, a requested statistic
-with no row of its own there reads zero, and only a hole is left out for
-the card to draw as a gap.
-`row_before` an edge is the row starting the hour before it, whose sum
-is the sum at the edge, or the row running through it in a zone half an
-hour off UTC, where every edge is at half past; the `IN` query asks for
-one row per edge, and a range read stands in when the edges are hours,
-since then every row is wanted. `buckets.edges` aligns them as the
+is answered by the newest row before it whatever its distance: the row
+starting the hour before it, or the row running through it in a zone
+half an hour off UTC, where every edge is at half past.
+`rows.rows_before` answers every (statistic, edge) pair in one
+statement: each pair is its own arm of a `UNION ALL`, an index seek on
+`(metadata_id, start_ts)` between two constants, joined back to the
+rows. `SEEK_BATCH` splits at 500 pairs, SQLite's cap on a compound
+select. The hourly period is one statement too, `rows.rows_from`: there
+every row in the range answers an edge, so the arms seek only the row
+before the range's start and one index range brings back the rest.
+Gap or zero is judged on the entity's duration statistics as a whole,
+which ride along in the same read: a bucket is compiled when any of them
+has a row inside it, a requested statistic with no row of its own there
+reads zero, and only a hole is left out for the card to draw as a gap.
+`buckets.edges` aligns the edges as the
 recorder does (local midnight, Monday weeks,
 `dt_util.get_default_time_zone()`), so the two commands draw the same
 periods inside the range asked for — `tests/test_websocket.py` holds
@@ -596,6 +595,14 @@ Verified against 2026.8.3.
   previous one's drain can miss a row still committing and leave it
   unrewritten; tests that compile twice back to back wait with
   `async_wait_recording_done` between.
+- Recorder engines differ on how a seek is planned. MariaDB will not use
+  an outer-referenced bound as a range: a correlated `LIMIT 1` walks the
+  series and `MAX` + a re-join scans it, so the portable form is one
+  constant-bound arm per pair, which every engine seeks (measured on a
+  13.9 GB database: 2,408 pairs in 9 ms on SQLite, 108 ms on MariaDB,
+  163 ms on Postgres). SQLite and Postgres would plan a correlated form
+  over the edges as `json_each` / `jsonb_array_elements` more cheaply
+  still — a later per-dialect optimisation, noted in `rows_before`.
 - hassfest validates `strings.json` only for placeholder *names*, not
   content. The frontend renders every string through ICU MessageFormat, so a
   literal `{` or `}` anywhere in a string — a template example in a
