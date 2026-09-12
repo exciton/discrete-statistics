@@ -146,7 +146,6 @@ async def test_measure_answers_and_counts(seeded, recorder_db_url, tmp_path):
     assert drawn[0][0] == (T0 + timedelta(hours=HOURS - 24)).timestamp() * 1000
     assert buckets["agreement"] == {"agree": 24, "disagree": 0, "extra_zero": 0}
 
-    # The stock command, asked the same question, over the same rows.
     # The stock command's first row is the baseline its changes are
     # measured from, so 24 hourly changes come back as 24 rows.
     stock = by_case["stock   1 grid on duration / 1d / hour"]["check"][DURATION_ID]

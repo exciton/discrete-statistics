@@ -85,8 +85,8 @@ def _states(case: dict[str, Any]) -> tuple[str, ...]:
     """The states a case names.
 
     YAML 1.1 reads a bare `on` or `off` as a boolean, and those are the two
-    commonest states there are - so they are read back rather than left to
-    fail as `True`. Quoting them in the document says the same thing.
+    commonest states there are, so they are read back rather than left to
+    fail as `True`.
     """
     return tuple(
         {True: "on", False: "off"}[state] if isinstance(state, bool) else str(state)

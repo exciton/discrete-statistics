@@ -332,7 +332,7 @@ derive per-bucket values. A sum that decreases is always a bug.
 
 **A duration row where the state had time in the hour, a count row where
 it was entered, and a row wherever one already stands.** The entity's
-duration rows, unioned, are therefore dense over compiled hours — the
+duration rows, unioned, therefore cover every compiled hour — the
 state it was in always has one — and the duration rows present in an
 hour sum to 1.0. A hole has none. Count rows are sparse by nature. The
 third clause is what keeps the recorder's upsert idempotent: nothing
@@ -633,29 +633,21 @@ Verified against 2026.8.3.
   SQLite expands the pair list with `json_each(:pairs)` and Postgres with
   `jsonb_array_elements`, each pair feeding one correlated
   `ORDER BY start_ts DESC LIMIT 1`: one statement of any size, one plan,
-  and the seek run per pair (Postgres `Index Scan Backward using
-  ix_statistics_statistic_id_start_ts` under a `Limit`, 248 loops of one
-  row; SQLite `SEARCH … USING INDEX (metadata_id=? AND start_ts<?)`).
-  Postgres gets no
-  `WHERE id IS NOT NULL` — the inner join drops the misses, and the filter
-  makes it evaluate the subplan twice. MySQL/MariaDB and an engine we do
-  not know get the portable form instead: one constant-bound arm per pair
-  in a `UNION ALL`, batched at `SEEK_BATCH` (500, SQLite's cap on a
-  compound select), and written out as `text` with the bounds literal —
-  building and compiling five hundred Core subqueries costs more Python
-  than the server spends on the query (472 pairs on MariaDB: 151 ms
-  through the Core, 35 ms as text, about 40 of it the server either
-  way). MariaDB will not push an outer-referenced bound into a range —
-  a correlated `LIMIT 1` walks the series and `MAX` + a re-join scans it
-  — while its arms plan as `range` on `(metadata_id, start_ts)`, one row
-  each; handing the pairs in through `JSON_TABLE` plans as `ref` on
-  `metadata_id` alone and takes 477 ms where the arms take 35, which is
-  why that dialect is not in the expanded set. Measured on a 13.9 GB
-  database, 2,408 pairs: arms 9 ms SQLite / 163 ms Postgres (which plans
-  every arm separately, ~30 µs each), expanded 10 ms SQLite / 15 ms
-  Postgres — so SQLite's switch buys one statement and no 500-pair cap,
-  not time, and Postgres's buys the order of magnitude. `rows_from`
-  keeps the arms on every engine: one per statistic, not one per pair.
+  and the seek run per pair. Postgres gets no `WHERE id IS NOT NULL` — the
+  inner join drops the misses, and the filter makes it evaluate the
+  subplan twice. MySQL/MariaDB and an engine we do not know get the
+  portable form instead: one constant-bound arm per pair in a `UNION ALL`,
+  batched at `SEEK_BATCH` (500, SQLite's cap on a compound select), and
+  written out as `text` with the bounds literal — building and compiling
+  five hundred Core subqueries costs more Python than the server spends
+  answering them. MariaDB will not push an outer-referenced bound into a
+  range, so a correlated `LIMIT 1` walks the series where its arms plan as
+  `range` on `(metadata_id, start_ts)`, one row each; that is why the
+  dialect is not in the expanded set. Postgres plans every arm separately,
+  so expanding buys it an order of magnitude; SQLite's switch buys one
+  statement and no 500-pair cap rather than time. The plans and the
+  figures are in `docs/performance.md`. `rows_from` keeps the arms on
+  every engine: one per statistic, not one per pair.
 - hassfest validates `strings.json` only for placeholder *names*, not
   content. The frontend renders every string through ICU MessageFormat, so a
   literal `{` or `}` anywhere in a string — a template example in a

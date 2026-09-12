@@ -17,8 +17,7 @@ fills it. Ids are preserved exactly - `statistics.metadata_id`,
 `states.metadata_id`, `old_state_id`, `attributes_id` - so the two
 engines answer from the same graph the SQLite file holds.
 
-Runs in the test image, which carries
-pymysql and psycopg2.
+Runs in the test image, which carries pymysql and psycopg2.
 """
 
 from __future__ import annotations
@@ -131,9 +130,9 @@ class MySQL(Target):
             cur.execute("SET FOREIGN_KEY_CHECKS=0")
             cur.execute("SET UNIQUE_CHECKS=0")
             cur.execute("SET SESSION sql_mode=''")
-            # A DELETE of 9M InnoDB rows outlives the default lock wait;
-            # `clear` truncates instead, and this covers a reload that
-            # falls back to DELETE on a small table.
+            # `clear` truncates, but a reload can still fall back to
+            # DELETE, and a DELETE of millions of InnoDB rows outlives the
+            # default lock wait.
             cur.execute("SET SESSION innodb_lock_wait_timeout=600")
 
     def columns(self, table):
@@ -146,17 +145,17 @@ class MySQL(Target):
             return [(c, t.endswith("blob")) for c, t in cur.fetchall()]
 
     def clear(self, tables):
-        # TRUNCATE, not DELETE: DELETE of 9M InnoDB rows takes longer than
-        # the load does. FOREIGN_KEY_CHECKS is already off, which is what
-        # lets a table another table references be truncated at all.
+        # TRUNCATE, not DELETE: a DELETE of the whole table outlives the
+        # load itself. FOREIGN_KEY_CHECKS is already off, which is what
+        # lets a referenced table be truncated at all.
         with self.con.cursor() as cur:
             for table in reversed(tables):
                 cur.execute(f"TRUNCATE TABLE `{table}`")
         self.con.commit()
 
     def load(self, table, columns, binaries, rows):
-        # LOAD DATA LOCAL INFILE wants a file; the rows are written out in
-        # chunks so a 9M-row table never needs a 9M-row temp file.
+        # LOAD DATA LOCAL INFILE wants a file; chunking keeps a huge
+        # table from needing an equally huge temp file.
         targets, sets = [], []
         for column, binary in zip(columns, binaries):
             if binary:

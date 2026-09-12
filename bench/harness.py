@@ -73,9 +73,8 @@ def load_run(path: str | Path) -> Run:
 
 # --------------------------------------------------------------------- the database
 
-# The two facts about a database the harness needs before it measures.
-# Asked through the recorder's own engine, so the same code serves
-# SQLite, MariaDB and Postgres.
+# Asked through the recorder's own engine, so one query serves SQLite,
+# MariaDB and Postgres alike.
 _OURS = (
     "FROM statistics s JOIN statistics_meta m ON m.id = s.metadata_id"
     " WHERE m.source = 'discrete_statistics'"
@@ -133,13 +132,9 @@ _STATISTICS = re.compile(r"\bstatistics\b", re.IGNORECASE)
 class Meter:
     """Statements, statistics-table statements and rows fetched, per window.
 
-    Rows are counted through the DBAPI connection's `row_factory` on
-    SQLite, which sees every row a cursor hands back, and through
-    `cursor.rowcount` on MariaDB and Postgres, which SQLite leaves at -1
-    for a SELECT. Statements come from SQLAlchemy's own event, so anything
-    the recorder's own thread runs inside the window is counted too - the
-    bench hass is idle and drained before each run, so that is noise, not
-    signal.
+    Statements come from SQLAlchemy's own event, so anything the
+    recorder's thread runs inside the window is counted too - the bench
+    hass is idle and drained before each run, so that is noise.
     """
 
     def __init__(self, hass) -> None:
@@ -183,9 +178,9 @@ class Meter:
         self._factory(dbapi_connection)
 
     def _after(self, conn, cursor, statement, parameters, context, executemany):
-        # pymysql and psycopg2 have no row_factory; their cursors do set
-        # `rowcount` for a SELECT, which sqlite3 leaves at -1. Between the
-        # two every engine is counted, and neither is counted twice.
+        # pymysql and psycopg2 have no row_factory but do set `rowcount`
+        # for a SELECT, which sqlite3 leaves at -1: every engine counted
+        # once, none twice.
         if self.on and cursor.rowcount and cursor.rowcount > 0:
             self.rows += cursor.rowcount
 

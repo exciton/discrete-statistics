@@ -51,8 +51,7 @@ def diff_case(case: str, left, right, limit: int) -> list[str]:
     out: list[str] = []
     if left == right:
         return out
-    # A `ws` case records no answer, and a run from before a case had one
-    # has None where the other has a dict.
+    # A `ws` case records no answer, so one side may be None.
     if not isinstance(left, dict) or not isinstance(right, dict):
         return [f"    A={left!r}  B={right!r}"]
     if case.startswith(("buckets", "stock")):
@@ -85,8 +84,7 @@ def main() -> None:
         del args[i : i + 2]
     a, left = load(args[0])
     b, right = load(args[1])
-    # `engine` is absent from results written before the harness grew
-    # more than SQLite; they were all SQLite.
+    # A result file without `engine` was SQLite.
     label = lambda d: f"{d['branch']}/{d.get('engine', 'sqlite')}/{d['variant']}"
     print(f"A = {label(a)} ({a['revision']}, {a['our_statistics_rows']} rows of ours)")
     print(f"B = {label(b)} ({b['revision']}, {b['our_statistics_rows']} rows of ours)")
