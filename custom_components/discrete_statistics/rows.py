@@ -307,6 +307,28 @@ def _from(
     return found
 
 
+def edge_rows(
+    session: Session,
+    metadata_ids: Iterable[int],
+    edges: Sequence[float],
+    *,
+    hourly: bool,
+) -> dict[int, list[Row]]:
+    """The rows answering every edge, per statistic, ascending and distinct.
+
+    Which statement answers them is the period's: at the hourly period
+    every row in the range answers an edge, so one range read is cheaper
+    than a seek per pair and the row it opens on answers the first edge;
+    at any longer period the edges are sparse in the series and the seeks
+    are the read. Either way the caller resolves an edge by
+    `buckets.before_edges`.
+    """
+    unique = list(dict.fromkeys(metadata_ids))
+    if hourly:
+        return rows_from(session, unique, edges[0], edges[-1])
+    return rows_before(session, [(mid, edge) for mid in unique for edge in edges])
+
+
 def rows_between(
     session: Session, metadata_ids: set[int], start: float, end: float
 ) -> dict[int, dict[float, Row]]:

@@ -12,7 +12,9 @@ from custom_components.discrete_statistics.buckets import (
     before_edges,
     cut,
     edges,
+    family_of,
     has_row,
+    judges,
 )
 from custom_components.discrete_statistics.const import HOUR
 
@@ -211,6 +213,46 @@ class TestHasRow:
         assert has_row(before, 24 * H, 48 * H)
         assert not has_row(before, 48 * H, 72 * H)
         assert not has_row(before, 0.0, 24 * H)
+
+
+class TestJudges:
+    ON = "discrete_statistics:sensor_grid_on_duration"
+    OFF = "discrete_statistics:sensor_grid_off_duration"
+    ON_COUNT = "discrete_statistics:sensor_grid_on_count"
+    OFF_COUNT = "discrete_statistics:sensor_grid_off_count"
+    OTHER = "discrete_statistics:sensor_door_open_duration"
+
+    def test_every_duration_of_the_family_judges_it_asked_for_or_not(self):
+        # A chart of one rare state must not show a gap in every period
+        # that state did not occur, so the siblings judge too.
+        ours = {self.ON, self.OFF, self.ON_COUNT, self.OFF_COUNT}
+        assert judges(ours, {self.ON_COUNT}) == {
+            "sensor_grid": {self.ON, self.OFF},
+        }
+
+    def test_a_family_without_durations_is_judged_on_what_was_asked(self):
+        ours = {self.ON_COUNT, self.OFF_COUNT}
+        assert judges(ours, {self.ON_COUNT, self.OFF_COUNT}) == {
+            "sensor_grid": {self.ON_COUNT, self.OFF_COUNT},
+        }
+
+    def test_another_entitys_duration_does_not_judge_this_one(self):
+        ours = {self.ON_COUNT, self.OTHER}
+        assert judges(ours, {self.ON_COUNT}) == {"sensor_grid": {self.ON_COUNT}}
+
+    def test_an_unparseable_id_is_its_own_family(self):
+        renamed = "discrete_statistics:renamed"
+        ours = {self.ON, self.OFF, renamed}
+        assert judges(ours, {renamed, self.ON_COUNT}) == {
+            renamed: {renamed},
+            "sensor_grid": {self.ON, self.OFF},
+        }
+
+    def test_a_family_is_the_entity_slug_of_an_id_we_built(self):
+        assert family_of(self.ON) == "sensor_grid"
+        assert family_of("discrete_statistics:renamed") == (
+            "discrete_statistics:renamed"
+        )
 
 
 @pytest.mark.parametrize("period", ["hour", "day", "week", "month", "year"])

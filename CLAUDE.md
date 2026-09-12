@@ -90,7 +90,8 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
        │    compiler        writes the recorder: the only module that does;
        │        │           hands out its read path as a Timeline (async_tail)
        ├─ buckets           pure: the row before each edge ->
-       │        │           per-period {start, end, change}
+       │        │           per-period {start, end, change}, and which
+       │        │           statistics judge gap from zero
        │        │
        ├─ periods           pure: a named period -> its edges, in a zone
        │        │
@@ -280,9 +281,12 @@ reads, and 37, all of them seeks, for the ten years of daily edges
 over five states `MAX_BUCKETS` still allows. The hourly
 period is one statement too, `rows.rows_from`: there every row in the
 range answers an edge, so the arms seek only the row before the range's
-start and one index range brings back the rest.
-Gap or zero is judged on the entity's duration statistics as a whole,
-which ride along in the same read: a bucket is compiled when any of them
+start and one index range brings back the rest. Which of the two the
+period wants is `rows.edge_rows`, so `websocket` asks for the edges and
+not for a statement.
+Gap or zero is judged on `buckets.judges` — the entity's duration
+statistics as a whole, asked for or not — which ride along in the same
+read: a bucket is compiled when any of them
 has a row inside it, a requested statistic with no row of its own there
 reads zero, and only a hole is left out for the card to draw as a gap.
 `buckets.edges` aligns the edges as the

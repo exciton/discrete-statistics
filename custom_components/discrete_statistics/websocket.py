@@ -3,12 +3,10 @@
 `recorder/statistics_during_period` reads every hourly row in the range
 and reduces them in Python whatever the period is asked for. Our sums
 are cumulative, so a bucket needs only the newest row before each of its
-edges, and one statement answers every (statistic, edge) pair at once -
-`rows.rows_before`, or `rows.rows_from` at the hourly period, where
-every row in the range answers an edge anyway. The entity's duration
-statistics ride along so a bucket can be told compiled from a hole. The
-arithmetic is in `buckets` and the queries in `rows`; this module only
-reads.
+edges, which `rows.edge_rows` answers in one statement. The entity's
+duration statistics ride along so a bucket can be told compiled from a
+hole. The arithmetic is in `buckets` and the queries in `rows`; this
+module only joins the two.
 """
 
 from __future__ import annotations
@@ -23,10 +21,19 @@ from homeassistant.components.recorder.util import session_scope
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import dt as dt_util
 
-from .buckets import Bucket, Period, before_edges, cut, edges, has_row
-from .const import DOMAIN, HOUR, METRIC_DURATION
-from .rows import metadata_ids, rows_before, rows_from
-from .statistic_ids import family, parse
+from .buckets import (
+    Bucket,
+    Period,
+    before_edges,
+    cut,
+    edges,
+    family_of,
+    has_row,
+    judges,
+)
+from .const import DOMAIN, HOUR
+from .rows import edge_rows, metadata_ids
+from .statistic_ids import family
 
 # The most buckets one request may ask for. A chart cannot show more, and
 # the edges and the rows grow with the count - as do the statement's arms
@@ -101,15 +108,6 @@ async def ws_buckets(
     connection.send_result(msg["id"], result)
 
 
-def _family(statistic_id: str) -> str:
-    """The entity a statistic belongs to, as its ID names it.
-
-    An ID we cannot parse stands for its own family, so it is judged on
-    itself alone rather than joining somebody else's.
-    """
-    return family(statistic_id) or statistic_id
-
-
 def _buckets(
     hass: HomeAssistant,
     statistic_ids: set[str],
@@ -121,9 +119,9 @@ def _buckets(
 
     The edges are aligned in the instance's timezone, as the recorder
     aligns its own, so a chart shows the same days and months whichever
-    command drew it. Gap or zero is judged on each entity's duration
-    statistics as a whole, which ride along in every read: a chart of one
-    rare state must not show a gap in every period it did not occur.
+    command drew it. The statistics that judge gap from zero ride along
+    in the read, so a chart of one rare state does not show a gap in
+    every period it did not occur.
     """
     edges_ = edges(start, end, period, dt_util.get_default_time_zone())
     with session_scope(hass=hass, read_only=True) as session:
@@ -132,43 +130,22 @@ def _buckets(
         requested = {sid for sid in statistic_ids if sid in ours}
         if not requested:
             return {}
-        durations: dict[str, set[str]] = {}
-        for sid in ours:
-            parts = parse(sid)
-            if parts is not None and parts[2] == METRIC_DURATION:
-                durations.setdefault(parts[0], set()).add(sid)
-        judges: dict[str, set[str]] = {}
-        for statistic_id in requested:
-            slug = _family(statistic_id)
-            judges.setdefault(slug, set()).update(durations.get(slug, ()))
-        # An entity with no duration statistic left is judged on what was
-        # asked of it: every requested ID of that entity, not just one.
-        for slug, judged in judges.items():
-            if not judged:
-                judges[slug] = {sid for sid in requested if _family(sid) == slug}
-        wanted = requested.union(*judges.values())
+        judged_by = judges(ours, requested)
+        wanted = requested.union(*judged_by.values())
         ids = {sid: ours[sid] for sid in wanted}
-
-        if period == "hour":
-            # Every row in the range answers an edge, so the range is the
-            # cheaper read; the row it opens on answers the first edge.
-            found = rows_from(session, set(ids.values()), edges_[0], edges_[-1])
-        else:
-            found = rows_before(
-                session, [(mid, edge) for mid in ids.values() for edge in edges_]
-            )
+        found = edge_rows(session, ids.values(), edges_, hourly=period == "hour")
         before = {
             sid: before_edges(found.get(mid, ()), edges_) for sid, mid in ids.items()
         }
 
         def compiled_by(slug: str):
-            judged = [before[sid] for sid in judges[slug]]
+            judged = [before[sid] for sid in judged_by[slug]]
             return lambda a, b: any(has_row(rows, a, b) for rows in judged)
 
         return {
             sid: [
                 _serialise(b)
-                for b in cut(edges_, before[sid], compiled_by(_family(sid)))
+                for b in cut(edges_, before[sid], compiled_by(family_of(sid)))
             ]
             for sid in requested
         }

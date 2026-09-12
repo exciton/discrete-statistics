@@ -18,13 +18,14 @@ a ratio to divide by whichever of those falls inside it.
 from __future__ import annotations
 
 from bisect import bisect_left
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime, timedelta, tzinfo
 from itertools import pairwise
 from typing import Literal, NamedTuple
 
 from .bucketer import hour_start
-from .const import HOUR
+from .const import HOUR, METRIC_DURATION
+from .statistic_ids import family, parse
 
 Period = Literal["hour", "day", "week", "month", "year"]
 
@@ -120,6 +121,40 @@ def before_edges(
     return {
         edge: (series[at - 1] if (at := bisect_left(starts, edge)) else None)
         for edge in edges_
+    }
+
+
+def family_of(statistic_id: str) -> str:
+    """The entity a statistic belongs to, as its ID names it.
+
+    An ID we cannot parse stands for its own family, so it is judged on
+    itself alone rather than joining somebody else's.
+    """
+    return family(statistic_id) or statistic_id
+
+
+def judges(ours: Iterable[str], requested: set[str]) -> dict[str, set[str]]:
+    """Per family, the statistics whose rows tell a compiled bucket from a hole.
+
+    An entity's duration statistics as a whole, whether or not they were
+    asked for: a chart of one rare state must not show a gap in every
+    period that state did not occur. An entity with none left - both
+    duration statistics deleted - is judged on what was asked of it,
+    every requested ID of that entity rather than just one, since a count
+    row stands wherever that hour was compiled too.
+    """
+    durations: dict[str, set[str]] = {}
+    for statistic_id in ours:
+        parts = parse(statistic_id)
+        if parts is not None and parts[2] == METRIC_DURATION:
+            durations.setdefault(parts[0], set()).add(statistic_id)
+    judged: dict[str, set[str]] = {}
+    for statistic_id in requested:
+        slug = family_of(statistic_id)
+        judged.setdefault(slug, set()).update(durations.get(slug, ()))
+    return {
+        slug: by or {sid for sid in requested if family_of(sid) == slug}
+        for slug, by in judged.items()
     }
 
 
