@@ -34,7 +34,8 @@ from custom_components.discrete_statistics import rows as ds_rows
 from custom_components.discrete_statistics.compiler import Compiler
 from custom_components.discrete_statistics.config import entity_config_from_entry
 from custom_components.discrete_statistics.const import HOUR
-from custom_components.discrete_statistics.reading import Frame, Partial, Spec
+from custom_components.discrete_statistics.coordinator import frame_of
+from custom_components.discrete_statistics.reading import Partial, Spec
 
 from . import cases as cases_module
 
@@ -399,24 +400,6 @@ def _check_stock(result: dict) -> dict:
         ]
         for sid, series in sorted(result.items())
     }
-
-
-async def frame_of(compiler: Compiler, hass, entity_id: str) -> Frame:
-    existing, watermark = await compiler.async_compiled(entity_id)
-    series_start = (
-        await get_instance(hass).async_add_executor_job(
-            ds_rows.series_start, hass, set(existing)
-        )
-        if existing
-        else None
-    )
-    earliest = await compiler.async_earliest_state_ts(entity_id)
-    return Frame(
-        existing,
-        None if watermark is None else watermark + HOUR,
-        series_start,
-        earliest,
-    )
 
 
 # ----------------------------------------------------------------- history_stats

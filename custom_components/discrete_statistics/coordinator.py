@@ -68,6 +68,29 @@ REFRESH_COOLDOWN = 2.0
 REASON_TEMPLATE = "template"
 
 
+async def frame_of(compiler: Compiler, hass: HomeAssistant, entity_id: str) -> Frame:
+    """What the recorder holds for the entity, in one assembly.
+
+    Shared with the benchmark harness, so what it measures is the read a
+    refresh actually does.
+    """
+    existing, watermark = await compiler.async_compiled(entity_id)
+    series_start = (
+        await get_instance(hass).async_add_executor_job(
+            rows.series_start, hass, set(existing)
+        )
+        if existing
+        else None
+    )
+    earliest = await compiler.async_earliest_state_ts(entity_id)
+    return Frame(
+        existing,
+        None if watermark is None else watermark + HOUR,
+        series_start,
+        earliest,
+    )
+
+
 class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
     """Readings keyed by sensor subentry id."""
 
@@ -223,31 +246,17 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
         hours = self._hours
         frame = self._frame
         if frame is None:
-            existing, watermark = await self._compiler.async_compiled(cfg.entity_id)
+            frame = await frame_of(self._compiler, self.hass, cfg.entity_id)
             # A statistic the user deleted and the entity then returned to is
             # written again from a base of zero, which the compile's range
             # does not say, so its cached sums at older edges are on the base
             # it had before: the whole cache goes when the known set changes.
             # Cleared rather than replaced, so a compile landing mid-refresh
             # keeps the fresh cache it installed.
-            known = frozenset(existing)
+            known = frozenset(frame.existing)
             if self._known is not None and known != self._known:
                 sums.clear()
             self._known = known
-            series_start = (
-                await get_instance(self.hass).async_add_executor_job(
-                    rows.series_start, self.hass, set(existing)
-                )
-                if existing
-                else None
-            )
-            earliest = await self._compiler.async_earliest_state_ts(cfg.entity_id)
-            frame = Frame(
-                existing,
-                None if watermark is None else watermark + HOUR,
-                series_start,
-                earliest,
-            )
             if generation == self._generation:
                 self._frame = frame
 
