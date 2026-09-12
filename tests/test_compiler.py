@@ -27,7 +27,8 @@ from custom_components.discrete_statistics.const import (
     METRIC_DURATION,
 )
 from custom_components.discrete_statistics.payload import metadata_for
-from custom_components.discrete_statistics.statistic_ids import belongs_to, parse
+from custom_components.discrete_statistics.statistic_ids import parse
+from tests.conftest import existing, read_sums
 
 ENTITY = "binary_sensor.grid_status"
 DURATION_OFF = "discrete_statistics:binary_sensor_grid_status_off_duration"
@@ -43,34 +44,6 @@ def cfg():
     return EntityConfig(
         entity_id=ENTITY, name="Grid Status", default="record_known", states={}
     )
-
-
-@pytest.fixture(autouse=True)
-def auto_enable_custom_integrations(recorder_db_url, enable_custom_integrations):
-    """Override the root conftest fixture.
-
-    The root fixture pulls in `hass`, which the recorder fixtures refuse to
-    run behind: `recorder_db_url` asserts that hass has not been created
-    yet. Requesting it first restores the required order.
-    """
-    yield
-
-
-@pytest.fixture
-async def recorder(recorder_mock, hass):
-    """A hass with the recorder set up."""
-    await async_setup_component(hass, "recorder", {"recorder": {}})
-    await hass.async_block_till_done()
-    return hass
-
-
-async def existing(hass, entity_id=ENTITY):
-    """The statistic IDs the recorder holds for an entity."""
-    await get_instance(hass).async_block_till_done()
-    metadata = await get_instance(hass).async_add_executor_job(
-        ft.partial(get_metadata, hass, statistic_source="discrete_statistics")
-    )
-    return sorted(sid for sid in metadata if belongs_to(sid, entity_id))
 
 
 async def stored_name(hass, statistic_id):
@@ -95,47 +68,6 @@ async def read_rows(hass, statistic_id, start, end):
         {"sum"},
     )
     return [(row["start"], row["sum"]) for row in result.get(statistic_id, [])]
-
-
-async def read_sums(hass, statistic_id, start, end, entity_id=ENTITY):
-    """The cumulative sum at each compiled hour in [start, end).
-
-    A row stands only where something changed, so the sum at a quiet hour
-    is carried from the newest row before it - zero before the statistic's
-    first row - and an hour is compiled when any duration statistic of the
-    entity holds a row there.
-    """
-    durations = [
-        sid
-        for sid in await existing(hass, entity_id)
-        if parse(sid)[2] == METRIC_DURATION
-    ]
-    result = await get_instance(hass).async_add_executor_job(
-        statistics_during_period,
-        hass,
-        start - timedelta(days=400),
-        end,
-        {*durations, statistic_id},
-        "hour",
-        None,
-        {"sum"},
-    )
-    compiled = sorted(
-        {
-            row["start"]
-            for sid in durations
-            for row in result.get(sid, [])
-            if start.timestamp() <= row["start"] < end.timestamp()
-        }
-    )
-    own = sorted((row["start"], row["sum"]) for row in result.get(statistic_id, []))
-    sums, i, running = [], 0, 0.0
-    for hour in compiled:
-        while i < len(own) and own[i][0] <= hour:
-            running = own[i][1]
-            i += 1
-        sums.append(running)
-    return sums
 
 
 async def test_compiles_nothing_without_history(recorder):

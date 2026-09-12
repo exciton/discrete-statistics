@@ -3,9 +3,7 @@
 from datetime import timedelta
 from unittest.mock import patch
 
-import pytest
 from homeassistant.helpers.json import json_dumps
-from homeassistant.setup import async_setup_component
 
 from custom_components.discrete_statistics.compiler import Compiler
 from custom_components.discrete_statistics.diagnostics import (
@@ -14,22 +12,8 @@ from custom_components.discrete_statistics.diagnostics import (
 from tests.test_sensor import ENTITY, ON_TODAY, T0, seeded, sensor
 
 
-@pytest.fixture(autouse=True)
-def auto_enable_custom_integrations(recorder_db_url, enable_custom_integrations):
-    """Override the root conftest fixture; see tests/test_compiler.py."""
-    yield
-
-
-@pytest.fixture
-async def recorder(recorder_mock, hass):
-    await async_setup_component(hass, "recorder", {"recorder": {}})
-    await hass.config.async_set_time_zone("UTC")
-    await hass.async_block_till_done()
-    return hass
-
-
-async def test_the_download_reports_the_entry_end_to_end(recorder, freezer):
-    hass = recorder
+async def test_the_download_reports_the_entry_end_to_end(recorder_utc, freezer):
+    hass = recorder_utc
     entry = await seeded(hass, freezer, [sensor("on today", ["on"])])
 
     result = await async_get_config_entry_diagnostics(hass, entry)
@@ -61,8 +45,8 @@ async def test_the_download_reports_the_entry_end_to_end(recorder, freezer):
     assert result["yaml_entities"] == []
 
 
-async def test_a_failing_recorder_read_is_reported_not_raised(recorder, freezer):
-    hass = recorder
+async def test_a_failing_recorder_read_is_reported_not_raised(recorder_utc, freezer):
+    hass = recorder_utc
     entry = await seeded(hass, freezer, [sensor("on today", ["on"])])
 
     with patch.object(Compiler, "async_compiled", side_effect=RuntimeError("db gone")):

@@ -56,24 +56,6 @@ from custom_components.discrete_statistics.statistic_ids import build
 ENTITY = "binary_sensor.grid_status"
 
 
-@pytest.fixture(autouse=True)
-def auto_enable_custom_integrations(recorder_db_url, enable_custom_integrations):
-    """Override the root conftest fixture.
-
-    The root fixture pulls in `hass`, which the recorder fixtures refuse to
-    run behind: `recorder_db_url` asserts that hass has not been created
-    yet. Requesting it first restores the required order.
-    """
-    yield
-
-
-@pytest.fixture
-async def recorder(recorder_mock, hass):
-    await async_setup_component(hass, "recorder", {"recorder": {}})
-    await hass.async_block_till_done()
-    return hass
-
-
 async def _pick(hass, entity_id=ENTITY):
     """Open a flow and pick the entity: what the first step is for."""
     result = await hass.config_entries.flow.async_init(

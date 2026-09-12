@@ -241,8 +241,10 @@ def _arms(batch: Sequence[tuple[int, float]]) -> Any:
     subqueries to construct and compile, and that Python costs more
     than the server spends answering them - 472 pairs on MariaDB, 151 ms
     through the Core against 35 ms as text, where the server's own share
-    of either is under 40. Both bounds are ours - an `int` and a `float`
-    we produced - and `repr` round-trips the timestamp exactly.
+    of either is about 40. The bounds are coerced at the format site:
+    `int()` and `float()` can yield nothing but a number, so the
+    rendering is not an injection, and `repr` round-trips the timestamp
+    exactly.
     """
     arms = " UNION ALL ".join(
         "SELECT (SELECT id FROM statistics"

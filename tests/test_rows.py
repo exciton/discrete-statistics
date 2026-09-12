@@ -9,7 +9,6 @@ from homeassistant.components.recorder.statistics import (
     get_metadata_with_session,
 )
 from homeassistant.components.recorder.util import session_scope
-from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.components.recorder.common import (
     async_wait_recording_done,
 )
@@ -24,19 +23,6 @@ from custom_components.discrete_statistics.rows import bases, metadata_ids, stan
 ON = "discrete_statistics:binary_sensor_grid_status_on_duration"
 OFF = "discrete_statistics:binary_sensor_grid_status_off_duration"
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
-
-
-@pytest.fixture(autouse=True)
-def auto_enable_custom_integrations(recorder_db_url, enable_custom_integrations):
-    """Override the root conftest fixture; see tests/test_compiler.py."""
-    yield
-
-
-@pytest.fixture
-async def recorder(recorder_mock, hass):
-    await async_setup_component(hass, "recorder", {"recorder": {}})
-    await hass.async_block_till_done()
-    return hass
 
 
 async def seed(hass, statistic_id, start, sums):
@@ -389,6 +375,12 @@ def test_the_mysql_arms_carry_their_bounds_as_literals():
     assert f"start_ts < {edge!r}" in sql
     # Nothing left to bind, in either paramstyle.
     assert "%s" not in sql and ":" not in sql
+
+
+def test_the_arms_refuse_a_non_numeric_bound():
+    """`int()` and `float()` at the format site can yield only a number."""
+    with pytest.raises((ValueError, TypeError)):
+        rows.seek_statements("mysql", [("1 OR 1=1", 0.0)])
 
 
 def test_the_sqlite_rendering_seeks_once_per_json_each_pair():

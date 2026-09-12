@@ -619,7 +619,7 @@ Verified against 2026.8.3.
   compound select), and written out as `text` with the bounds literal —
   building and compiling five hundred Core subqueries costs more Python
   than the server spends on the query (472 pairs on MariaDB: 151 ms
-  through the Core, 35 ms as text, under 40 of it the server either
+  through the Core, 35 ms as text, about 40 of it the server either
   way). MariaDB will not push an outer-referenced bound into a range —
   a correlated `LIMIT 1` walks the series and `MAX` + a re-join scans it
   — while its arms plan as `range` on `(metadata_id, start_ts)`, one row
@@ -651,7 +651,13 @@ Every test must fail when its fix is reverted; a test that passes regardless
 of the code under test proves nothing. When adding a test for a bug fix,
 revert the fix, watch it fail, then restore.
 
-Integration tests use `recorder_mock` and `freezer`. Each integration test
-module overrides the root conftest's autouse `auto_enable_custom_integrations`
-fixture to request `recorder_db_url` first; this is fixture ordering against
-`recorder_mock`, not a workaround.
+Integration tests use `recorder_mock` and `freezer`. `tests/conftest.py`
+holds what they share: the `recorder` and `recorder_utc` fixtures, `play`
+and the debounce helpers, `existing` and `read_sums`. It also overrides the
+root conftest's autouse `auto_enable_custom_integrations` fixture to
+request `recorder_db_url` first; this is fixture ordering against
+`recorder_mock`, not a workaround. Being global it reaches the
+pure-module tests too, and costs them nothing: `recorder_db_url` only
+reads `--dburl` and asserts hass has not been built, and it is ordered
+ahead of `hass` — which `enable_custom_integrations` pulls in for every
+test either way.

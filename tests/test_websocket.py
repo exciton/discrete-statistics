@@ -28,17 +28,6 @@ CONFIG = {DOMAIN: [{"entity_id": ENTITY, "name": "Grid Status"}]}
 TZ = ZoneInfo("Australia/Sydney")
 
 
-@pytest.fixture(autouse=True)
-def auto_enable_custom_integrations(recorder_db_url, enable_custom_integrations):
-    """Override the root conftest fixture.
-
-    The root fixture pulls in `hass`, which the recorder fixtures refuse to
-    run behind: `recorder_db_url` asserts that hass has not been created
-    yet. Requesting it first restores the required order.
-    """
-    yield
-
-
 @pytest.fixture
 async def client(hass, recorder_mock, hass_ws_client):
     """A websocket client on a hass with the integration set up."""
