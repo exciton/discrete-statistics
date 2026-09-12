@@ -150,8 +150,8 @@ at all between the day changing and a recompute reaching back to it. The
 edges the cache does not answer are read together, `rows.sums_at_edges`
 over all of them: the card's own shape, so a refresh pays one statement
 on the engines that expand the pairs (SQLite, Postgres) however many
-edges its sensors plan, and one per `SEEK_BATCH` pairs on MySQL, which
-batches them — plus the metadata read either way.
+edges its sensors plan, and one per `SEEK_BATCH` pairs on MySQL/MariaDB,
+which batches them — plus the metadata read either way.
 
 `sensor.py` builds the entry's `PeriodCoordinator` lazily, the first time
 the entry has a `sensor` subentry, and keeps it once built. An entry

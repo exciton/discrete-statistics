@@ -15,7 +15,8 @@ pairs batch at `SEEK_BATCH`.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
+from contextlib import contextmanager
 from typing import Any
 
 from homeassistant.components.recorder import get_instance
@@ -355,6 +356,28 @@ def newest_before(
     return [Row(start_ts, sum_) for start_ts, sum_ in rows]
 
 
+@contextmanager
+def _ids(
+    hass: HomeAssistant, statistic_ids: Iterable[str]
+) -> Iterator[tuple[Session, dict[int, str]]]:
+    """A read-only session and the metadata ids of ours among those asked for.
+
+    Keyed by metadata id, which is what a row carries back; a statistic
+    the recorder does not hold is simply absent.
+    """
+    with session_scope(hass=hass, read_only=True) as session:
+        metadata = get_metadata_with_session(
+            get_instance(hass), session, statistic_ids=statistic_ids
+        )
+        yield (
+            session,
+            {
+                metadata_id: statistic_id
+                for statistic_id, (metadata_id, _) in metadata.items()
+            },
+        )
+
+
 def bases(
     hass: HomeAssistant, statistic_ids: set[str], edge: float
 ) -> dict[str, list[Row]]:
@@ -364,13 +387,10 @@ def bases(
     hour before the edge its value by difference. A statistic with no
     row before the edge is absent.
     """
-    with session_scope(hass=hass, read_only=True) as session:
-        metadata = get_metadata_with_session(
-            get_instance(hass), session, statistic_ids=statistic_ids
-        )
+    with _ids(hass, statistic_ids) as (session, ids):
         found = {
             statistic_id: newest_before(session, metadata_id, edge, 2)
-            for statistic_id, (metadata_id, _) in metadata.items()
+            for metadata_id, statistic_id in ids.items()
         }
         return {statistic_id: rows for statistic_id, rows in found.items() if rows}
 
@@ -379,14 +399,7 @@ def standing(
     hass: HomeAssistant, statistic_ids: set[str], start: float, end: float
 ) -> dict[str, set[float]]:
     """The hours in [start, end) at which each statistic already holds a row. Executor."""
-    with session_scope(hass=hass, read_only=True) as session:
-        metadata = get_metadata_with_session(
-            get_instance(hass), session, statistic_ids=statistic_ids
-        )
-        ids = {
-            metadata_id: statistic_id
-            for statistic_id, (metadata_id, _) in metadata.items()
-        }
+    with _ids(hass, statistic_ids) as (session, ids):
         between = rows_between(session, set(ids), start, end)
         return {ids[metadata_id]: set(rows) for metadata_id, rows in between.items()}
 
@@ -405,14 +418,7 @@ def sums_at_edges(
     hold, which is how a caller tells "not yet" from "never".
     """
     wanted = sorted(edges)
-    with session_scope(hass=hass, read_only=True) as session:
-        metadata = get_metadata_with_session(
-            get_instance(hass), session, statistic_ids=statistic_ids
-        )
-        ids = {
-            metadata_id: statistic_id
-            for statistic_id, (metadata_id, _) in metadata.items()
-        }
+    with _ids(hass, statistic_ids) as (session, ids):
         found = rows_before(
             session,
             [(metadata_id, edge) for metadata_id in ids for edge in wanted],
@@ -465,11 +471,8 @@ def _bound(
     ours - 4.6 M rows and over a second where the seeks are two index
     lookups. A statistic with no row contributes nothing.
     """
-    with session_scope(hass=hass, read_only=True) as session:
-        metadata = get_metadata_with_session(
-            get_instance(hass), session, statistic_ids=statistic_ids
-        )
-        ids = list({metadata_id for metadata_id, _ in metadata.values()})
+    with _ids(hass, statistic_ids) as (session, found_ids):
+        ids = list(found_ids)
         found = [
             start_ts
             for at in range(0, len(ids), SEEK_BATCH)
