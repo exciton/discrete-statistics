@@ -5,6 +5,7 @@ error in modern pytest and breaks the whole suite.
 """
 
 import functools as ft
+import logging
 import re
 from datetime import timedelta
 
@@ -26,6 +27,16 @@ from custom_components.discrete_statistics.coordinator import REFRESH_COOLDOWN
 from custom_components.discrete_statistics.statistic_ids import belongs_to, parse
 
 ENTITY = "binary_sensor.grid_status"
+
+
+@pytest.fixture(autouse=True)
+def _quiet_sqlalchemy():
+    """Undo the HA pytest plugin, which sets this logger to INFO at import.
+
+    SQLAlchemy logs every statement on the logger's effective level,
+    whatever the engine's `echo`.
+    """
+    logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 
 
 @pytest.fixture(autouse=True)
