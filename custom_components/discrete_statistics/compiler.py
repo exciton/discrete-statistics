@@ -523,28 +523,31 @@ class Compiler:
     ) -> tuple[dict[str, float], dict[str, float]]:
         """Return the sums the window continues from, and the previous hour's values.
 
-        One seek per statistic: its two newest rows before the window. The
-        newest is the base - before the window, never the newest overall,
-        so a recompute opening inside a hole continues from the near side
-        and not from the rows it is about to overwrite. The pair gives the
-        hour before the window its value by difference, which is what
-        `_carried_from_statistics` reads; a row rewritten with the carried
-        sum reads as zero there. A statistic with no row before the window
-        is absent and starts from zero.
+        One statement, two edges per statistic: the newest row before the
+        window - never the newest overall, so a recompute opening inside a
+        hole continues from the near side and not from the rows it is
+        about to overwrite - and the newest row before the hour before it.
+        When the base stands at that hour, the two give it its value by
+        difference, which is what `_carried_from_statistics` reads; a row
+        rewritten with the carried sum reads as zero there. A statistic
+        with no row before the window is absent and starts from zero.
         """
         if not statistic_ids:
             return {}, {}
+        previous = window_start - HOUR
         found = await get_instance(self._hass).async_add_executor_job(
-            bases, self._hass, set(statistic_ids), window_start
+            bases, self._hass, set(statistic_ids), (previous, window_start)
         )
         sums: dict[str, float] = {}
         values: dict[str, float] = {}
-        for statistic_id, rows in found.items():
-            newest = rows[0]
+        for statistic_id, at in found.items():
+            newest = at[window_start]
             sums[statistic_id] = newest.sum
-            if newest.start == window_start - HOUR:
-                second = rows[1].sum if len(rows) > 1 else 0.0
-                values[statistic_id] = newest.sum - second
+            if newest.start == previous:
+                before = at.get(previous)
+                values[statistic_id] = newest.sum - (
+                    0.0 if before is None else before.sum
+                )
         return sums, values
 
     async def async_earliest_state_ts(self, entity_id: str) -> float | None:

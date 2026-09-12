@@ -148,7 +148,13 @@ async def test_series_end_ignores_a_row_with_no_sum(recorder):
     assert await series_end(recorder, {ON}) == (T0 + timedelta(hours=1)).timestamp()
 
 
-async def test_bases_are_the_two_newest_rows_before_the_edge(recorder):
+async def read_bases(hass, statistic_ids, edges):
+    return await get_instance(hass).async_add_executor_job(
+        bases, hass, statistic_ids, [edge.timestamp() for edge in edges]
+    )
+
+
+async def test_bases_answer_each_edge_with_the_newest_row_before_it(recorder):
     hass = recorder
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     # A: rows at hours 0, 1, 5 (a hole at 2-4). B: one row at hour 0. C: none.
@@ -160,24 +166,27 @@ async def test_bases_are_the_two_newest_rows_before_the_edge(recorder):
     )
     await seed(hass, "discrete_statistics:b_on_duration", start, [7.0])
 
-    edge = (start + timedelta(hours=6)).timestamp()
-    found = await get_instance(hass).async_add_executor_job(
-        bases,
+    edges = [start + timedelta(hours=5), start + timedelta(hours=6)]
+    found = await read_bases(
         hass,
         {
             "discrete_statistics:a_on_duration",
             "discrete_statistics:b_on_duration",
             "discrete_statistics:c_on_duration",
         },
-        edge,
+        edges,
     )
 
-    a = found["discrete_statistics:a_on_duration"]
-    assert [(r.start, r.sum) for r in a] == [
-        ((start + timedelta(hours=5)).timestamp(), 3.0),
-        ((start + timedelta(hours=1)).timestamp(), 2.0),
-    ]
-    assert [r.sum for r in found["discrete_statistics:b_on_duration"]] == [7.0]
+    # The compile's two edges: the base at the window, and the row before
+    # the hour before it, which gives that hour its value by difference.
+    assert found["discrete_statistics:a_on_duration"] == {
+        edges[0].timestamp(): ((start + timedelta(hours=1)).timestamp(), 2.0),
+        edges[1].timestamp(): ((start + timedelta(hours=5)).timestamp(), 3.0),
+    }
+    assert found["discrete_statistics:b_on_duration"] == {
+        edges[0].timestamp(): (start.timestamp(), 7.0),
+        edges[1].timestamp(): (start.timestamp(), 7.0),
+    }
     assert "discrete_statistics:c_on_duration" not in found
 
 
@@ -186,12 +195,33 @@ async def test_bases_stop_strictly_before_the_edge(recorder):
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     await seed(hass, "discrete_statistics:a_on_duration", start, [1.0, 2.0, 3.0])
 
-    # A row starting exactly on the edge is not before it.
-    edge = (start + timedelta(hours=2)).timestamp()
-    found = await get_instance(hass).async_add_executor_job(
-        bases, hass, {"discrete_statistics:a_on_duration"}, edge
+    # A row starting exactly on the edge is not before it, and an edge
+    # with nothing before it is absent rather than zero.
+    edges = [start, start + timedelta(hours=2)]
+    found = await read_bases(hass, {"discrete_statistics:a_on_duration"}, edges)
+    assert found["discrete_statistics:a_on_duration"] == {
+        edges[1].timestamp(): ((start + timedelta(hours=1)).timestamp(), 2.0),
+    }
+
+
+async def test_bases_are_one_statement_whatever_the_statistic_count(
+    recorder, statements
+):
+    hass = recorder
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    ids = {f"discrete_statistics:a_s{n}_duration" for n in range(6)}
+    for statistic_id in sorted(ids):
+        await seed(hass, statistic_id, start, [1.0, 2.0])
+
+    statements.clear()
+    found = await read_bases(
+        hass, ids, [start + timedelta(hours=1), start + timedelta(hours=2)]
     )
-    assert [r.sum for r in found["discrete_statistics:a_on_duration"]] == [2.0, 1.0]
+
+    # Six statistics at two edges, in the one seek: a seek per statistic
+    # is a statement per statistic on every chunk of a backfill.
+    assert len(statements) == 1
+    assert len(found) == len(ids)
 
 
 async def test_standing_lists_the_hours_holding_a_row_inside_the_window(recorder):

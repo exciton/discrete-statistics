@@ -97,9 +97,8 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
        ├─ rows              reads the recorder: the newest row before each
        │        │           of many edges, per-engine SQL, the sums at a
        │        │           set of edges, a range opened on the row before
-       │        │           it, a statistic's newest rows before one, the
-       │        │           rows standing in a window, where a series
-       │        │           starts and where it ends
+       │        │           it, the compile's bases, the rows standing in
+       │        │           a window, where a series starts and where it ends
        ├─ reading           pure: a window in pieces - whole hours, part hours,
        │        │           the tail -> one sensor's value
        │        │
@@ -120,13 +119,13 @@ Keep it that way: if a change needs recorder access in a lower module, the
 design is drifting. Three recorder boundaries: `compiler` is the only
 module that writes; `rows` reads — `session_scope(read_only=True)`, the
 newest row before each of a set of edges, the sums at a set of edges, the
-rows of a range and the one before it, the newest rows before one, the
-rows standing in a window, the earliest and the newest row of a series — for
-`websocket`, the compiler and the coordinator alike. Every one of those
-reads is a single statement except `rows.bases`, the compile's base read,
-which seeks once per statistic: N statements per compile chunk for an
-entity with N statistics. It has not been batched onto `rows_before` yet.
-And `config_flow` reads once per options dialog, the entity's distinct states, to draw a
+rows of a range and the one before it, the rows standing in a window, the
+earliest and the newest row of a series — for `websocket`, the compiler
+and the coordinator alike. Every one of those reads is a single statement,
+`rows.bases` included: the compile's base read asks `rows_before` for two
+edges per statistic — the window and the hour before it — so an entity
+with nine statistics costs one statement, not nine. `config_flow` reads
+once per options dialog, the entity's distinct states, to draw a
 mapping row for each, and once per sensor dialog, the entity's statistics,
 to offer their states; so the invariants below are the compiler's alone.
 `Compiler.async_tail` is the compiler's *read* path — the carry chain,

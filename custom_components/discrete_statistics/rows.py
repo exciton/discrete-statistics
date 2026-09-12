@@ -335,23 +335,6 @@ def _rows(
     return result
 
 
-def newest_before(
-    session: Session, metadata_id: int, edge: float, limit: int = 1
-) -> list[Row]:
-    """Up to `limit` rows before the edge, newest first. One seek whatever the limit."""
-    rows = session.execute(
-        select(Statistics.start_ts, Statistics.sum)
-        .where(
-            Statistics.metadata_id == metadata_id,
-            Statistics.sum.is_not(None),
-            Statistics.start_ts < edge,
-        )
-        .order_by(Statistics.start_ts.desc())
-        .limit(limit)
-    )
-    return [Row(start_ts, sum_) for start_ts, sum_ in rows]
-
-
 @contextmanager
 def _ids(
     hass: HomeAssistant, statistic_ids: Iterable[str]
@@ -375,20 +358,31 @@ def _ids(
 
 
 def bases(
-    hass: HomeAssistant, statistic_ids: set[str], edge: float
-) -> dict[str, list[Row]]:
-    """The two newest rows of each statistic before an edge. Executor.
+    hass: HomeAssistant, statistic_ids: set[str], edges: Sequence[float]
+) -> dict[str, dict[float, Row]]:
+    """Each statistic's newest row before each edge. Executor.
 
-    The newest is the sum a window continues from; the pair gives the
-    hour before the edge its value by difference. A statistic with no
-    row before the edge is absent.
+    One statement over every (statistic, edge) pair, the same read the
+    card and the sensors make, resolved per edge by `before_edges`.
+
+    An edge with no row before it is absent from the statistic's map, and
+    a statistic with no row before any of the edges is absent altogether -
+    so the newest edge always answers for a statistic that is here at all,
+    since a row before any edge is a row before that one.
     """
+    wanted = sorted(edges)
     with _ids(hass, statistic_ids) as (session, ids):
-        found = {
-            statistic_id: newest_before(session, metadata_id, edge, 2)
-            for metadata_id, statistic_id in ids.items()
+        found = rows_before(
+            session, [(metadata_id, edge) for metadata_id in ids for edge in wanted]
+        )
+        return {
+            ids[metadata_id]: {
+                edge: row
+                for edge, row in before_edges(series, wanted).items()
+                if row is not None
+            }
+            for metadata_id, series in found.items()
         }
-        return {statistic_id: rows for statistic_id, rows in found.items() if rows}
 
 
 def standing(

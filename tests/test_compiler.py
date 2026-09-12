@@ -1,6 +1,7 @@
 """Tests for the compiler against a real recorder."""
 
 import functools as ft
+import json
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -1801,8 +1802,22 @@ async def test_the_base_of_a_quiet_statistic_is_a_seek_not_a_scan(
     ]
     assert selects, "nothing was read"
     for sql, params in selects:
-        stamps = [p for p in params if isinstance(p, float)]
-        assert all(p >= floor for p in stamps), (sql, params)
+        assert all(p >= floor for p in bounds(params)), (sql, params)
+
+
+def bounds(params):
+    """The timestamps a statement binds, JSON pair lists unpacked.
+
+    `rows.rows_before` hands the (metadata_id, edge) pairs to SQLite as one
+    JSON string, so the edges are inside a parameter rather than being
+    parameters - and a read from the epoch would hide there.
+    """
+    for param in params:
+        if isinstance(param, float):
+            yield param
+        elif isinstance(param, str) and param.startswith("[["):
+            for _, edge in json.loads(param):
+                yield edge
 
 
 async def test_a_chunk_that_raises_still_drains_the_ones_before_it(
