@@ -408,7 +408,7 @@ async def test_a_rare_state_is_zero_in_a_compiled_month_and_absent_in_a_hole(
     ]
 
 
-async def test_a_rare_state_costs_one_seek(hass, client, statements):
+async def test_a_rare_state_costs_one_statement(hass, client, statements):
     await hass.config.async_set_time_zone("UTC")
     jan, apr = utc(2026, 1, 1), utc(2026, 4, 1)
     # ON held throughout, from before the range, so every edge's row is
@@ -422,11 +422,11 @@ async def test_a_rare_state_costs_one_seek(hass, client, statements):
     response = await ask(client, [OFF], jan, apr, "month")
 
     assert [b["change"] for b in response["result"][OFF]] == [10.0, 30.0, 30.0]
-    # The IN query, then one seek for OFF that returns its whole series.
-    assert len(statements) == 2
+    # One statement: a seek per (statistic, edge) pair, in one round trip.
+    assert len(statements) == 1
 
 
-async def test_a_busy_statistic_under_monthly_edges_seeks_once_per_hole(
+async def test_a_busy_statistic_under_monthly_edges_costs_one_statement(
     hass, client, statements
 ):
     await hass.config.async_set_time_zone("UTC")
@@ -446,13 +446,12 @@ async def test_a_busy_statistic_under_monthly_edges_seeks_once_per_hole(
         pytest.approx(28 * 24),
         pytest.approx(31 * 24),
     ]
-    # The IN query, then a seek at each of the four edges - the last one
-    # finds nothing before January and settles the rest. Never a range.
-    assert len(statements) == 5
-    assert not any("start_ts >=" in s for s in statements[1:])
+    # Four edges, one statement, and no row read that does not answer one.
+    assert len(statements) == 1
+    assert "start_ts >=" not in statements[0]
 
 
-async def test_a_daily_statistic_under_daily_edges_reads_one_range(
+async def test_a_daily_statistic_under_daily_edges_costs_one_statement(
     hass, client, statements
 ):
     await hass.config.async_set_time_zone("UTC")
@@ -477,10 +476,8 @@ async def test_a_daily_statistic_under_daily_edges_reads_one_range(
     # Each day's change is the step from the previous day's last row (21:00)
     # to this day's (21:00): 24.
     assert [b["change"] for b in buckets[1:]] == [pytest.approx(24.0)] * 59
-    # The IN query, one seek, one range, and one seek for the first edge,
-    # which the range cannot settle - nothing is known before it.
-    assert len(statements) == 4
-    assert sum("start_ts >=" in s for s in statements[1:]) == 1
+    # Sixty-one edges, none of them answered by a row of its own hour.
+    assert len(statements) == 1
 
 
 async def test_two_entities_are_each_judged_on_their_own_rows(hass, client):
@@ -521,3 +518,64 @@ async def test_an_entity_with_no_duration_statistic_is_judged_on_all_it_was_aske
         {"start": ms(jan), "end": ms(feb), "change": 0.0},
         {"start": ms(feb), "end": ms(mar), "change": 1.0},
     ]
+
+
+async def test_five_states_over_a_month_of_days_cost_one_statement(
+    hass, client, statements
+):
+    # A chart of a five-state entity: 155 (statistic, edge) pairs, and the
+    # entity's own duration rows ride along in the same statement.
+    await hass.config.async_set_time_zone("UTC")
+    jan, feb = utc(2026, 1, 1), utc(2026, 2, 1)
+    states = [f"discrete_statistics:sensor_mode_s{i}_duration" for i in range(5)]
+    for i, statistic_id in enumerate(states):
+        seed(
+            hass,
+            statistic_id,
+            jan,
+            [float(h) if h % 5 == i else None for h in range(31 * 24)],
+        )
+    await async_wait_recording_done(hass)
+
+    statements.clear()
+    response = await ask(client, states, jan, feb, "day")
+
+    assert len(response["result"][states[0]]) == 31
+    assert len(statements) == 1
+
+
+async def test_more_than_five_hundred_pairs_cost_two_statements(
+    hass, client, statements
+):
+    # 167 daily edges over the entity's three duration statistics - the
+    # two asked for and the third that judges them: 501 pairs, past the
+    # compound-select cap, so the seeks run in two batches.
+    await hass.config.async_set_time_zone("UTC")
+    start, days = utc(2026, 1, 1), 166
+    third = "discrete_statistics:binary_sensor_grid_status_unavailable_duration"
+    for statistic_id in (ON, OFF, third):
+        seed(hass, statistic_id, start, [float(h) for h in range(days * 24)])
+    await async_wait_recording_done(hass)
+
+    statements.clear()
+    response = await ask(client, [ON, OFF], start, start + timedelta(days=days), "day")
+
+    assert len(response["result"][ON]) == days
+    assert len(statements) == 2
+
+
+async def test_hourly_buckets_cost_one_statement(hass, client, statements):
+    # The rows in the range answer every edge but the first, and the read
+    # opens on the row before it.
+    await hass.config.async_set_time_zone("UTC")
+    start = utc(2026, 1, 1)
+    # Sums well above zero, so a first bucket read without the row before
+    # the range is not the same number.
+    seed(hass, ON, start - timedelta(hours=1), [100.0 + h for h in range(25)])
+    await async_wait_recording_done(hass)
+
+    statements.clear()
+    response = await ask(client, [ON], start, start + timedelta(hours=12), "hour")
+
+    assert [b["change"] for b in response["result"][ON]] == [1.0] * 12
+    assert len(statements) == 1

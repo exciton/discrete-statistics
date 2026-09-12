@@ -140,13 +140,6 @@ def _from(
     return found
 
 
-def rows_at(
-    session: Session, metadata_ids: set[int], hours: set[float]
-) -> dict[int, dict[float, Row]]:
-    """Every statistic's rows at the wanted hours, in one query."""
-    return _rows(session, metadata_ids, Statistics.start_ts.in_(hours))
-
-
 def rows_between(
     session: Session, metadata_ids: set[int], start: float, end: float
 ) -> dict[int, dict[float, Row]]:

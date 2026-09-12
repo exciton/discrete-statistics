@@ -3,19 +3,17 @@
 `recorder/statistics_during_period` reads every hourly row in the range
 and reduces them in Python whatever the period is asked for. Our sums
 are cumulative, so a bucket needs only the newest row before each of its
-edges, and the rows are sparse, so which reads settle which edges is
-tracked per statistic in `buckets.Known`. The reads run in rounds: one
-`start_ts IN (...)` query for every statistic at once (a range query
-when the edges are hours), then per statistic still blank a seek before
-its newest blank edge, then one range read batched over the statistics
-whose rows are sparser than seeks are worth, then seeks again until
-nothing is blank. The entity's duration statistics ride along so a
-bucket can be told compiled from a hole. The arithmetic is in `buckets`
-and the queries in `rows`; this module only reads.
+edges, and one statement answers every (statistic, edge) pair at once -
+`rows.rows_before`, or `rows.rows_from` at the hourly period, where
+every row in the range answers an edge anyway. The entity's duration
+statistics ride along so a bucket can be told compiled from a hole. The
+arithmetic is in `buckets` and the queries in `rows`; this module only
+reads.
 """
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from datetime import datetime
 from typing import Any
 
@@ -26,26 +24,16 @@ from homeassistant.components.recorder.statistics import get_metadata_with_sessi
 from homeassistant.components.recorder.util import session_scope
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import dt as dt_util
+from sqlalchemy.orm import Session
 
-from .buckets import (
-    LOOKUP_ROWS,
-    Bucket,
-    Known,
-    Period,
-    blanks,
-    cut,
-    edges,
-    has_row,
-    hours_wanted,
-    wants_range,
-)
+from .buckets import Bucket, Period, Row, cut, edges, has_row
 from .const import DOMAIN, HOUR, METRIC_DURATION
-from .rows import newest_before, rows_at, rows_between
+from .rows import rows_before, rows_from
 from .statistic_ids import parse
 
 # The most buckets one request may ask for. A chart cannot show more, and
-# the edges, the `IN` list and the rows all grow with the count, so a
-# range of centuries must be refused rather than walked on the
+# the edges, the statement's arms and the rows all grow with the count,
+# so a range of centuries must be refused rather than walked on the
 # recorder's thread.
 MAX_BUCKETS = 10_000
 # The shortest a period can be, for bounding the count before walking it.
@@ -161,53 +149,48 @@ def _buckets(
         wanted = requested.union(*judges.values())
         ids = {sid: ours[sid][0] for sid in wanted}
 
-        known: dict[str, Known] = {}
         if period == "hour":
-            # Hourly edges want every row in the range: one range read
-            # settles every edge down to the oldest row it finds.
-            between = rows_between(
-                session, set(ids.values()), edges_[0] - HOUR, edges_[-1]
-            )
-            for sid, metadata_id in ids.items():
-                known[sid] = Known()
-                known[sid].ranged(between.get(metadata_id, {}).values())
+            before = _hourly(session, ids, edges_)
         else:
-            at = rows_at(session, set(ids.values()), hours_wanted(edges_))
-            known = {sid: Known(at.get(mid, {}).values()) for sid, mid in ids.items()}
-
-        # Rounds: a seek per statistic still blank, at its newest blank
-        # edge; after the first, one batched range for those whose rows
-        # are sparser than seeks are worth; again until nothing is blank.
-        pending = {sid for sid in known if blanks(known[sid], edges_)}
-        first = True
-        while pending:
-            spans: dict[str, tuple[float, float]] = {}
-            for sid in pending:
-                blank = blanks(known[sid], edges_)
-                run = newest_before(session, ids[sid], blank[0], LOOKUP_ROWS)
-                known[sid].seek(run)
-                if first and (span := wants_range(known[sid], edges_, run)):
-                    spans[sid] = span
-            if spans:
-                lo = min(span[0] for span in spans.values())
-                hi = max(span[1] for span in spans.values())
-                between = rows_between(session, {ids[sid] for sid in spans}, lo, hi)
-                for sid in spans:
-                    known[sid].ranged(between.get(ids[sid], {}).values())
-            first = False
-            pending = {sid for sid in pending if blanks(known[sid], edges_)}
+            found = rows_before(
+                session, [(mid, edge) for mid in ids.values() for edge in edges_]
+            )
+            before = {
+                sid: {edge: found.get((mid, edge)) for edge in edges_}
+                for sid, mid in ids.items()
+            }
 
         def compiled_by(family: str):
-            judged = [known[sid] for sid in judges[family]]
-            return lambda a, b: any(has_row(k, a, b) for k in judged)
+            judged = [before[sid] for sid in judges[family]]
+            return lambda a, b: any(has_row(rows, a, b) for rows in judged)
 
         return {
             sid: [
                 _serialise(b)
-                for b in cut(edges_, known[sid], compiled_by(_family(sid)))
+                for b in cut(edges_, before[sid], compiled_by(_family(sid)))
             ]
             for sid in requested
         }
+
+
+def _hourly(
+    session: Session, ids: dict[str, int], edges_: list[float]
+) -> dict[str, dict[float, Row | None]]:
+    """Every edge's row, from the one read the hourly period wants.
+
+    Each statistic's rows in the range answer every edge but the first,
+    which the row the read opens on answers.
+    """
+    found = rows_from(session, set(ids.values()), edges_[0], edges_[-1])
+    before: dict[str, dict[float, Row | None]] = {}
+    for sid, metadata_id in ids.items():
+        series = found.get(metadata_id, [])
+        starts = [row.start for row in series]
+        before[sid] = {
+            edge: (series[at - 1] if (at := bisect_left(starts, edge)) else None)
+            for edge in edges_
+        }
+    return before
 
 
 def _serialise(bucket: Bucket) -> dict[str, float]:
