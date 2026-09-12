@@ -13,6 +13,7 @@ import {
   type LegendItem,
 } from "./series";
 import { statisticsForEntity, type StateStatistic } from "./statistic-ids";
+import { pickStubEntity } from "./stub";
 import type { CardConfig, HassLike } from "./types";
 
 const DEFAULT_DAYS = 30;
@@ -69,8 +70,13 @@ export class DiscreteStatisticsCard extends LitElement {
   // the same object needs no fetch.
   private _refreshedRange?: Range;
 
-  public static getStubConfig(): Partial<CardConfig> {
+  public static getStubConfig(
+    _hass: unknown,
+    entities: string[] = [],
+    entitiesFallback: string[] = [],
+  ): Partial<CardConfig> {
     return {
+      entity: pickStubEntity(entities, entitiesFallback),
       metric: "duration",
       unit: "auto",
       period: "auto",
@@ -84,14 +90,13 @@ export class DiscreteStatisticsCard extends LitElement {
   }
 
   public setConfig(config: CardConfig): void {
-    if (!config.entity) {
-      throw new Error("entity is required");
-    }
     this._config = config;
     this._stats = undefined;
     this._statsFor = undefined;
     this._dataStart = undefined;
-    this._error = undefined;
+    // A card without an entity is a fresh one the editor has not filled in
+    // yet; a thrown error here would fail the picker's preview instead.
+    this._error = config.entity ? undefined : "Choose an entity in the card editor";
     this._subscribed = false;
     this._chartOptions = this._options();
   }
@@ -179,7 +184,7 @@ export class DiscreteStatisticsCard extends LitElement {
     const hass = this.hass;
     const config = this._config;
     const range = this._range;
-    if (!hass || !config || !range) {
+    if (!hass || !config?.entity || !range) {
       return;
     }
     if (this._fetching) {
