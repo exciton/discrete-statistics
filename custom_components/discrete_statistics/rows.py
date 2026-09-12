@@ -104,35 +104,41 @@ def metadata_ids(
     }
 
 
+# The newest row of one statistic before an edge: the rule every read of
+# ours is built from, and one index seek on `(metadata_id, start_ts)`.
+# Aliased throughout because the pair rendering has the pair list in
+# scope here too, where an unqualified column is ambiguous.
+_SEEK = (
+    "SELECT newest.id FROM statistics AS newest"
+    " WHERE newest.metadata_id = {metadata_id}"
+    " AND newest.start_ts < {edge}"
+    " AND newest.sum IS NOT NULL"
+    " ORDER BY newest.start_ts DESC LIMIT 1"
+)
+
+# The rows the picked ids name. Distinct before the join, so a row
+# several edges share is fetched once - which is also what makes the
+# edges unnecessary in the result. No `id IS NOT NULL` filter: the inner
+# join drops the misses, and the filter has Postgres evaluate the
+# subplan twice.
+_PICKED = (
+    "SELECT statistics.metadata_id, statistics.start_ts, statistics.sum"
+    " FROM ({inner}) AS picked"
+    " JOIN statistics ON statistics.id = picked.id"
+)
+
+
 def _pair_seek(dialect: str) -> Any:
     """The whole seek as one correlated statement over an expanded pair list.
 
-    The subquery picks the newest row before the pair's edge; the join
-    fetches the distinct ones. No `id IS NOT NULL` filter - the inner
-    join drops the misses, and the filter has Postgres evaluate the
-    subplan twice. The edge is not returned: a row answers every edge it
-    is the newest before, so one copy of it is the whole answer.
+    The engine expands `:pairs` into rows and the seek is correlated
+    against them, so the edge is a column rather than a bound constant.
     """
     source, metadata_id, edge = _PAIRS[dialect]
+    pairs = f"SELECT {metadata_id} AS metadata_id, {edge} AS edge FROM {source}"
+    seek = _SEEK.format(metadata_id="pair.metadata_id", edge="pair.edge")
     return text(
-        f"""
-        SELECT statistics.metadata_id, statistics.start_ts, statistics.sum
-        FROM (
-            SELECT DISTINCT (
-                SELECT newest.id FROM statistics AS newest
-                WHERE newest.metadata_id = pair.metadata_id
-                  AND newest.start_ts < pair.edge
-                  AND newest.sum IS NOT NULL
-                ORDER BY newest.start_ts DESC
-                LIMIT 1
-            ) AS id
-            FROM (
-                SELECT {metadata_id} AS metadata_id, {edge} AS edge
-                FROM {source}
-            ) AS pair
-        ) AS picked
-        JOIN statistics ON statistics.id = picked.id
-        """
+        _PICKED.format(inner=f"SELECT DISTINCT ({seek}) AS id FROM ({pairs}) AS pair")
     )
 
 
@@ -231,9 +237,6 @@ def _seek_id(metadata_id: int, edge: float) -> Any:
 def _arms(batch: Sequence[tuple[int, float]]) -> Any:
     """One constant-bound seek per pair, unioned: the portable rendering.
 
-    Distinct before the join, so a row several edges share is fetched
-    once - which is also what makes the pairs' own columns unnecessary.
-
     Written out rather than built from the Core, and with the bounds
     literal rather than bound: five hundred arms are five hundred
     subqueries to construct and compile, and that Python costs more than
@@ -244,16 +247,13 @@ def _arms(batch: Sequence[tuple[int, float]]) -> Any:
     exactly.
     """
     arms = " UNION ALL ".join(
-        "SELECT (SELECT id FROM statistics"
-        f" WHERE metadata_id = {int(metadata_id)}"
-        f" AND sum IS NOT NULL AND start_ts < {float(edge)!r}"
-        " ORDER BY start_ts DESC LIMIT 1) AS id"
+        "SELECT ("
+        + _SEEK.format(metadata_id=int(metadata_id), edge=repr(float(edge)))
+        + ") AS id"
         for metadata_id, edge in batch
     )
     return text(
-        "SELECT statistics.metadata_id, statistics.start_ts, statistics.sum"
-        f" FROM (SELECT DISTINCT arm.id AS id FROM ({arms}) AS arm) AS picked"
-        " JOIN statistics ON statistics.id = picked.id"
+        _PICKED.format(inner=f"SELECT DISTINCT arm.id AS id FROM ({arms}) AS arm")
     )
 
 
