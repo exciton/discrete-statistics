@@ -1,6 +1,5 @@
 """The read-only recorder queries the sensors and the card share."""
 
-import re
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
@@ -14,7 +13,6 @@ from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.components.recorder.common import (
     async_wait_recording_done,
 )
-from sqlalchemy import event as sqlalchemy_event
 
 from custom_components.discrete_statistics import rows
 from custom_components.discrete_statistics.const import METRIC_DURATION
@@ -164,23 +162,6 @@ async def test_standing_lists_the_hours_holding_a_row_inside_the_window(recorder
             (start + timedelta(hours=3)).timestamp(),
         }
     }
-
-
-@pytest.fixture
-def statements(hass, recorder_mock):
-    """The SELECTs the recorder's engine runs against the statistics table."""
-    seen: list[str] = []
-
-    def listen(conn, cursor, statement, parameters, context, executemany):
-        if statement.lstrip().upper().startswith("SELECT") and re.search(
-            r"\bstatistics\b", statement
-        ):
-            seen.append(statement)
-
-    engine = get_instance(hass).engine
-    sqlalchemy_event.listen(engine, "before_cursor_execute", listen)
-    yield seen
-    sqlalchemy_event.remove(engine, "before_cursor_execute", listen)
 
 
 async def before(hass, pairs):

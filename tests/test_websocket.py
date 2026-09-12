@@ -1,17 +1,14 @@
 """The card's bucket command, end to end through the recorder."""
 
-import re
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
-from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.statistics import async_add_external_statistics
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.components.recorder.common import (
     async_wait_recording_done,
 )
-from sqlalchemy import event as sqlalchemy_event
 
 from custom_components.discrete_statistics.const import (
     DOMAIN,
@@ -90,23 +87,6 @@ async def ask(client, ids, start, end, period="day"):
         }
     )
     return await client.receive_json()
-
-
-@pytest.fixture
-def statements(hass, recorder_mock):
-    """The SELECTs the recorder's engine runs against the statistics table."""
-    seen: list[str] = []
-
-    def listen(conn, cursor, statement, parameters, context, executemany):
-        if statement.lstrip().upper().startswith("SELECT") and re.search(
-            r"\bstatistics\b", statement
-        ):
-            seen.append(statement)
-
-    engine = get_instance(hass).engine
-    sqlalchemy_event.listen(engine, "before_cursor_execute", listen)
-    yield seen
-    sqlalchemy_event.remove(engine, "before_cursor_execute", listen)
 
 
 def utc(*args: int) -> datetime:
@@ -523,8 +503,8 @@ async def test_an_entity_with_no_duration_statistic_is_judged_on_all_it_was_aske
 async def test_five_states_over_a_month_of_days_cost_one_statement(
     hass, client, statements
 ):
-    # A chart of a five-state entity: 155 (statistic, edge) pairs, and the
-    # entity's own duration rows ride along in the same statement.
+    # A chart of a five-state entity: 32 edges over five statistics, and
+    # the entity's own duration rows ride along in the same statement.
     await hass.config.async_set_time_zone("UTC")
     jan, feb = utc(2026, 1, 1), utc(2026, 2, 1)
     states = [f"discrete_statistics:sensor_mode_s{i}_duration" for i in range(5)]

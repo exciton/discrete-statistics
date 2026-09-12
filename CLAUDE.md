@@ -237,16 +237,19 @@ The card fetches through `discrete_statistics/buckets`, not
 bucket's `change` is the difference between the rows at its two edges,
 and `websocket` reads only the rows that answer the edges. The rows are
 sparse — a state has a row only in an hour it had time in — so an edge
-is answered by the newest row before it whatever its distance: the row
-starting the hour before it, or the row running through it in a zone
-half an hour off UTC, where every edge is at half past.
+is answered by the newest row before it whatever its distance — usually
+the row starting the hour before it, or the row running through it in a
+zone half an hour off UTC, where every edge is at half past.
 `rows.rows_before` answers every (statistic, edge) pair in one
 statement: each pair is its own arm of a `UNION ALL`, an index seek on
 `(metadata_id, start_ts)` between two constants, joined back to the
 rows. `SEEK_BATCH` splits at 500 pairs, SQLite's cap on a compound
-select. The hourly period is one statement too, `rows.rows_from`: there
-every row in the range answers an edge, so the arms seek only the row
-before the range's start and one index range brings back the rest.
+select, so the count is `ceil(edges × statistics / 500)` — one for any
+chart a person reads, and 37, all of them seeks, for the ten years of
+daily edges over five states `MAX_BUCKETS` still allows. The hourly
+period is one statement too, `rows.rows_from`: there every row in the
+range answers an edge, so the arms seek only the row before the range's
+start and one index range brings back the rest.
 Gap or zero is judged on the entity's duration statistics as a whole,
 which ride along in the same read: a bucket is compiled when any of them
 has a row inside it, a requested statistic with no row of its own there

@@ -106,7 +106,8 @@ def rows_from(
     """
     found: dict[int, list[Row]] = {}
     unique = list(dict.fromkeys(metadata_ids))
-    # One term of the compound is the range half; the rest are seeks.
+    # A margin of one, so the arms stay short of the cap whatever the
+    # range half compiles to.
     for at in range(0, len(unique), SEEK_BATCH - 1):
         found.update(_from(session, unique[at : at + SEEK_BATCH - 1], start, end))
     return found
@@ -133,8 +134,9 @@ def _from(
     found: dict[int, list[Row]] = {}
     for metadata_id, start_ts, sum_ in rows:
         found.setdefault(metadata_id, []).append(Row(start_ts, sum_))
-    # Ordered here rather than in SQL: a compound select's ORDER BY is
-    # dialect-fussy, and the two halves are disjoint and already short.
+    # Ordered here rather than in SQL: an ORDER BY on the compound
+    # filesorts the whole union on MySQL, range rows included - the cost
+    # this read exists to avoid.
     for series in found.values():
         series.sort()
     return found
