@@ -3,12 +3,12 @@ import { DiscreteStatisticsCardEditor } from "./editor";
 import { DiscreteStatisticsStateList } from "./state-list-element";
 
 // The frontend's app bundle replaces window.customElements with the
-// scoped-custom-element-registry polyfill, whose get() and whenDefined()
-// know only what was defined through it. The shell imports this module
-// in parallel with that bundle, so a definition made before the swap is
-// invisible to the dashboard afterwards. <home-assistant> is defined by
-// the app after the swap, and whenDefined() resolves for it on either
-// registry, so defining then lands on the one the app consults.
+// scoped-custom-element-registry polyfill, which knows only what was
+// defined through it, and this module is imported in parallel with that
+// bundle — so a definition made before the swap is invisible to the
+// dashboard. <home-assistant> is defined after the swap and whenDefined()
+// resolves on either registry, so defining then lands on the registry the
+// app consults.
 customElements.whenDefined("home-assistant").then(() => {
   customElements.define("discrete-statistics-card", DiscreteStatisticsCard);
   customElements.define(

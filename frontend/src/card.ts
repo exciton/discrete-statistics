@@ -20,11 +20,11 @@ import {
 import type { CardConfig, HassLike } from "./types";
 
 const DEFAULT_DAYS = 30;
-// The stock statistics-graph card refreshes hourly; a dashboard left open
-// otherwise freezes on the range it was rendered with.
+// Hourly, as the stock statistics-graph card is: a dashboard left open
+// otherwise freezes on the range it rendered with.
 const REFRESH_INTERVAL_MS = 60 * 60 * 1000;
-// What echarts hands a tooltip formatter, for the series this card
-// draws: value is the point, [point time, value, bucket start, bucket end].
+// What echarts hands a tooltip formatter; `value` is the point, laid out
+// as series.ts writes it.
 interface TooltipParam {
   seriesName?: string;
   color?: string;
@@ -64,8 +64,7 @@ export class DiscreteStatisticsCard extends LitElement {
 
   private _refreshTimer?: number;
 
-  // The earliest bucket start across the drawn series. The recorder snaps a
-  // query outward to whole periods, so the first bucket begins before the
+  // Buckets snap outward to whole periods, so the first begins before the
   // range and an x axis pinned to the range start would clip it.
   private _dataStart?: number;
 
@@ -133,8 +132,7 @@ export class DiscreteStatisticsCard extends LitElement {
 
   public connectedCallback(): void {
     super.connectedCallback();
-    // Before the first update there is one pending, and its _config branch
-    // subscribes; this handles re-attach.
+    // The first update's _config branch subscribes; this covers re-attach.
     if (this.hasUpdated && this.hass && this._config && !this._subscribed) {
       this._subscribeRange();
     }
@@ -175,10 +173,9 @@ export class DiscreteStatisticsCard extends LitElement {
     } else {
       const days = this._config?.days_to_show ?? DEFAULT_DAYS;
       this._range = rangeFromDays(days, new Date());
-      // A fresh range object is all it takes: updated()'s
-      // _range !== _refreshedRange guard turns it into one refresh. Dropping
-      // _statsFor with it lets a state first recorded since the last run
-      // gain its series.
+      // A fresh range object becomes exactly one refresh, through updated()'s
+      // _range !== _refreshedRange guard; dropping _statsFor with it lets a
+      // state recorded since the last run gain its series.
       this._refreshTimer = window.setInterval(() => {
         this._statsFor = undefined;
         this._range = rangeFromDays(days, new Date());
@@ -266,10 +263,10 @@ export class DiscreteStatisticsCard extends LitElement {
     }
   }
 
-  // ha-chart-base renders whatever a tooltip formatter returns as lit
-  // (lit-tooltip-formatter.ts), and suppresses the tooltip on `nothing`.
-  // The bar's own colour is the translucent fill; the marker matches the
-  // legend swatch, which is the solid one.
+  // ha-chart-base renders a formatter's return as lit
+  // (lit-tooltip-formatter.ts) and suppresses the tooltip on `nothing`. A
+  // bar's own colour is the translucent fill; the marker takes the legend
+  // swatch's solid one.
   private _solidColor(row: TooltipParam): string {
     return (
       this._legend.find((item) => item.name === row.seriesName)?.itemStyle
@@ -294,11 +291,10 @@ export class DiscreteStatisticsCard extends LitElement {
     // A series with no value in this bucket has nothing to describe.
     const shown = rows.filter((row) => row.value?.[1] !== null);
     const [start, end] = [point.value[2], point.value[3]];
-    // The tooltip is rendered outside this card's shadow root, so the
-    // marker is styled inline rather than from the card's stylesheet, and
-    // it is a span rather than <ha-chart-tooltip-marker>: that element
-    // belongs to the frontend's chart chunk and need not be registered
-    // wherever ha-chart-base is.
+    // The tooltip renders outside this card's shadow root, so the marker is
+    // styled inline, and is a span rather than <ha-chart-tooltip-marker>:
+    // that element belongs to the frontend's chart chunk, which need not be
+    // loaded wherever ha-chart-base is.
     return html`${this._formatSpan(start, end)}<br />${shown.map(
       (row, i) =>
         html`<span
@@ -313,9 +309,8 @@ export class DiscreteStatisticsCard extends LitElement {
     )}`;
   }
 
-  // The frontend's own date-time helpers live inside its bundle and are not
-  // reachable from a separately built card, so the language from hass.locale
-  // is what the card can honour.
+  // The frontend's date-time helpers are not reachable from a separately
+  // built card, so hass.locale's language is all this can honour.
   private _formatSpan(start: number, end: number): string {
     const language = this.hass?.locale?.language;
     const at = (ms: number) => new Date(ms).toLocaleString(language);
@@ -354,11 +349,10 @@ export class DiscreteStatisticsCard extends LitElement {
         name: this._unit,
         nameGap: 2,
         nameTextStyle: { align: "left" },
-        // null, not undefined: ha-chart-base merges its options into the
-        // chart, and echarts ignores an undefined value on merge, so the cap
-        // would survive a switch away from percent. A function is evaluated
-        // on the series the legend leaves visible, so hiding a state lets
-        // the axis close in on what remains.
+        // null, not undefined: ha-chart-base merges its options in and
+        // echarts ignores undefined on merge, so the cap would survive a
+        // switch away from percent. A function is evaluated on the series
+        // the legend leaves visible, so hiding a state closes the axis in.
         max: this._unit === "%" ? percentAxisMax : null,
         splitLine: { show: true },
       },
@@ -382,10 +376,9 @@ export class DiscreteStatisticsCard extends LitElement {
     if (!this._config) {
       return nothing;
     }
-    // In a sections view with a fixed row count the chart fills the card
-    // and the legend shares that height; otherwise the chart picks its own
-    // height and the legend flows below it, as the stock statistics card
-    // does.
+    // With a fixed row count the chart fills the card and the legend shares
+    // that height; otherwise the chart sizes itself and the legend flows
+    // below it, as the stock statistics card does.
     const fixedHeight = typeof this._config.grid_options?.rows === "number";
     return html`<ha-card
       .header=${this._config.title ?? ""}

@@ -1,11 +1,10 @@
 // A configured colour, as the card draws it.
 //
-// The editor's colour picker hands back the frontend's theme colour
-// names, resolved here through the CSS variable each one stands for
-// (`red` is `--red-color`), as the stock statistics-graph card does. Hex
-// is taken as written. Anything else — a named web colour, an unset
-// variable — is not a colour the card can draw with, so it falls back to
-// the palette rather than passing a value echarts would reject.
+// The editor's picker hands back the frontend's theme colour names,
+// resolved through the CSS variable each stands for (`red` is
+// `--red-color`), as the stock statistics-graph card does; hex is taken as
+// written. Anything else — a named web colour, an unset variable — falls
+// back to the palette rather than handing echarts a value it would reject.
 
 // The names the frontend's ui_color selector offers (compute-color.ts).
 export const THEME_COLORS = [
@@ -17,8 +16,8 @@ export const THEME_COLORS = [
 
 export type CssVariable = (name: string) => string;
 
-// Six-digit hex, or undefined for what is not hex; a short form is
-// expanded and an alpha channel dropped, since the chart adds its own.
+// Six-digit hex, or undefined for what is not hex; an alpha channel is
+// dropped because the chart adds its own.
 export function toHex(color: string): string | undefined {
   const trimmed = color.trim().toLowerCase();
   const short = /^#([0-9a-f])([0-9a-f])([0-9a-f])[0-9a-f]?$/.exec(trimmed);
@@ -54,9 +53,8 @@ export function resolveColor(
 }
 
 // The chart's palette: the theme's `--graph-color-1` to `-8`, and these
-// when a theme sets none. The card reads the variables; `paletteCss`
-// is the same choice written as CSS, for the editor to show a row the
-// colour the chart will give it.
+// when a theme sets none. `paletteCss` is the same choice as CSS, so the
+// editor can show a row the colour the chart will give it.
 export const PALETTE_SIZE = 8;
 
 export const FALLBACK_COLORS = [

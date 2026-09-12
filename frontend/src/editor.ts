@@ -33,13 +33,10 @@ const PERIOD_LABEL: Record<Period, string> = {
   year: "Year",
 };
 
-// The editor's form, laid out as the stock statistics-graph card's is:
-// chart type over days to show beside the period list, then the date
-// picker, then what is this card's own. The entity picker is limited to
-// the entities the integration has recorded statistics for when that list
-// is known; with no list — the lookup failed — it offers every entity
-// rather than none. Days to show gives way to the collection key while
-// the card follows the date picker.
+// Laid out as the stock statistics-graph card's form is. The entity picker
+// is limited to the entities the integration has statistics for when that
+// list is known; with no list — the lookup failed — it offers every entity
+// rather than none.
 export function configSchema(entities?: string[], followsPicker = false) {
   const dropdown = (options: { value: string; label: string }[]) => ({
     select: { mode: "dropdown", options },
@@ -190,8 +187,8 @@ export class DiscreteStatisticsCardEditor extends LitElement {
     if (!this._config || this._entities === undefined) {
       return nothing;
     }
-    // A config written before these keys existed, or by hand, shows the
-    // card's defaults rather than blank fields.
+    // A config missing these keys shows the card's defaults rather than
+    // blank fields.
     const data = {
       ...this._config,
       chart_type: this._config.chart_type ?? "bar-stack",
@@ -199,8 +196,7 @@ export class DiscreteStatisticsCardEditor extends LitElement {
       metric: this._config.metric ?? "duration",
       unit: this._config.unit ?? "auto",
     };
-    // The list holds every state the entity has statistics for under the
-    // chosen metric; it is empty until an entity is picked.
+    // Every state the entity has statistics for under the chosen metric.
     const states = stateList(
       statisticsForEntity(data.entity, data.metric, this._metadata),
       this._config

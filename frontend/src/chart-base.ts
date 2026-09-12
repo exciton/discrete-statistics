@@ -1,7 +1,7 @@
 // <ha-chart-base> is registered by the frontend's more-info dialog chunk,
-// which loads right after the app's first render. If a dashboard renders
-// this card before that, creating a stock statistics-graph card pulls the
-// chunk in.
+// which loads shortly after first render; creating a stock
+// statistics-graph card pulls that chunk in for a dashboard that gets
+// here sooner.
 export const CHART_BASE_TIMEOUT_MS = 10_000;
 
 export async function ensureChartBase(): Promise<void> {

@@ -16,31 +16,26 @@ export interface StateStatistic {
 export const settingState = (setting: StateSetting): string =>
   typeof setting === "string" ? setting : setting.state;
 
-// A `states:` or `ignore_states:` entry names a statistic by token, or —
-// since non-Latin text has no token — by the statistic's label, the raw
-// state text.
+// An entry names a statistic by token, or — since non-Latin text has no
+// token — by its label, the raw state text.
 export const settingMatches = (setting: StateSetting, s: StateStatistic): boolean => {
   const entry = settingState(setting);
   return stateToken(entry) === s.token || entry === s.label;
 };
 
-// The integration slugifies with python-slugify. Entity IDs are already
-// [a-z0-9_.], so lower-casing and collapsing runs of anything else is the
-// same answer for them. States can hold anything, and this approximation
-// only agrees with python-slugify on ASCII: non-Latin text (e.g. "打开")
-// transliterates on the Python side but collapses to "" here. A filter
-// entry written in that state's own script therefore cannot be matched by
-// token at all — statisticsForEntity falls back to comparing it against
-// the statistic's label, the raw state text carried in its stored name.
+// An approximation of the integration's python-slugify. Exact for entity
+// IDs, already [a-z0-9_.]; for states it agrees only on ASCII, since
+// non-Latin text (e.g. "打开") transliterates on the Python side but
+// collapses to "" here. Hence the label fallback in settingMatches: a
+// filter entry in such a state's own script can never match by token.
 const slug = (text: string, separator: string): string => {
   const collapsed = text
     .normalize("NFKD")
     .replace(/[̀-ͯ]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, separator);
-  // A `+` quantifier over an empty separator has nothing to repeat, and
-  // trimming is a no-op then anyway — the collapse above already leaves
-  // no separator character to strip.
+  // A `+` over an empty separator has nothing to repeat, and there is
+  // nothing left to trim anyway.
   return separator
     ? collapsed.replace(new RegExp(`^${separator}+|${separator}+$`, "g"), "")
     : collapsed;
@@ -88,9 +83,8 @@ export function stateLabel(
   return tail || token;
 }
 
-// The entities, of those given, that at least one of the integration's
-// statistics belongs to — what the editor offers, since only those can
-// draw anything. Order is the caller's.
+// What the editor offers: only an entity with statistics can draw
+// anything. Order is the caller's.
 export function entitiesWithStatistics(
   entityIds: string[],
   metadata: StatisticsMetaData[]
