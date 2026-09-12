@@ -14,7 +14,7 @@
 # schema` fills in the DDL by booting the recorder against it.
 set -euo pipefail
 
-IMAGE=ha-discrete-stats-bench
+IMAGE=ha-discrete-stats-test
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DATA="$(readlink -f "${BENCH_DATA:-$REPO_ROOT/bench/data}")"
 

@@ -10,6 +10,10 @@ COPY requirements-test.txt /tmp/requirements-test.txt
 # and for hassfest, which needs it. Pinned to the version
 # .pre-commit-config.yaml and validate.yml use, so all three agree.
 RUN pip install --no-cache-dir -r /tmp/requirements-test.txt ruff==0.16.6
+# The two DBAPI drivers the recorder needs for `mysql+pymysql://` and
+# `postgresql://` URLs; only `bench/` uses them, CI installs from
+# requirements-test.txt and never needs them.
+RUN pip install --no-cache-dir pymysql psycopg2-binary
 
 # The repository is bind-mounted, so anything pytest or ruff writes into
 # it - caches, bytecode - is owned by whoever runs here. The image's

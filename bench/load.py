@@ -17,7 +17,7 @@ fills it. Ids are preserved exactly - `statistics.metadata_id`,
 `states.metadata_id`, `old_state_id`, `attributes_id` - so the two
 engines answer from the same graph the SQLite file holds.
 
-Runs in the bench image (`ha-discrete-stats-bench`), which carries
+Runs in the test image, which carries
 pymysql and psycopg2.
 """
 

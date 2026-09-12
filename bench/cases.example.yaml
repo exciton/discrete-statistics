@@ -6,8 +6,8 @@
 
 # The instance's time zone. Periods are cut on local midnights and Monday
 # weeks, so this decides where the edges fall; use the zone the database
-# was recorded in.
-time_zone: America/Los_Angeles
+# was recorded in. UTC when left out.
+# time_zone: Europe/Amsterdam
 
 # Times each case is run after a warm-up pass. The median is reported.
 repeat: 5

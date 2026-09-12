@@ -30,7 +30,7 @@
 # both WRITE to the database they are pointed at.
 set -euo pipefail
 
-IMAGE=ha-discrete-stats-bench
+IMAGE=ha-discrete-stats-test
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 CASES="$(readlink -f "${BENCH_CASES:-$REPO_ROOT/bench/cases.yaml}")"
@@ -39,15 +39,12 @@ RESULTS="${BENCH_RESULTS:-$REPO_ROOT/bench/results}"
 mkdir -p "$RESULTS"
 RESULTS="$(readlink -f "$RESULTS")"
 
+# The same image `script/test` uses; it carries the MySQL and Postgres
+# drivers the bench needs.
 build_image() {
   if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    if ! docker image inspect ha-discrete-stats-test >/dev/null 2>&1; then
-      echo "Building ha-discrete-stats-test (first run only)..." >&2
-      docker build -q -t ha-discrete-stats-test \
-        -f "$REPO_ROOT/.devcontainer/Dockerfile" "$REPO_ROOT" >&2
-    fi
     echo "Building $IMAGE (first run only)..." >&2
-    docker build -q -t "$IMAGE" -f "$REPO_ROOT/bench/Dockerfile" "$REPO_ROOT" >&2
+    docker build -q -t "$IMAGE" -f "$REPO_ROOT/.devcontainer/Dockerfile" "$REPO_ROOT" >&2
   fi
 }
 

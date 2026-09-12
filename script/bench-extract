@@ -12,7 +12,7 @@
 # database twice over - once compressed in the tar, once extracted.
 set -euo pipefail
 
-IMAGE=ha-discrete-stats-bench
+IMAGE=ha-discrete-stats-test
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 BACKUP="$(readlink -f "${1:?usage: script/bench-extract <backup.tar> <out dir>}")"
