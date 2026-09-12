@@ -13,7 +13,7 @@
 #
 #   BENCH_CASES     bench/cases.yaml   what to measure
 #   BENCH_DATA      bench/data         entries.json, and <variant>/home-assistant_v2.db
-#   BENCH_RESULTS   bench/results      results/, plans/, run.json, the lock
+#   BENCH_RESULTS   bench/results      the result JSON files, plans/, run.json, the lock
 #   BENCH_SQLITE_DB                    a SQLite file elsewhere
 #   BENCH_MARIADB_PORT   3307          see script/bench-db
 #   BENCH_POSTGRES_PORT  5433
