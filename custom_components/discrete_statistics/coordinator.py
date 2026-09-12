@@ -89,6 +89,9 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
         self._sums: dict[tuple[str, float], float] = {}
         self._known: frozenset[str] | None = None
         self._hours: dict[float, Timeline | None] = {}
+        # Bumped by every compile, so a refresh can tell whether what it
+        # read still describes the caches it is about to write back to.
+        self._generation = 0
         entity_id = entry.data[CONF_ENTITY_ID]
         entry.async_on_unload(
             async_dispatcher_connect(hass, compiled_signal(entity_id), self._compiled)
@@ -108,8 +111,8 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
         # range still stands and one after it does not: a finished window
         # keeps its sums across every hourly compile. Hour timelines go
         # regardless - a recompile after a mapping change reads the same
-        # rows differently. New objects rather than mutation, for the
-        # refresh in flight - see `_async_update_data`.
+        # rows differently.
+        self._generation += 1
         self._frame = None
         self._sums = {k: v for k, v in self._sums.items() if k[1] <= start}
         self._hours = {}
@@ -213,13 +216,9 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
         now = dt_util.utcnow().timestamp()
         tz = dt_util.get_default_time_zone()
 
-        # A compile can land in any of the awaits below, and `_compiled`
-        # answers it by dropping the frame and putting fresh caches in
-        # place. Everything read here predates that compile, so it is
-        # written to the cache objects this refresh started with: a stale
-        # sum installed in the new cache would be read as a hit and hide
-        # the trailing window's rewrite of that hour until the compile
-        # after it.
+        # Everything below predates any compile that lands in one of its
+        # awaits, so it is written back only while the generation stands.
+        generation = self._generation
         sums = self._sums
         hours = self._hours
         frame = self._frame
@@ -230,7 +229,7 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
             # does not say, so its cached sums at older edges are on the base
             # it had before: the whole cache goes when the known set changes.
             # Cleared rather than replaced, so a compile landing mid-refresh
-            # still owns the identity tested below.
+            # keeps the fresh cache it installed.
             known = frozenset(existing)
             if self._known is not None and known != self._known:
                 sums.clear()
@@ -249,7 +248,7 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
                 series_start,
                 earliest,
             )
-            if self._sums is sums:
+            if generation == self._generation:
                 self._frame = frame
 
         readings: dict[str, Reading] = {}
@@ -333,7 +332,7 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
         # Only the edges and hours this refresh planned are worth keeping:
         # a rolling window leaves one behind every hour and a template one
         # every refresh, and nothing else evicts them.
-        if self._sums is sums:
+        if generation == self._generation:
             self._sums = {k: v for k, v in sums.items() if k[1] in edges}
             self._hours = {h: t for h, t in hours.items() if h in used_hours}
         return readings
