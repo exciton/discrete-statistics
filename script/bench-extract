@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Pull a benchmark database out of a Home Assistant backup.
+#
+#   script/bench-extract <backup.tar> <out dir> [--variant NAME] [--key FILE]
+#
+# Writes <out dir>/<variant>/home-assistant_v2.db (plus its `-wal`, when the
+# backup has one) and <out dir>/entries.json - the layout BENCH_DATA points
+# at. An encrypted backup needs its encryption key in a file: `--key`.
+#
+# Runs bench/extract.py in the bench image, which carries `securetar`. A
+# multi-gigabyte backup takes a few minutes and needs the room for the
+# database twice over - once compressed in the tar, once extracted.
+set -euo pipefail
+
+IMAGE=ha-discrete-stats-bench
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+BACKUP="$(readlink -f "${1:?usage: script/bench-extract <backup.tar> <out dir>}")"
+OUT="${2:?usage: script/bench-extract <backup.tar> <out dir>}"
+shift 2
+mkdir -p "$OUT"
+OUT="$(readlink -f "$OUT")"
+[[ -f "$BACKUP" ]] || { echo "no backup at $BACKUP" >&2; exit 1; }
+
+MOUNTS=(-v "$REPO_ROOT:/workspace" -v "$(dirname "$BACKUP"):$(dirname "$BACKUP"):ro" -v "$OUT:$OUT")
+# The key file may sit anywhere, so it is resolved here and its directory
+# bound at the same path; everything else is passed through untouched.
+ARGS=()
+while [[ $# -gt 0 ]]; do
+  if [[ "$1" == "--key" ]]; then
+    KEY="$(readlink -f "${2:?--key needs a file}")"
+    MOUNTS+=(-v "$(dirname "$KEY"):$(dirname "$KEY"):ro")
+    ARGS+=(--key "$KEY")
+    shift 2
+  else
+    ARGS+=("$1"); shift
+  fi
+done
+
+exec docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  "${MOUNTS[@]}" \
+  -w /workspace \
+  "$IMAGE" \
+  python bench/extract.py "$BACKUP" "$OUT" ${ARGS[@]+"${ARGS[@]}"}
