@@ -160,11 +160,15 @@ def rows_before(
     of the statement is the engine's: SQLite expands the pairs with
     `json_each` and Postgres with `jsonb_array_elements`, both a single
     correlated seek; MySQL/MariaDB and an engine we do not know get one
-    constant-bound arm per pair, batched at `SEEK_BATCH`. MariaDB will
-    not push an outer-referenced bound into a range and walks the series
-    instead, and Postgres plans every arm separately - measured on a
-    13.9 GB database, 2,408 pairs: arms 9 ms SQLite / 108 ms MariaDB /
-    163 ms Postgres, expanded 10 ms SQLite / 15 ms Postgres.
+    constant-bound arm per pair, batched at `SEEK_BATCH`. Postgres plans
+    every arm separately, so expanding pays there - measured on a
+    13.9 GB database, 2,408 pairs: arms 9 ms SQLite / 163 ms Postgres,
+    expanded 10 ms SQLite / 15 ms Postgres. MySQL/MariaDB keeps the arms
+    because MariaDB will not push an outer-referenced bound into a
+    range: with the pairs handed in through `JSON_TABLE` it plans the
+    correlated seek as `ref` on `metadata_id` alone and walks the series
+    per pair, 477 ms against the arms' 35 on 472 pairs of the sparse
+    bench database.
 
     The rows come back distinct, without the edges that picked them, and
     a caller resolves an edge by `buckets.before_edges`: the newest
@@ -231,16 +235,26 @@ def _arms(batch: Sequence[tuple[int, float]]) -> Any:
 
     Distinct before the join, so a row several edges share is fetched
     once - which is also what makes the pairs' own columns unnecessary.
+
+    Written out rather than built from the Core, and with the bounds
+    literal rather than bound: five hundred arms are five hundred
+    subqueries to construct and compile, and that Python costs more
+    than the server spends answering them - 472 pairs on MariaDB, 151 ms
+    through the Core against 35 ms as text, where the server's own share
+    of either is under 40. Both bounds are ours - an `int` and a `float`
+    we produced - and `repr` round-trips the timestamp exactly.
     """
-    picked = union_all(
-        *(
-            select(_seek_id(metadata_id, edge).label("id"))
-            for metadata_id, edge in batch
-        )
-    ).subquery()
-    ids = select(picked.c.id).distinct().subquery()
-    return select(Statistics.metadata_id, Statistics.start_ts, Statistics.sum).join(
-        ids, Statistics.id == ids.c.id
+    arms = " UNION ALL ".join(
+        "SELECT (SELECT id FROM statistics"
+        f" WHERE metadata_id = {int(metadata_id)}"
+        f" AND sum IS NOT NULL AND start_ts < {float(edge)!r}"
+        " ORDER BY start_ts DESC LIMIT 1) AS id"
+        for metadata_id, edge in batch
+    )
+    return text(
+        "SELECT statistics.metadata_id, statistics.start_ts, statistics.sum"
+        f" FROM (SELECT DISTINCT arm.id AS id FROM ({arms}) AS arm) AS picked"
+        " JOIN statistics ON statistics.id = picked.id"
     )
 
 

@@ -379,6 +379,18 @@ def test_the_mysql_rendering_is_constant_bound_arms_batched_at_five_hundred():
     assert all("json" not in sql.lower() for sql in built)
 
 
+def test_the_mysql_arms_carry_their_bounds_as_literals():
+    # Five hundred bound arms are five hundred subqueries to build and
+    # compile, and that Python costs more than the query does.
+    metadata_id, edge = PAIRS[0]
+    sql = str(rows.seek_statements("mysql", PAIRS)[0].compile(dialect=mysql.dialect()))
+
+    assert f"metadata_id = {metadata_id}" in sql
+    assert f"start_ts < {edge!r}" in sql
+    # Nothing left to bind, in either paramstyle.
+    assert "%s" not in sql and ":" not in sql
+
+
 def test_the_sqlite_rendering_seeks_once_per_json_each_pair():
     built = rows.seek_statements("sqlite", PAIRS)
 
