@@ -13,9 +13,10 @@ from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.components.recorder.common import (
     async_wait_recording_done,
 )
-from sqlalchemy.dialects import mysql, postgresql, sqlite
+from sqlalchemy.dialects import mysql
 
 from custom_components.discrete_statistics import rows
+from custom_components.discrete_statistics.buckets import Row
 from custom_components.discrete_statistics.const import METRIC_DURATION
 from custom_components.discrete_statistics.payload import metadata_for
 from custom_components.discrete_statistics.rows import bases, standing
@@ -232,6 +233,65 @@ async def test_rows_before_is_one_statement_on_sqlite_whatever_the_pair_count(
     assert found[(ON, edges[-1])] == (T0.timestamp(), 0.5)
 
 
+async def both_paths(hass, pairs):
+    """The mapping the engine's own rendering answers with, and the arms'.
+
+    SQLite runs the `json_each` path, so the arms every other engine gets
+    are exercised here by building them explicitly.
+    """
+
+    def read():
+        with session_scope(hass=hass, read_only=True) as session:
+            metadata = get_metadata_with_session(
+                get_instance(hass), session, statistic_ids={sid for sid, _ in pairs}
+            )
+            ids = {sid: metadata_id for sid, (metadata_id, _) in metadata.items()}
+            keyed = list(
+                dict.fromkeys((ids[sid], edge.timestamp()) for sid, edge in pairs)
+            )
+            expanded = rows.rows_before(session, keyed)
+            armed: dict[tuple[int, float], Row] = {}
+            for statement in rows.seek_statements(None, keyed):
+                for metadata_id, edge, start_ts, sum_ in session.execute(statement):
+                    armed[(metadata_id, edge)] = Row(start_ts, sum_)
+            named = {(ids[sid], edge.timestamp()): (sid, edge) for sid, edge in pairs}
+            return tuple(
+                {named[key]: row for key, row in found.items()}
+                for found in (expanded, armed)
+            )
+
+    return await get_instance(hass).async_add_executor_job(read)
+
+
+async def test_the_arms_answer_every_pair_as_the_expanded_form_does(
+    recorder, statements
+):
+    await seed(recorder, ON, T0, [0.5, 1.0, 1.5])
+    # A row with no sum, newest before the later edges: an arm that drops
+    # `sum IS NOT NULL` would answer with it.
+    async_add_external_statistics(
+        recorder,
+        metadata_for(METRIC_DURATION, ON, "Grid Status: On (h)"),
+        [{"start": T0 + timedelta(hours=3)}],
+    )
+    await async_wait_recording_done(recorder)
+    # Past the batch, so the arms really run in two statements.
+    edges = [T0 + timedelta(hours=i) for i in range(rows.SEEK_BATCH + 1)]
+
+    statements.clear()
+    expanded, armed = await both_paths(recorder, [(ON, edge) for edge in edges])
+
+    assert armed == expanded
+    # One statement for the expanded form, two batches of arms.
+    assert len(statements) == 3
+    # Each edge keeps its own row, and the sumless hour-3 row is not one.
+    assert armed[(ON, edges[2])] == ((T0 + timedelta(hours=1)).timestamp(), 1.0)
+    assert armed[(ON, edges[3])] == ((T0 + timedelta(hours=2)).timestamp(), 1.5)
+    assert armed[(ON, edges[500])] == ((T0 + timedelta(hours=2)).timestamp(), 1.5)
+    # Nothing stands before the first edge.
+    assert (ON, edges[0]) not in armed
+
+
 def arms(sql: str) -> int:
     return sql.count("UNION ALL") + 1
 
@@ -253,7 +313,7 @@ def test_the_sqlite_rendering_seeks_once_per_json_each_pair():
     built = rows.seek_statements("sqlite", PAIRS)
 
     assert len(built) == 1
-    sql = str(built[0].compile(dialect=sqlite.dialect()))
+    sql = built[0].text
     assert "json_each" in sql
     assert "ORDER BY" in sql and "start_ts DESC" in sql and "LIMIT 1" in sql
     assert "sum IS NOT NULL" in sql
@@ -264,7 +324,7 @@ def test_the_postgresql_rendering_seeks_once_per_jsonb_element():
     built = rows.seek_statements("postgresql", PAIRS)
 
     assert len(built) == 1
-    sql = str(built[0].compile(dialect=postgresql.dialect()))
+    sql = built[0].text
     assert "jsonb_array_elements" in sql
     assert "start_ts DESC" in sql and "LIMIT 1" in sql
     # Filtering the picked id would have Postgres evaluate the subplan twice.

@@ -8,7 +8,8 @@ compiler reads its base and the rows standing in its window. All go
 through `session_scope(read_only=True)` and none writes - `compiler` is
 the only module that does. Edges are answered by `rows_before`, one
 statement whatever the number of (statistic, edge) pairs - except on
-MySQL/MariaDB, where the pairs batch at `SEEK_BATCH`.
+MySQL/MariaDB and an engine we do not know, where the pairs batch at
+`SEEK_BATCH`.
 """
 
 from __future__ import annotations
@@ -41,6 +42,8 @@ _PAIRS = {
         "json_extract(value, '$[0]')",
         "json_extract(value, '$[1]')",
     ),
+    # Nothing in CI parses this one: its syntax is verified by hand
+    # against a real server, through the EXPLAIN in the branch's report.
     "postgresql": (
         "jsonb_array_elements(CAST(:pairs AS jsonb)) AS element(value)",
         "(value->>0)::integer",

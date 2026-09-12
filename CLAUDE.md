@@ -619,7 +619,9 @@ Verified against 2026.8.3.
   `(metadata_id, start_ts)`, one row each. Measured on a 13.9 GB
   database, 2,408 pairs: arms 9 ms SQLite / 108 ms MariaDB / 163 ms
   Postgres (which plans every arm separately, ~30 µs each), expanded
-  10 ms SQLite / 15 ms Postgres. `rows_from` keeps the arms on every
+  10 ms SQLite / 15 ms Postgres — so SQLite's switch buys one statement
+  and no 500-pair cap, not time, and Postgres's buys the order of
+  magnitude. `rows_from` keeps the arms on every
   engine: one per statistic, not one per pair.
 - hassfest validates `strings.json` only for placeholder *names*, not
   content. The frontend renders every string through ICU MessageFormat, so a

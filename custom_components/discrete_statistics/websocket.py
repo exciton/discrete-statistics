@@ -32,9 +32,9 @@ from .rows import rows_before, rows_from
 from .statistic_ids import parse
 
 # The most buckets one request may ask for. A chart cannot show more, and
-# the edges, the statement's arms and the rows all grow with the count,
-# so a range of centuries must be refused rather than walked on the
-# recorder's thread.
+# the edges and the rows grow with the count - as do the statement's arms
+# on MySQL/MariaDB - so a range of centuries must be refused rather than
+# walked on the recorder's thread.
 MAX_BUCKETS = 10_000
 # The shortest a period can be, for bounding the count before walking it.
 _SHORTEST: dict[Period, float] = {
