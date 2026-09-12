@@ -1,6 +1,5 @@
 """Bucket edges and the change between them, from rows at the edges alone."""
 
-from bisect import bisect_left
 from datetime import datetime
 from itertools import pairwise
 from zoneinfo import ZoneInfo
@@ -10,6 +9,7 @@ import pytest
 from custom_components.discrete_statistics.buckets import (
     Bucket,
     Row,
+    before_edges,
     cut,
     edges,
     has_row,
@@ -82,12 +82,8 @@ H = HOUR
 
 
 def _before(rows: list[Row], edges_: list[float]) -> dict[float, Row | None]:
-    """What one seek statement answers: the newest row before each edge."""
-    starts = [row.start for row in rows]
-    return {
-        edge: (rows[found - 1] if (found := bisect_left(starts, edge)) else None)
-        for edge in edges_
-    }
+    """What the read answers with, resolved as `websocket` resolves it."""
+    return before_edges(rows, edges_)
 
 
 def _compiled(before: dict[float, Row | None]):
@@ -182,6 +178,30 @@ def test_half_past_edges_cut_the_hours_between_them():
         for k in range(len(half_past) - 1)
     ]
     assert [b.change for b in cut(half_past, before, _compiled(before))] == expected
+
+
+class TestBeforeEdges:
+    def test_each_edge_takes_the_newest_row_starting_before_it(self):
+        rows = [Row(0.0, 1.0), Row(2 * H, 2.0), Row(3 * H, 3.0)]
+        assert before_edges(rows, [0.0, H, 3 * H, 4 * H]) == {
+            # A row starting exactly on an edge is not before it.
+            0.0: None,
+            H: Row(0.0, 1.0),
+            3 * H: Row(2 * H, 2.0),
+            4 * H: Row(3 * H, 3.0),
+        }
+
+    def test_one_row_answers_every_edge_after_it(self):
+        # A rare state: one transition in a year, and the read returns that
+        # row once rather than once per edge it answers.
+        rows = [Row(5 * H, 1.0)]
+        e = [k * H for k in range(12)]
+        assert before_edges(rows, e) == {
+            edge: (Row(5 * H, 1.0) if edge > 5 * H else None) for edge in e
+        }
+
+    def test_an_empty_series_answers_nothing(self):
+        assert before_edges([], [0.0, H]) == {0.0: None, H: None}
 
 
 class TestHasRow:

@@ -388,7 +388,7 @@ async def test_a_rare_state_is_zero_in_a_compiled_month_and_absent_in_a_hole(
     ]
 
 
-async def test_a_rare_state_costs_one_statement(hass, client, statements):
+async def test_a_rare_state_costs_one_statement(hass, client, statements, fetched):
     await hass.config.async_set_time_zone("UTC")
     jan, apr = utc(2026, 1, 1), utc(2026, 4, 1)
     # ON held throughout, from before the range, so every edge's row is
@@ -399,11 +399,15 @@ async def test_a_rare_state_costs_one_statement(hass, client, statements):
     await async_wait_recording_done(hass)
 
     statements.clear()
+    fetched.clear()
     response = await ask(client, [OFF], jan, apr, "month")
 
     assert [b["change"] for b in response["result"][OFF]] == [10.0, 30.0, 30.0]
     # One statement: a seek per (statistic, edge) pair, in one round trip.
     assert len(statements) == 1
+    # Eight pairs - two duration statistics over four monthly edges - and
+    # seven distinct rows answer them: OFF has nothing before January.
+    assert fetched.rows == 7
 
 
 async def test_a_busy_statistic_under_monthly_edges_costs_one_statement(
@@ -545,7 +549,7 @@ async def test_more_than_five_hundred_pairs_cost_one_statement(
     assert len(statements) == 1
 
 
-async def test_hourly_buckets_cost_one_statement(hass, client, statements):
+async def test_hourly_buckets_cost_one_statement(hass, client, statements, fetched):
     # The rows in the range answer every edge but the first, and the read
     # opens on the row before it.
     await hass.config.async_set_time_zone("UTC")
@@ -556,7 +560,10 @@ async def test_hourly_buckets_cost_one_statement(hass, client, statements):
     await async_wait_recording_done(hass)
 
     statements.clear()
+    fetched.clear()
     response = await ask(client, [ON], start, start + timedelta(hours=12), "hour")
 
     assert [b["change"] for b in response["result"][ON]] == [1.0] * 12
     assert len(statements) == 1
+    # The twelve rows inside the range, and the one the read opens on.
+    assert fetched.rows == 13

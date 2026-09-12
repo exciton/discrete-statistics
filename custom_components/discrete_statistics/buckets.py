@@ -17,7 +17,8 @@ a ratio to divide by whichever of those falls inside it.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from bisect import bisect_left
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, tzinfo
 from itertools import pairwise
 from typing import Literal, NamedTuple
@@ -101,6 +102,25 @@ def edges(start: float, end: float, period: Period, tz: tzinfo) -> list[float]:
     while result[-1] < end:
         result.append(after(result[-1], period, tz))
     return result
+
+
+def before_edges(
+    series: Sequence[Row], edges_: Sequence[float]
+) -> dict[float, Row | None]:
+    """Each edge's row: the newest in `series` that starts before it.
+
+    `series` is ascending, and needs to hold only the distinct answers -
+    a row left out because it was never the newest before any edge is
+    never the answer here either, since a row between an edge and its
+    answer would itself be the newer one. The read hands back exactly
+    that set, whether it seeks per edge (`rows.rows_before`) or reads a
+    range (`rows.rows_from`), which is why both resolve here.
+    """
+    starts = [row.start for row in series]
+    return {
+        edge: (series[at - 1] if (at := bisect_left(starts, edge)) else None)
+        for edge in edges_
+    }
 
 
 def has_row(before: Mapping[float, Row | None], start: float, end: float) -> bool:

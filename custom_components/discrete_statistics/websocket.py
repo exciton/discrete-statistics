@@ -13,7 +13,6 @@ reads.
 
 from __future__ import annotations
 
-from bisect import bisect_left
 from datetime import datetime
 from typing import Any
 
@@ -23,9 +22,8 @@ from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.util import session_scope
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import dt as dt_util
-from sqlalchemy.orm import Session
 
-from .buckets import Bucket, Period, Row, cut, edges, has_row
+from .buckets import Bucket, Period, before_edges, cut, edges, has_row
 from .const import DOMAIN, HOUR, METRIC_DURATION
 from .rows import metadata_ids, rows_before, rows_from
 from .statistic_ids import parse
@@ -149,15 +147,16 @@ def _buckets(
         ids = {sid: ours[sid] for sid in wanted}
 
         if period == "hour":
-            before = _hourly(session, ids, edges_)
+            # Every row in the range answers an edge, so the range is the
+            # cheaper read; the row it opens on answers the first edge.
+            found = rows_from(session, set(ids.values()), edges_[0], edges_[-1])
         else:
             found = rows_before(
                 session, [(mid, edge) for mid in ids.values() for edge in edges_]
             )
-            before = {
-                sid: {edge: found.get((mid, edge)) for edge in edges_}
-                for sid, mid in ids.items()
-            }
+        before = {
+            sid: before_edges(found.get(mid, ()), edges_) for sid, mid in ids.items()
+        }
 
         def compiled_by(family: str):
             judged = [before[sid] for sid in judges[family]]
@@ -170,26 +169,6 @@ def _buckets(
             ]
             for sid in requested
         }
-
-
-def _hourly(
-    session: Session, ids: dict[str, int], edges_: list[float]
-) -> dict[str, dict[float, Row | None]]:
-    """Every edge's row, from the one read the hourly period wants.
-
-    Each statistic's rows in the range answer every edge but the first,
-    which the row the read opens on answers.
-    """
-    found = rows_from(session, set(ids.values()), edges_[0], edges_[-1])
-    before: dict[str, dict[float, Row | None]] = {}
-    for sid, metadata_id in ids.items():
-        series = found.get(metadata_id, [])
-        starts = [row.start for row in series]
-        before[sid] = {
-            edge: (series[at - 1] if (at := bisect_left(starts, edge)) else None)
-            for edge in edges_
-        }
-    return before
 
 
 def _serialise(bucket: Bucket) -> dict[str, float]:

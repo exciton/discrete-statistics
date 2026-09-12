@@ -23,7 +23,7 @@ from homeassistant.components.recorder.db_schema import Statistics, StatisticsMe
 from homeassistant.components.recorder.statistics import get_metadata_with_session
 from homeassistant.components.recorder.util import session_scope
 from homeassistant.core import HomeAssistant
-from sqlalchemy import func, literal, or_, select, text, union_all
+from sqlalchemy import func, or_, select, text, union_all
 from sqlalchemy.orm import Session
 
 from .buckets import Row
@@ -108,25 +108,30 @@ def _pair_seek(dialect: str) -> Any:
     """The whole seek as one correlated statement over an expanded pair list.
 
     The subquery picks the newest row before the pair's edge; the join
-    fetches it. No `id IS NOT NULL` filter - the inner join drops the
-    misses, and the filter has Postgres evaluate the subplan twice.
+    fetches the distinct ones. No `id IS NOT NULL` filter - the inner
+    join drops the misses, and the filter has Postgres evaluate the
+    subplan twice. The edge is not returned: a row answers every edge it
+    is the newest before, so one copy of it is the whole answer.
     """
     source, metadata_id, edge = _PAIRS[dialect]
     return text(
         f"""
-        SELECT pair.metadata_id, pair.edge, statistics.start_ts, statistics.sum
+        SELECT statistics.metadata_id, statistics.start_ts, statistics.sum
         FROM (
-            SELECT {metadata_id} AS metadata_id, {edge} AS edge
-            FROM {source}
-        ) AS pair
-        JOIN statistics ON statistics.id = (
-            SELECT newest.id FROM statistics AS newest
-            WHERE newest.metadata_id = pair.metadata_id
-              AND newest.start_ts < pair.edge
-              AND newest.sum IS NOT NULL
-            ORDER BY newest.start_ts DESC
-            LIMIT 1
-        )
+            SELECT DISTINCT (
+                SELECT newest.id FROM statistics AS newest
+                WHERE newest.metadata_id = pair.metadata_id
+                  AND newest.start_ts < pair.edge
+                  AND newest.sum IS NOT NULL
+                ORDER BY newest.start_ts DESC
+                LIMIT 1
+            ) AS id
+            FROM (
+                SELECT {metadata_id} AS metadata_id, {edge} AS edge
+                FROM {source}
+            ) AS pair
+        ) AS picked
+        JOIN statistics ON statistics.id = picked.id
         """
     )
 
@@ -136,8 +141,9 @@ def seek_statements(
 ) -> list[Any]:
     """The statements a dialect runs to answer every (metadata_id, edge) pair.
 
-    Each yields `(metadata_id, edge, start_ts, sum)` rows. One statement
-    on SQLite and Postgres; one per `SEEK_BATCH` arms elsewhere.
+    Each yields the distinct picked rows, as `(metadata_id, start_ts,
+    sum)`. One statement on SQLite and Postgres; one per `SEEK_BATCH`
+    arms elsewhere.
     """
     if dialect in _PAIRS:
         return [_pair_seek(dialect).bindparams(pairs=json.dumps(pairs))]
@@ -148,8 +154,8 @@ def seek_statements(
 
 def rows_before(
     session: Session, pairs: Iterable[tuple[int, float]]
-) -> dict[tuple[int, float], Row]:
-    """The newest row strictly before each edge, per (metadata_id, edge) pair.
+) -> dict[int, list[Row]]:
+    """The rows answering the pairs, per statistic, ascending and distinct.
 
     One index seek on `(metadata_id, start_ts)` per pair, and the shape
     of the statement is the engine's: SQLite expands the pairs with
@@ -161,19 +167,26 @@ def rows_before(
     13.9 GB database, 2,408 pairs: arms 9 ms SQLite / 108 ms MariaDB /
     163 ms Postgres, expanded 10 ms SQLite / 15 ms Postgres.
 
+    The rows come back distinct, without the edges that picked them, and
+    a caller resolves an edge by `buckets.before_edges`: the newest
+    returned row before an edge is that edge's answer, because a row
+    between the two would itself have been picked by it. So a rare state
+    whose one row answers thirteen edges is one row, not thirteen.
+
     The engine comes from the session's bind, so no caller threads it
     through and the read stays a session away from `hass`.
 
-    A pair with nothing before its edge is absent.
+    A statistic with nothing before any of its edges is absent.
     """
     unique = list(dict.fromkeys(pairs))
     if not unique:
         return {}
-    found: dict[tuple[int, float], Row] = {}
+    # Distinct across the batches too: the arms only dedupe within one.
+    found: dict[int, set[Row]] = {}
     for statement in seek_statements(session.get_bind().dialect.name, unique):
-        for metadata_id, edge, start_ts, sum_ in session.execute(statement):
-            found[(metadata_id, edge)] = Row(start_ts, sum_)
-    return found
+        for metadata_id, start_ts, sum_ in session.execute(statement):
+            found.setdefault(metadata_id, set()).add(Row(start_ts, sum_))
+    return {metadata_id: sorted(rows) for metadata_id, rows in found.items()}
 
 
 def _seek_id(metadata_id: int, edge: float) -> Any:
@@ -195,20 +208,21 @@ def _seek_id(metadata_id: int, edge: float) -> Any:
 
 
 def _arms(batch: Sequence[tuple[int, float]]) -> Any:
-    """One constant-bound seek per pair, unioned: the portable rendering."""
-    seeks = union_all(
+    """One constant-bound seek per pair, unioned: the portable rendering.
+
+    Distinct before the join, so a row several edges share is fetched
+    once - which is also what makes the pairs' own columns unnecessary.
+    """
+    picked = union_all(
         *(
-            select(
-                literal(metadata_id).label("metadata_id"),
-                literal(edge).label("edge"),
-                _seek_id(metadata_id, edge).label("id"),
-            )
+            select(_seek_id(metadata_id, edge).label("id"))
             for metadata_id, edge in batch
         )
     ).subquery()
-    return select(
-        seeks.c.metadata_id, seeks.c.edge, Statistics.start_ts, Statistics.sum
-    ).join(Statistics, Statistics.id == seeks.c.id)
+    ids = select(picked.c.id).distinct().subquery()
+    return select(Statistics.metadata_id, Statistics.start_ts, Statistics.sum).join(
+        ids, Statistics.id == ids.c.id
+    )
 
 
 def rows_from(
@@ -360,10 +374,10 @@ def sums_at(
             for statistic_id, (metadata_id, _) in metadata.items()
         }
         found = rows_before(session, [(metadata_id, edge) for metadata_id in ids])
+        # One edge per statistic, so the newest row returned for it is
+        # that edge's answer.
         return {
-            statistic_id: (
-                0.0 if (row := found.get((metadata_id, edge))) is None else row.sum
-            )
+            statistic_id: (rows[-1].sum if (rows := found.get(metadata_id)) else 0.0)
             for metadata_id, statistic_id in ids.items()
         }
 
