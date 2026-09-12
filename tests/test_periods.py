@@ -1,11 +1,14 @@
 """A named period's edges, in the instance's timezone."""
 
+import json
 import math
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
 
+from custom_components.discrete_statistics import periods
 from custom_components.discrete_statistics.periods import (
     PERIODS,
     bounds,
@@ -116,3 +119,23 @@ def test_custom_window_takes_two_of_three_or_a_start_alone(
     start, end, duration, window
 ):
     assert custom_window(start, end, duration, now=1000.0) == window
+
+
+def _component_json(name: str) -> tuple[str, dict]:
+    path = Path(periods.__file__).parent / name
+    text = path.read_text(encoding="utf-8")
+    return text, json.loads(text)
+
+
+def test_the_period_selector_offers_every_period():
+    # A period without an option is an untranslated key in the sensor
+    # dialog's dropdown.
+    _, strings = _component_json("strings.json")
+    assert set(strings["selector"]["period"]["options"]) == set(PERIODS)
+
+
+def test_the_english_translations_are_the_strings_verbatim():
+    # hassfest copies one to the other; a hand edit to either drifts.
+    strings_text, _ = _component_json("strings.json")
+    en_text, _ = _component_json("translations/en.json")
+    assert en_text == strings_text
