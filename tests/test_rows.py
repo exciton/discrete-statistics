@@ -56,6 +56,10 @@ async def seed(hass, statistic_id, start, sums):
     await async_wait_recording_done(hass)
 
 
+async def series_end(hass, ids):
+    return await get_instance(hass).async_add_executor_job(rows.series_end, hass, ids)
+
+
 async def sums_at(hass, ids, edge):
     return await get_instance(hass).async_add_executor_job(
         rows.sums_at, hass, ids, edge.timestamp()
@@ -95,6 +99,29 @@ async def test_series_start_is_the_earliest_row_across_statistics(recorder):
         )
         is None
     )
+
+
+async def test_series_end_is_the_newest_row_across_statistics(recorder):
+    # OFF is the quiet state: its newest row is hours behind ON's.
+    await seed(recorder, ON, T0, [0.5, 1.0, 1.5])
+    await seed(recorder, OFF, T0, [0.5])
+    assert (
+        await series_end(recorder, {ON, OFF}) == (T0 + timedelta(hours=2)).timestamp()
+    )
+    assert (
+        await series_end(recorder, {"discrete_statistics:nothing_on_duration"}) is None
+    )
+
+
+async def test_series_end_ignores_a_row_with_no_sum(recorder):
+    await seed(recorder, ON, T0, [0.5, 1.0])
+    async_add_external_statistics(
+        recorder,
+        metadata_for(METRIC_DURATION, ON, "Grid Status: On (h)"),
+        [{"start": T0 + timedelta(hours=5), "mean": 1.0}],
+    )
+    await async_wait_recording_done(recorder)
+    assert await series_end(recorder, {ON}) == (T0 + timedelta(hours=1)).timestamp()
 
 
 async def test_bases_are_the_two_newest_rows_before_the_edge(recorder):
@@ -388,6 +415,22 @@ def test_the_series_start_rendering_is_one_ascending_seek_per_statistic():
     assert sql.count("LIMIT 1") == 3
     assert "min(" not in sql.lower()
     assert "DESC" not in sql
+    assert sql.count("sum IS NOT NULL") == 3
+
+
+def test_the_series_end_rendering_is_one_descending_seek_per_statistic():
+    sql = str(
+        rows._latest([7, 9, 11]).compile(
+            dialect=mysql.dialect(), compile_kwargs={"literal_binds": True}
+        )
+    )
+
+    # One arm per statistic, each an index seek from the newest end, and
+    # no aggregate: the watermark is the max taken in Python.
+    assert arms(sql) == 3
+    assert sql.count("LIMIT 1") == 3
+    assert sql.count("start_ts DESC") == 3
+    assert "max(" not in sql.lower()
     assert sql.count("sum IS NOT NULL") == 3
 
 

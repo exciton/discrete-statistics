@@ -11,7 +11,6 @@ from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.history import state_changes_during_period
 from homeassistant.components.recorder.statistics import (
     async_add_external_statistics,
-    get_last_statistics,
     get_metadata,
 )
 from homeassistant.core import HomeAssistant
@@ -24,7 +23,7 @@ from .config import EntityConfig
 from .const import DOMAIN, HOUR, METRIC_DURATION
 from .naming import async_warm_state_translations, display_name, state_translator
 from .payload import build_payloads, readable_state
-from .rows import bases, standing
+from .rows import bases, series_end, standing
 from .statistic_ids import belongs_to, parse
 
 # Recompute this many trailing hours on every run, so a state committed by
@@ -509,26 +508,16 @@ class Compiler:
     async def _async_watermark(self, statistic_ids: Collection[str]) -> float | None:
         """Return the newest compiled hour for an entity, or None.
 
-        Takes the max across every one of the entity's statistics: the rows
-        are sparse, so any single ID can lag the others by any distance.
+        The max across every one of the entity's statistics: the rows are
+        dense only from a state's first appearance, so any single ID can
+        lag the others by any distance. `rows.series_end` answers all of
+        them in one read, a seek per statistic.
         """
         if not statistic_ids:
             return None
-        newest: float | None = None
-        for statistic_id in statistic_ids:
-            result = await get_instance(self._hass).async_add_executor_job(
-                get_last_statistics,
-                self._hass,
-                1,
-                statistic_id,
-                True,
-                {"sum"},
-            )
-            if rows := result.get(statistic_id):
-                start = rows[0]["start"]
-                if newest is None or start > newest:
-                    newest = start
-        return newest
+        return await get_instance(self._hass).async_add_executor_job(
+            series_end, self._hass, set(statistic_ids)
+        )
 
     async def _async_base(
         self, statistic_ids: Collection[str], window_start: float

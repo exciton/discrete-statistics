@@ -83,6 +83,7 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
        │        │           edge, a range opened on the row before it, a
        │        │           statistic's newest rows before one, the rows
        │        │           standing in a window, where a series starts
+       │        │           and where it ends
        ├─ reading           pure: a window in pieces - whole hours, part hours,
        │        │           the tail -> one sensor's value
        │        │
@@ -103,7 +104,7 @@ design is drifting. Three recorder boundaries: `compiler` is the only
 module that writes; `rows` reads — `session_scope(read_only=True)`, the
 newest row before each of a set of edges, the sums at an edge, the rows
 of a range and the one before it, the newest rows before one, the rows
-standing in a window, the earliest row of a series — for
+standing in a window, the earliest and the newest row of a series — for
 `websocket`, the compiler and the coordinator alike; and `config_flow`
 reads once per options dialog, the entity's distinct states, to draw a
 mapping row for each, and once per sensor dialog, the entity's statistics,
@@ -320,7 +321,9 @@ state occurred, never the period.
 **The watermark is the max across all of an entity's statistic IDs.** Reading a
 single representative ID is wrong: the rows are sparse, so any one ID can lag
 the others by any distance — a state that has not occurred for a year has no
-row in that year's compiled hours.
+row in that year's compiled hours. `rows.series_end` reads all of them in one
+statement — a descending seek per statistic, unioned, the max taken in Python
+— so the breadth costs a round trip, not one per ID.
 
 **Each run recomputes a trailing window (`TRAILING_HOURS`).** The recorder is a
 write queue, so a state change late in an hour may be committed after that hour
@@ -583,7 +586,7 @@ Verified against 2026.8.3.
   that would restart those at zero.
 - The two `async_existing` reads in an incremental compile are not
   redundant. Reusing the first one — taken before `_async_watermark`'s
-  round-trips — makes a recently deleted statistic intermittently still
+  own read — makes a recently deleted statistic intermittently still
   visible, and the deletion tests flaky about one run in three.
 - An `asyncio.Lock` in `hass.data` serialises the hourly run against the
   service. It is not reentrant: never call `compile_all` from inside it.

@@ -188,12 +188,21 @@ def rows_before(
     return {metadata_id: sorted(rows) for metadata_id, rows in found.items()}
 
 
-def _seek(column: Any, metadata_id: int, edge: float | None = None) -> Any:
+def _seek(
+    column: Any,
+    metadata_id: int,
+    edge: float | None = None,
+    *,
+    descending: bool | None = None,
+) -> Any:
     """One row of one statistic, as a constant-bound seek on `(metadata_id, start_ts)`.
 
-    The newest row before an edge, or - with no edge - the oldest row
-    the statistic holds, which is the same index walked the other way.
+    The newest row before an edge, or - with no edge - the oldest or the
+    newest row the statistic holds, which is the same index walked
+    either way. An edge is descending unless told otherwise.
     """
+    if descending is None:
+        descending = edge is not None
     return (
         select(column)
         .where(
@@ -202,7 +211,7 @@ def _seek(column: Any, metadata_id: int, edge: float | None = None) -> Any:
             *(() if edge is None else (Statistics.start_ts < edge,)),
         )
         .order_by(
-            Statistics.start_ts.asc() if edge is None else Statistics.start_ts.desc()
+            Statistics.start_ts.desc() if descending else Statistics.start_ts.asc()
         )
         .limit(1)
         # The arm carries its own FROM: correlating it against the outer
@@ -402,14 +411,29 @@ def _earliest(batch: Sequence[int]) -> Any:
     )
 
 
-def series_start(hass: HomeAssistant, statistic_ids: set[str]) -> float | None:
-    """The start of the earliest row across the statistics, or None. Executor.
+def _latest(batch: Sequence[int]) -> Any:
+    """One arm per statistic, each the start of its newest row."""
+    return union_all(
+        *(
+            select(
+                _seek(Statistics.start_ts, metadata_id, descending=True).label(
+                    "start_ts"
+                )
+            )
+            for metadata_id in batch
+        )
+    )
 
-    One seek per statistic, unioned, and the minimum taken in Python.
-    `min(start_ts)` over the set reads as a scan to Postgres, which walks
-    `ix_statistics_start_ts` from the oldest row in the table filtering
-    for ours - 4.6 M rows and over a second where the seeks are two
-    index lookups. A statistic with no row contributes nothing.
+
+def _bound(
+    hass: HomeAssistant, statistic_ids: set[str], arms: Any, pick: Any
+) -> float | None:
+    """One seek per statistic, unioned, and the bound taken in Python.
+
+    An aggregate over the set reads as a scan to Postgres, which walks
+    `ix_statistics_start_ts` from one end of the table filtering for
+    ours - 4.6 M rows and over a second where the seeks are two index
+    lookups. A statistic with no row contributes nothing.
     """
     with session_scope(hass=hass, read_only=True) as session:
         metadata = get_metadata_with_session(
@@ -419,7 +443,22 @@ def series_start(hass: HomeAssistant, statistic_ids: set[str]) -> float | None:
         found = [
             start_ts
             for at in range(0, len(ids), SEEK_BATCH)
-            for (start_ts,) in session.execute(_earliest(ids[at : at + SEEK_BATCH]))
+            for (start_ts,) in session.execute(arms(ids[at : at + SEEK_BATCH]))
             if start_ts is not None
         ]
-        return min(found, default=None)
+        return pick(found, default=None)
+
+
+def series_start(hass: HomeAssistant, statistic_ids: set[str]) -> float | None:
+    """The start of the earliest row across the statistics, or None. Executor."""
+    return _bound(hass, statistic_ids, _earliest, min)
+
+
+def series_end(hass: HomeAssistant, statistic_ids: set[str]) -> float | None:
+    """The start of the newest row across the statistics, or None. Executor.
+
+    The watermark: the rows are dense only from a state's first
+    appearance, so the newest row of any one statistic can lag the
+    others by any distance.
+    """
+    return _bound(hass, statistic_ids, _latest, max)
