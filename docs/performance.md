@@ -4,6 +4,27 @@ What this integration stores, how it reads it back, and what both cost. The
 numbers below are measurements on one real install, not estimates; how to
 take your own is at the end.
 
+## How the design was chosen
+
+The storage and read paths were settled by measurement, not argument. Two
+storage schemes were tested against the same 400 days of history: a row
+for every state in every hour (dense), and a row only where a state had
+time in the hour or was entered (sparse). Several read schemes were tested
+on top of each: reading the rows at the bucket edges with a seek for every
+edge that missed; one statement built from a `UNION ALL` of seeks; one
+statement that hands the edges in as a JSON parameter and lets the engine
+seek per edge; and per-engine variants of those, including MariaDB's
+`JSON_TABLE`, which turned out to walk the index rather than seek. Every
+combination was run on SQLite, Postgres and MariaDB, against both storage
+schemes, alongside Home Assistant's own `statistics_during_period` and
+`history_stats` asked the same questions, and every answer was checked
+identical across all of it before any timing counted.
+
+The current design — sparse rows; one statement per read, rendered per
+engine; gap-or-zero judged on the entity's duration statistics — is the
+combination that won on every engine and both storage schemes. What
+follows describes that design, then the measurements it rests on.
+
 ## What is stored
 
 For every configured entity, for every state it was in, for every hour:
