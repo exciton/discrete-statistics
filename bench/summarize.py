@@ -72,7 +72,7 @@ def total(rs: list[dict], key: str = "median_ms") -> float:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--results", default="bench/results/results")
+    ap.add_argument("--results", default="bench/results")
     ap.add_argument("--stamp", default="", help="timestamp prefix, e.g. 20260912T06")
     ap.add_argument(
         "--baseline", default="", help="branch every other is diffed against"

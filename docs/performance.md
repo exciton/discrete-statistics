@@ -387,7 +387,7 @@ script/bench live sqlite measure
 Each case is run once to warm it, then `repeat` times; the median and
 maximum milliseconds, the statements, the statements against the
 statistics tables and the rows fetched are printed and written to
-`bench/results/results/<branch>-<engine>-<variant>-<stamp>.json`, along
+`bench/results/<branch>-<engine>-<variant>-<stamp>.json`, along
 with every answer. The engine's own plan for each statement a chart case
 issued lands in `bench/results/plans/`. The run is anchored at the newest
 hour your statistics reach, not at `now`, so two runs ask the same

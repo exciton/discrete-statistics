@@ -834,14 +834,26 @@ async def compile_(hass, run: Run, end: float) -> Bench:
     return bench
 
 
+def _results_dir(results_dir: str) -> Path:
+    """Where result JSON files land.
+
+    `results_dir` holds `results/`, `plans/` and `run.json` side by side -
+    except when it is itself already named "results" (the default,
+    `bench/results`), in which case it *is* that directory, so nesting a
+    second `results/` inside it would bury the files a level deeper than
+    every other path (`plans/`, `run.json`) already sits.
+    """
+    base = Path(results_dir)
+    return base if base.name == "results" else base / "results"
+
+
 async def write_results(bench: Bench, hass, run: Run, url: str) -> Path:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     # The mode is in the name for every mode but `measure`, so a compile
     # run is never mistaken for the read set it sits beside.
     tag = "" if run.mode == "measure" else f"-{run.mode}"
     out = (
-        Path(run.results_dir)
-        / "results"
+        _results_dir(run.results_dir)
         / f"{run.branch}-{run.engine}-{run.variant}{tag}-{stamp}.json"
     )
     out.parent.mkdir(parents=True, exist_ok=True)

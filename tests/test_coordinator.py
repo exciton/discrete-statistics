@@ -1,20 +1,16 @@
 """The refresh behind every period sensor on an entry."""
 
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from unittest.mock import patch
 
 from homeassistant.components.recorder import Recorder
-from homeassistant.config_entries import ConfigSubentryData
 from homeassistant.const import CONF_ENTITY_ID, CONF_NAME
 from homeassistant.core import CoreState
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
-from pytest_homeassistant_custom_component.components.recorder.common import (
-    async_wait_recording_done,
-)
 
 from custom_components.discrete_statistics import reading as reading_module
 from custom_components.discrete_statistics import rows as rows_module
@@ -24,14 +20,14 @@ from custom_components.discrete_statistics.const import (
     DEFAULT_RECORD_KNOWN,
     DOMAIN,
     METRIC_DURATION,
-    SUBENTRY_SENSOR,
 )
 from custom_components.discrete_statistics.coordinator import PeriodCoordinator
 from custom_components.discrete_statistics.statistic_ids import build
-from tests.conftest import past_the_cooldown, play
+from tests.conftest import T0, compile_by_hand, past_the_cooldown, play, sensor
 
 ENTITY = "binary_sensor.grid_status"
-T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+# Not `tests.conftest.ON_TODAY`: that one is a full sensor entity ID, this
+# one a subentry title - same name, different job, deliberately not shared.
 ON_TODAY = "on-today"
 OFF_COUNT_TODAY = "off-count-today"
 SINCE_QUARTER_PAST_ONE = "sensor.since_quarter_past_one"
@@ -46,22 +42,6 @@ TIMELINE = [
     (T0 + timedelta(hours=1, minutes=30), "off"),
     (T0 + timedelta(hours=2), "on"),
 ]
-
-
-def sensor(subentry_id, states, metric="duration", period="today", live=True, **data):
-    return ConfigSubentryData(
-        data={
-            "states": states,
-            "metric": metric,
-            "period": period,
-            "live": live,
-            **data,
-        },
-        subentry_id=subentry_id,
-        subentry_type=SUBENTRY_SENSOR,
-        title=subentry_id,
-        unique_id=None,
-    )
 
 
 async def setup_entry(hass, subentries):
@@ -109,13 +89,6 @@ async def compiled_entry(hass, freezer, subentries):
     entry = await setup_entry(hass, subentries)
     await compile_by_hand(hass, T0 - timedelta(hours=1))
     return PeriodCoordinator(hass, entry, hass.data[DOMAIN]["compiler"])
-
-
-async def compile_by_hand(hass, start):
-    cfg = next(iter(hass.data[DOMAIN]["entry_configs"].values()))
-    await hass.data[DOMAIN]["compiler"].async_compile(cfg, start.timestamp())
-    await async_wait_recording_done(hass)
-    await hass.async_block_till_done()
 
 
 async def test_readings_per_subentry(recorder_utc, freezer):
