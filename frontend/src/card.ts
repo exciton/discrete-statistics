@@ -12,8 +12,11 @@ import {
   type ChartSeries,
   type LegendItem,
 } from "./series";
-import { statisticsForEntity, type StateStatistic } from "./statistic-ids";
-import { pickStubEntity } from "./stub";
+import {
+  entitiesWithStatistics,
+  statisticsForEntity,
+  type StateStatistic,
+} from "./statistic-ids";
 import type { CardConfig, HassLike } from "./types";
 
 const DEFAULT_DAYS = 30;
@@ -70,13 +73,24 @@ export class DiscreteStatisticsCard extends LitElement {
   // the same object needs no fetch.
   private _refreshedRange?: Range;
 
-  public static getStubConfig(
-    _hass: unknown,
+  // The picker awaits this, so a new card can start on an entity that
+  // actually has statistics - the dashboard's unused ones first - and
+  // draw a chart at once rather than a hint.
+  public static async getStubConfig(
+    hass: HassLike,
     entities: string[] = [],
     entitiesFallback: string[] = [],
-  ): Partial<CardConfig> {
+  ): Promise<Partial<CardConfig>> {
+    let entity: string | undefined;
+    try {
+      const metadata = await listStatisticIds(hass);
+      const candidates = [...entities, ...entitiesFallback, ...Object.keys(hass.states ?? {})];
+      entity = entitiesWithStatistics(candidates, metadata)[0];
+    } catch {
+      entity = undefined;
+    }
     return {
-      entity: pickStubEntity(entities, entitiesFallback),
+      entity,
       metric: "duration",
       unit: "auto",
       period: "auto",
