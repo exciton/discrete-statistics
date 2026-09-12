@@ -34,7 +34,6 @@ python3 bench/compare.py A.json B.json          # two runs, side by side
 | `extract.py` | a backup → a database and `entries.json` |
 | `compare.py` | two result files side by side, cost and answers |
 | `summarize.py` | a matrix of result files → markdown tables |
-| `Dockerfile` | the bench image: the test image plus `pymysql` and `psycopg2` |
 
 Paths come from the environment, so nothing needs editing to point the
 bench elsewhere: `BENCH_CASES` (default `bench/cases.yaml`), `BENCH_DATA`
