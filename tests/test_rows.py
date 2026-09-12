@@ -19,7 +19,7 @@ from custom_components.discrete_statistics import rows
 from custom_components.discrete_statistics.buckets import Row
 from custom_components.discrete_statistics.const import METRIC_DURATION
 from custom_components.discrete_statistics.payload import metadata_for
-from custom_components.discrete_statistics.rows import bases, standing
+from custom_components.discrete_statistics.rows import bases, metadata_ids, standing
 
 ON = "discrete_statistics:binary_sensor_grid_status_on_duration"
 OFF = "discrete_statistics:binary_sensor_grid_status_off_duration"
@@ -374,3 +374,48 @@ async def test_rows_from_opens_each_statistic_on_the_row_before_the_range(
     assert found[ON] == [(hours[1], 1.0), (hours[2], 1.5), (hours[3], 2.0)]
     assert found[OFF] == [(hours[2], 0.25), (hours[3], 0.5)]
     assert found["discrete_statistics:nothing_on_duration"] is None
+
+
+async def read_metadata(hass, statistic_ids, slugs):
+    def read():
+        with session_scope(hass=hass, read_only=True) as session:
+            return metadata_ids(session, statistic_ids, slugs)
+
+    return await get_instance(hass).async_add_executor_job(read)
+
+
+async def test_metadata_ids_reads_the_entity_asked_for_and_not_the_source(recorder):
+    hass = recorder
+    longer = "discrete_statistics:binary_sensor_grid_status_backup_on_duration"
+    await seed(hass, ON, T0, [0.5])
+    await seed(hass, OFF, T0, [0.5])
+    await seed(hass, longer, T0, [0.5])
+    await seed(hass, "discrete_statistics:light_kitchen_on_duration", T0, [0.5])
+
+    found = await read_metadata(hass, {ON}, {"binary_sensor_grid_status"})
+
+    # The entity's siblings, and nothing else we hold: not the other
+    # entity, and not the longer slug the LIKE prefix also matches.
+    assert set(found) == {ON, OFF}
+    assert all(isinstance(metadata_id, int) for metadata_id in found.values())
+
+
+async def test_metadata_ids_answers_an_id_of_ours_with_no_entity_slug_asked(recorder):
+    # An ID that does not parse has no siblings to find; it is still ours,
+    # and is read by name.
+    hass = recorder
+    odd = "discrete_statistics:renamed_by_hand"
+    await seed(hass, odd, T0, [0.5])
+    await seed(hass, ON, T0, [0.5])
+
+    assert set(await read_metadata(hass, {odd}, set())) == {odd}
+    assert await read_metadata(hass, set(), set()) == {}
+
+
+async def test_metadata_ids_costs_no_statistics_row(recorder, statements):
+    await seed(recorder, ON, T0, [0.5])
+
+    statements.clear()
+    await read_metadata(recorder, {ON}, {"binary_sensor_grid_status"})
+
+    assert statements == []

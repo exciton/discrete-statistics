@@ -20,7 +20,6 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.components.recorder import get_instance
-from homeassistant.components.recorder.statistics import get_metadata_with_session
 from homeassistant.components.recorder.util import session_scope
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import dt as dt_util
@@ -28,7 +27,7 @@ from sqlalchemy.orm import Session
 
 from .buckets import Bucket, Period, Row, cut, edges, has_row
 from .const import DOMAIN, HOUR, METRIC_DURATION
-from .rows import rows_before, rows_from
+from .rows import metadata_ids, rows_before, rows_from
 from .statistic_ids import parse
 
 # The most buckets one request may ask for. A chart cannot show more, and
@@ -127,8 +126,8 @@ def _buckets(
     """
     edges_ = edges(start, end, period, dt_util.get_default_time_zone())
     with session_scope(hass=hass, read_only=True) as session:
-        instance = get_instance(hass)
-        ours = get_metadata_with_session(instance, session, statistic_source=DOMAIN)
+        slugs = {parts[0] for sid in statistic_ids if (parts := parse(sid)) is not None}
+        ours = metadata_ids(session, statistic_ids, slugs)
         requested = {sid for sid in statistic_ids if sid in ours}
         if not requested:
             return {}
@@ -147,7 +146,7 @@ def _buckets(
             if not judged:
                 judges[family] = {sid for sid in requested if _family(sid) == family}
         wanted = requested.union(*judges.values())
-        ids = {sid: ours[sid][0] for sid in wanted}
+        ids = {sid: ours[sid] for sid in wanted}
 
         if period == "hour":
             before = _hourly(session, ids, edges_)

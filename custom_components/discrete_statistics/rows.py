@@ -19,14 +19,16 @@ from collections.abc import Iterable, Sequence
 from typing import Any
 
 from homeassistant.components.recorder import get_instance
-from homeassistant.components.recorder.db_schema import Statistics
+from homeassistant.components.recorder.db_schema import Statistics, StatisticsMeta
 from homeassistant.components.recorder.statistics import get_metadata_with_session
 from homeassistant.components.recorder.util import session_scope
 from homeassistant.core import HomeAssistant
-from sqlalchemy import func, literal, select, text, union_all
+from sqlalchemy import func, literal, or_, select, text, union_all
 from sqlalchemy.orm import Session
 
 from .buckets import Row
+from .const import DOMAIN
+from .statistic_ids import parse
 
 # Arms per statement: SQLite caps a compound SELECT at 500 terms, and only
 # the arm rendering is compound. The hourly period reads a range instead,
@@ -50,6 +52,56 @@ _PAIRS = {
         "(value->>1)::double precision",
     ),
 }
+
+
+
+# The character that escapes a LIKE wildcard in `metadata_ids`. A slug is
+# `[a-z0-9_]`, so anything outside it will do and nothing needs escaping
+# but the underscore itself.
+_ESCAPE = "/"
+
+
+def metadata_ids(
+    session: Session, statistic_ids: Iterable[str], entity_slugs: Iterable[str]
+) -> dict[str, int]:
+    """Our statistics' metadata ids: those named, and those of those entities.
+
+    The siblings are what tells a compiled bucket from a hole, and asking
+    for them by entity keeps the read the size of the chart:
+    `get_metadata_with_session(statistic_source=DOMAIN)` answers with every
+    statistic we hold, which grows with the install and not with the
+    request - six rows against a hundred here, and further apart the more
+    entities are configured.
+
+    `LIKE` is the prefix filter, and `_` is one of its wildcards, so the
+    slug is escaped; a longer slug sharing the prefix still matches, and
+    is dropped in Python against the ID grammar, which is the only place
+    that boundary is exact.
+    """
+    named = set(statistic_ids)
+    slugs = set(entity_slugs)
+    if not named and not slugs:
+        return {}
+    prefixes = [
+        StatisticsMeta.statistic_id.like(
+            f"{DOMAIN}:{slug.replace(_ESCAPE, _ESCAPE * 2).replace('_', _ESCAPE + '_')}"
+            f"{_ESCAPE}_%",
+            escape=_ESCAPE,
+        )
+        for slug in slugs
+    ]
+    found = session.execute(
+        select(StatisticsMeta.statistic_id, StatisticsMeta.id).where(
+            StatisticsMeta.source == DOMAIN,
+            or_(StatisticsMeta.statistic_id.in_(named), *prefixes),
+        )
+    )
+    return {
+        statistic_id: metadata_id
+        for statistic_id, metadata_id in found
+        if statistic_id in named
+        or ((parts := parse(statistic_id)) is not None and parts[0] in slugs)
+    }
 
 
 def _pair_seek(dialect: str) -> Any:
