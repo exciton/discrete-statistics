@@ -5,7 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A Home Assistant custom integration that records per-state transition counts
 and durations for binary and enum entities as external long-term statistics,
 retained independently of `purge_keep_days`. See README.md for user-facing
-configuration and chart examples.
+configuration and chart examples, and `docs/performance.md` for the
+user-facing account of what the read and write paths cost, with the
+benchmark numbers.
 
 ## Commands
 

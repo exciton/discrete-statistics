@@ -884,7 +884,8 @@ compiled yet — the hour in progress — and for a rolling or custom window,
 the hour an edge falls in: two hours of state changes at most, for a window
 of a day or a year alike. `history_stats` reads the whole window's state
 changes on every refresh, so a year-long window fetches a year of raw data
-every minute.
+every minute. [`docs/performance.md`](docs/performance.md) has the measured
+cost of both, on three database engines.
 
 **Long-term correctness.** Over a window whose hours the recorder still
 holds, both read the same state rows: no difference. Past the recorder's
