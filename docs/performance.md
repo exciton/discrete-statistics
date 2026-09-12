@@ -348,25 +348,124 @@ entities from scratch over the full 400-day retention window took 114
 seconds in total. A run is skipped, not queued, while the recorder's own
 write queue is deep — compiling is idempotent, so the next run picks up the
 same hours.
-
 ## Reproducing this
 
-The harness is not shipped with the integration; there is nothing to
-install and nothing to run. Everything above is measurable on any install
-with the tools already there.
+Every number above came from `bench/`, which is in the repository and
+runs against your own database. Nothing in it is specific to the install
+it was written for: the entities, the charts, the sensors and the
+`history_stats` comparisons are a YAML document you write.
 
-The card's read is the websocket command `discrete_statistics/buckets`,
-taking `statistic_ids`, `start_time`, `end_time` and `period`; the
-comparison is `recorder/statistics_during_period` with `types: ["change"]`,
-the same IDs, the same range and the same period. Both can be sent from
-Developer Tools, and both are what the two cards actually send. Time the
-round trip, and read the statement and row counts from the database —
-SQLite's `sqlite3_trace`, Postgres' `pg_stat_statements`,
-MariaDB's general log — with the recorder otherwise idle, since the counts
-are engine-wide and not only ours. Take a warm-up pass and then a handful
-of repeats, and report the median: the first read of any range pays for the
-page cache. Anchor the window at a fixed instant rather than `now`, or
-successive runs will not be asking the same question. For the
-`history_stats` comparison, give it the same entity, states and window as
-literal timestamps rather than templates, and construct it fresh for each
-repeat — it caches, and a second reading measures nothing but the cache.
+**1. Get a database.** From a backup, encrypted or not:
+
+```bash
+script/bench-extract ~/backups/backup.tar bench/data --variant live
+# encrypted: --key ~/backup.key, a file holding the backup's encryption key
+```
+
+That writes `bench/data/live/home-assistant_v2.db` and, beside it,
+`bench/data/entries.json` — this integration's config entries, taken from
+the backup's `.storage/core.config_entries`, which is where the harness
+reads each entity's settings from. Without a backup, copy the live
+`home-assistant_v2.db` (and its `-wal`) with Home Assistant stopped, put
+it in the same layout, and write `entries.json` by hand: it is the
+`data.entries` list of `.storage/core.config_entries`, filtered to
+`"domain": "discrete_statistics"`. Measure a copy, never the live file.
+
+**2. Say what to measure.** `cp bench/cases.example.yaml bench/cases.yaml`
+and edit: the time zone, how many repeats, one entry per chart (the
+statistics or an entity and its states, how far back, and the period),
+one per period sensor, and one per `history_stats` pair. Every field is
+commented there. `bench/cases.yaml` is git-ignored — it describes your
+install, not the integration.
+
+**3. Read it on SQLite.**
+
+```bash
+script/bench live sqlite measure
+```
+
+Each case is run once to warm it, then `repeat` times; the median and
+maximum milliseconds, the statements, the statements against the
+statistics tables and the rows fetched are printed and written to
+`bench/results/results/<branch>-<engine>-<variant>-<stamp>.json`, along
+with every answer. The engine's own plan for each statement a chart case
+issued lands in `bench/results/plans/`. The run is anchored at the newest
+hour your statistics reach, not at `now`, so two runs ask the same
+question.
+
+**4. Optionally, the other two engines.**
+
+```bash
+script/bench-db up live                       # mariadb:11 and postgres:16
+script/bench live mariadb schema              # Home Assistant's own DDL,
+script/bench live postgres schema             # by booting the recorder
+script/bench-load live mariadb --states       # copy the data in, and verify
+script/bench-load live postgres --states
+script/bench live mariadb measure
+script/bench live postgres measure
+```
+
+The containers are on the host network at ports **3307** and **5433**, not
+3306 and 5432, because a host that runs its own MySQL or Postgres already
+holds those and a host-network container cannot share a port;
+`BENCH_MARIADB_PORT` and `BENCH_POSTGRES_PORT` move them. The MariaDB URL
+is `mysql+pymysql://`, not a bare `mysql://`: the recorder sends that form
+to SQLAlchemy's `mysqldb` dialect, which needs a MySQLdb the image does not
+carry, while `mysql+pymysql://` takes the same recorder code path with the
+driver it does.
+
+The loader copies only the tables the bench reads — `statistics_meta`,
+`statistics`, `recorder_runs`, `schema_changes`, and with `--states` the
+`states` rows of the configured entities and the `state_attributes` they
+reference. `statistics_short_term`, events and everything else are
+skipped. Ids are preserved, so the two engines answer from the same graph
+the SQLite file holds, and every load is verified: row counts per table,
+then per statistic of ours the count, the newest hour and the sum — the
+last bit-identical first and then to a relative 1e-9, since `SUM()` over
+doubles is summation-order dependent. `--verify-only` re-checks a database
+without reloading it.
+
+**5. Compare, and summarise.**
+
+```bash
+python3 bench/compare.py old.json new.json     # host-runnable, no container
+python3 bench/summarize.py                     # a matrix as markdown tables
+```
+
+`compare.py` prints a line per case — both medians, the ratio, statements,
+rows, and whether the two answers are *identical* — then a total, then
+whatever any differing case disagrees about. That `same` column is the
+point: a change to a read path has to move cost and leave answers alone.
+`summarize.py` aggregates every result file it finds into the tables this
+document is built from.
+
+**Two of the modes write.** `measure` only reads. `script/bench <variant>
+<engine> build` compiles every configured entity from its earliest
+retained state — which is how the "if every state had a row in every hour"
+comparison above was made: delete our rows from a copy, change the write
+path, and build it again. `compile` times the hourly run and a day
+recompiled. Both change the database they are pointed at, so point them at
+a copy.
+
+**The harness has a test of its own.** `script/bench selftest` runs it
+against a tiny database it builds itself, with answers that can be checked
+by hand — including that the meter is still counting. It is not part of
+`script/test tests/`.
+
+If you would rather not run any of it, everything above is measurable by
+hand. The card's read is the websocket command
+`discrete_statistics/buckets`, taking `statistic_ids`, `start_time`,
+`end_time` and `period`; the comparison is
+`recorder/statistics_during_period` with `types: ["change"]`, the same
+IDs, the same range and the same period. Both can be sent from Developer
+Tools, and both are what the two cards actually send. Time the round trip,
+and read the statement and row counts from the database — SQLite's
+`sqlite3_trace`, Postgres' `pg_stat_statements`, MariaDB's general log —
+with the recorder otherwise idle, since the counts are engine-wide and not
+only ours. Take a warm-up pass and then a handful of repeats, and report
+the median: the first read of any range pays for the page cache. Anchor
+the window at a fixed instant rather than `now`, or successive runs will
+not be asking the same question. For the `history_stats` comparison, give
+it the same entity, states and window as literal timestamps rather than
+templates, and construct it fresh for each repeat — it caches, and a
+second reading measures nothing but the cache.

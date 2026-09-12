@@ -27,6 +27,18 @@ script/test tests/test_compiler.py::test_name   # one test
 must stay there: declaring `pytest_plugins` in a non-rootdir conftest is an
 error in modern pytest and breaks the entire suite.
 
+`pytest.ini` sets `testpaths = tests`, which is what keeps `bench/` out of a
+bare `pytest` run and out of CI.
+
+`bench/` is the benchmark harness behind `docs/performance.md`, shipped so
+anyone can point it at their own database: `script/bench-extract` for the
+data, `bench/cases.yaml` for what to measure, `script/bench <variant>
+<engine> [measure|build|compile|schema]` to run it, `bench/compare.py` and
+`bench/summarize.py` to read it. It is not a test of behaviour and never
+runs with the suite; its own smoke test is `script/bench selftest`, which
+measures a database it builds itself. `bench/conftest.py` holds fixtures
+only, for the reason above. See `bench/README.md`.
+
 CI (`.github/workflows/validate.yml`) runs the same suite from the same
 `requirements-test.txt`, on a runner-supplied Python rather than the
 container — the interpreter is the only reason for the container, and a
