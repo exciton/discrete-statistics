@@ -74,7 +74,6 @@ from .const import (
     SENSOR_METRICS,
     SUBENTRY_SENSOR,
 )
-from .coordinator import render_datetime
 from .naming import (
     async_warm_state_translations,
     describe,
@@ -86,6 +85,7 @@ from .payload import readable_state
 from .periods import PERIODS, is_custom
 from .reading import Custom, Spec, spec_from
 from .statistic_ids import build, is_blank, parse, state_token
+from .templates import render_datetime
 
 # `ignore` is deliberately absent. With no per-state mapping to supply
 # exceptions it makes resolve() return None for every state, so nothing is

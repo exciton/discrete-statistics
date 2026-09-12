@@ -69,6 +69,8 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
        │   │                      sensor subentries
        │   └─ statistic_ids       for the blank-state test
        ├─ naming            HA: entity, state -> the names a person recognises
+       ├─ templates         HA: a template -> a timestamp; for config_flow
+       │                    and coordinator alike
        ├─ payload           pure: buckets -> cumulative StatisticData rows
        │        │
        │    compiler        writes the recorder: the only module that does;
@@ -98,7 +100,8 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
 ```
 
 Everything except `compiler`, `rows`, `websocket`, `config_flow`, `naming`,
-`coordinator` and `sensor` is pure and testable without a `hass` instance.
+`templates`, `coordinator` and `sensor` is pure and testable without a
+`hass` instance.
 Keep it that way: if a change needs recorder access in a lower module, the
 design is drifting. Three recorder boundaries: `compiler` is the only
 module that writes; `rows` reads — `session_scope(read_only=True)`, the
@@ -135,7 +138,10 @@ pro-rated by the part inside and the reading is marked `estimated`. A
 rolling window with `live` off is anchored on the watermark end rather
 than now, so it is exactly its length and moves once an hour. Custom
 windows are rendered in the coordinator, on every refresh, through
-`render_datetime` — the same call the dialog validates with. The compile
+`templates.render_datetime` — the same call the dialog validates with,
+which is why it is its own module rather than the coordinator's: the
+dialog importing the coordinator would pull the compiler and the
+recorder behind it. The compile
 signal carries the range written, and the coordinator drops cached sums
 only at edges after its start: a sum is cumulative, so a finished window's
 edges survive every hourly compile, and the tail is read only when some
@@ -143,7 +149,9 @@ live sensor's window reaches it — a finished window costs no recorder work
 at all between the day changing and a recompute reaching back to it. The
 edges the cache does not answer are read together, `rows.sums_at_edges`
 over all of them: the card's own shape, so a refresh pays one statement
-however many edges its sensors plan.
+on the engines that expand the pairs (SQLite, Postgres) however many
+edges its sensors plan, and one per `SEEK_BATCH` pairs on MySQL, which
+batches them — plus the metadata read either way.
 
 `sensor.py` builds the entry's `PeriodCoordinator` lazily, the first time
 the entry has a `sensor` subentry, and keeps it once built. An entry

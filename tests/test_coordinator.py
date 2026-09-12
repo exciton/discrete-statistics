@@ -4,7 +4,6 @@ import threading
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-import pytest
 from homeassistant.components.recorder import Recorder
 from homeassistant.config_entries import ConfigSubentryData
 from homeassistant.const import CONF_ENTITY_ID, CONF_NAME
@@ -27,10 +26,7 @@ from custom_components.discrete_statistics.const import (
     METRIC_DURATION,
     SUBENTRY_SENSOR,
 )
-from custom_components.discrete_statistics.coordinator import (
-    PeriodCoordinator,
-    render_datetime,
-)
+from custom_components.discrete_statistics.coordinator import PeriodCoordinator
 from custom_components.discrete_statistics.statistic_ids import build
 from tests.conftest import past_the_cooldown, play
 
@@ -392,14 +388,12 @@ async def test_a_compile_of_the_trailing_window_keeps_older_sums(recorder_utc, f
     ) as sums_at:
         await coordinator.async_refresh()
         # Yesterday's two edges, the boundary hour, and today's end.
-        every_edge = sorted(
-            {
-                (T0 - timedelta(days=1)).timestamp(),
-                T0.timestamp(),
-                (T0 + timedelta(hours=1)).timestamp(),
-                (T0 + timedelta(hours=3)).timestamp(),
-            }
-        )
+        every_edge = [
+            (T0 - timedelta(days=1)).timestamp(),
+            T0.timestamp(),
+            (T0 + timedelta(hours=1)).timestamp(),
+            (T0 + timedelta(hours=3)).timestamp(),
+        ]
         assert [sorted(call.args[2]) for call in sums_at.call_args_list] == [every_edge]
         # The hourly compile rewrites the trailing hours: only the edge
         # after its start is read again.
@@ -631,26 +625,3 @@ async def test_a_template_that_does_not_render_makes_the_sensor_unavailable(
         assert reading.reason is not None and reading.reason.startswith("template")
     # The others on the entry are unaffected.
     assert coordinator.data[ON_TODAY].value == 1.5
-
-
-def test_render_datetime_takes_a_datetime_string_or_a_timestamp(hass):
-    assert (
-        render_datetime(hass, "2026-01-01T01:15:00+00:00")
-        == (T0 + timedelta(hours=1, minutes=15)).timestamp()
-    )
-    # A timestamp, as `as_timestamp(now())` renders one.
-    assert render_datetime(hass, "{{ 1767225600.0 }}") == 1767225600.0
-    with pytest.raises(ValueError):
-        render_datetime(hass, "{{ 'soon' }}")
-    with pytest.raises(ValueError):
-        render_datetime(hass, "{{ nonsense( }}")
-    # A number is not a timestamp merely for being a number: each of these
-    # reaches hour arithmetic that raises out of the whole entry's refresh.
-    for text in (
-        "{{ 'inf' | float }}",
-        "{{ 'nan' | float }}",
-        "{{ 1e20 }}",
-        "{{ 2.6e11 }}",
-    ):
-        with pytest.raises(ValueError):
-            render_datetime(hass, text)

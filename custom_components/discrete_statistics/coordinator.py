@@ -24,15 +24,12 @@ reflected within `REFRESH_COOLDOWN` of it instead.
 from __future__ import annotations
 
 import logging
-import math
 from datetime import timedelta
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ENTITY_ID
 from homeassistant.core import CoreState, Event, HomeAssistant, callback
-from homeassistant.exceptions import TemplateError
-from homeassistant.helpers import template
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import (
@@ -62,40 +59,13 @@ from .reading import (
     spec_from,
 )
 from .statistic_ids import parse
+from .templates import render_datetime
 
 _LOGGER = logging.getLogger(__name__)
 
 # How long a run of state changes is gathered into one refresh.
 REFRESH_COOLDOWN = 2.0
 REASON_TEMPLATE = "template"
-# `datetime`'s own range, with room: past it a rendering raises rather
-# than answering.
-_TIMESTAMP_LIMIT = 2.5e11
-
-
-def render_datetime(hass: HomeAssistant, text: str) -> float:
-    """A template's rendering as a timestamp, or ValueError saying why not.
-
-    What `history_stats` accepts: a date and time, or a timestamp. The
-    flow renders once on submit with this same call, so a template that
-    saves is one that renders - as long as what it reads still exists.
-    """
-    try:
-        rendered = template.Template(text, hass).async_render(parse_result=False)
-    except TemplateError as err:
-        raise ValueError(str(err)) from err
-    if (parsed := dt_util.parse_datetime(rendered)) is not None:
-        return dt_util.as_utc(parsed).timestamp()
-    try:
-        value = float(rendered)
-    except ValueError:
-        raise ValueError(f"{rendered!r} is not a date and time") from None
-    # `nan`, `inf` and a number far outside any date reach hour arithmetic
-    # that raises rather than answers, so they are refused here, where the
-    # dialog sees them too.
-    if not math.isfinite(value) or abs(value) > _TIMESTAMP_LIMIT:
-        raise ValueError(f"{rendered!r} is not a date and time")
-    return value
 
 
 class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):

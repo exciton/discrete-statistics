@@ -396,7 +396,7 @@ def sums_at_edges(
 ) -> dict[float, dict[str, float]]:
     """Each statistic's cumulative sum at each edge. Runs in the executor.
 
-    One statement for every (statistic, edge) pair, resolved per edge by
+    One statement covering every (statistic, edge) pair, resolved per edge by
     `before_edges` - the same read the card makes, and the reason a
     refresh's several edges cost one statement rather than one each.
 
