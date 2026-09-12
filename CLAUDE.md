@@ -123,8 +123,10 @@ rows of a range and the one before it, the rows standing in a window, the
 earliest and the newest row of a series — for `websocket`, the compiler
 and the coordinator alike. Every one of those reads is a single statement,
 `rows.bases` included: the compile's base read asks `rows_before` for two
-edges per statistic — the window and the hour before it — so an entity
-with nine statistics costs one statement, not nine. `config_flow` reads
+edges per statistic — the window and the hour before it — so it is one
+statement whatever the statistic count. On MySQL/MariaDB and an engine we
+do not know, where the pairs are rendered as one arm each rather than
+expanded in SQL, that is one statement per `SEEK_BATCH` pairs. `config_flow` reads
 once per options dialog, the entity's distinct states, to draw a
 mapping row for each, and once per sensor dialog, the entity's statistics,
 to offer their states; so the invariants below are the compiler's alone.

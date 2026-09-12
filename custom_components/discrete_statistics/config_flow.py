@@ -8,6 +8,7 @@ releases.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from datetime import timedelta
 from typing import Any
@@ -39,6 +40,7 @@ from homeassistant.helpers import selector
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from . import periods
 from .config import (
     CONF_BLANK,
     CONF_DEFAULT,
@@ -586,9 +588,7 @@ def _custom_window(
     given = sum(value is not None for value in data.values())
     if not is_custom(period):
         return dict.fromkeys(data), {"base": "custom_only"} if given else {}
-    if given == 3 or given == 0 or (given == 1 and start is None):
-        return data, {"base": "custom_needs_two"}
-    rendered: dict[str, float] = {}
+    rendered: dict[str, float | None] = {CONF_WINDOW_START: None, CONF_WINDOW_END: None}
     # Start is checked first, so a template broken in both fields is blamed
     # on Start - the field a person reads first, and the one whose error
     # would otherwise be masked by End's.
@@ -600,7 +600,17 @@ def _custom_window(
         except ValueError:
             field = "start" if key == CONF_WINDOW_START else "end"
             return data, {"base": f"template_invalid_{field}"}
-    if len(rendered) == 2 and rendered[CONF_WINDOW_END] <= rendered[CONF_WINDOW_START]:
+    # Which combinations are legal is periods.custom_window's rule, asked
+    # rather than repeated: the dialog refuses exactly what the coordinator
+    # cannot render. A window running to now is judged as configured, not
+    # at this instant - its end moves - so `now` is infinite here and only
+    # a written end can sit before the start.
+    window = periods.custom_window(
+        rendered[CONF_WINDOW_START], rendered[CONF_WINDOW_END], duration, math.inf
+    )
+    if window is None:
+        return data, {"base": "custom_needs_two"}
+    if window[1] <= window[0]:
         return data, {"base": "custom_empty"}
     return data, {}
 

@@ -1801,11 +1801,17 @@ async def test_the_base_of_a_quiet_statistic_is_a_seek_not_a_scan(
         and re.search(r"\bstatistics\b", sql)
     ]
     assert selects, "nothing was read"
+    packed = 0
     for sql, params in selects:
-        assert all(p >= floor for p in bounds(params)), (sql, params)
+        edges = list(_bounds(params))
+        packed += sum(1 for p in params if isinstance(p, str) and p.startswith("[["))
+        assert all(p >= floor for p in edges), (sql, params)
+    # Without a pair list read, the check above would pass on a statement
+    # whose edges are all packed inside one parameter it never unpacked.
+    assert packed, "no JSON pair list was seen"
 
 
-def bounds(params):
+def _bounds(params):
     """The timestamps a statement binds, JSON pair lists unpacked.
 
     `rows.rows_before` hands the (metadata_id, edge) pairs to SQLite as one

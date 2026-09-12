@@ -21,6 +21,7 @@ from pytest_homeassistant_custom_component.components.recorder.common import (
     async_wait_recording_done,
 )
 
+from custom_components.discrete_statistics import periods
 from custom_components.discrete_statistics.config import (
     CONF_BLANK,
     CONF_DEFAULT,
@@ -1501,6 +1502,32 @@ async def test_a_custom_window_that_does_not_hold_keeps_the_form_open(
     # The section comes back open even when the error left it looking
     # empty, so the fields the error names are visible.
     assert _field(result, CONF_CUSTOM).options["collapsed"] is False
+    assert not entry.subentries
+
+
+async def test_the_flow_asks_periods_which_combinations_are_legal(
+    recorder, monkeypatch
+):
+    """The dialog refuses what `periods.custom_window` refuses, not a copy of it.
+
+    A start and an end is legal today; refusing it in `periods` alone must
+    reach the form, or the two rules could drift and the sensor would come
+    up unavailable after a Submit that looked fine.
+    """
+    hass = recorder
+    monkeypatch.setattr(
+        periods, "custom_window", lambda start, end, duration, now: None
+    )
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+    result = await _sensor_form(hass, entry)
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        _custom_input(
+            start="2026-01-01T09:00:00+00:00", end="2026-01-01T17:00:00+00:00"
+        ),
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "custom_needs_two"}
     assert not entry.subentries
 
 
