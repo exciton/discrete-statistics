@@ -23,7 +23,7 @@ from homeassistant.components.recorder.db_schema import Statistics, StatisticsMe
 from homeassistant.components.recorder.statistics import get_metadata_with_session
 from homeassistant.components.recorder.util import session_scope
 from homeassistant.core import HomeAssistant
-from sqlalchemy import func, or_, select, text, union_all
+from sqlalchemy import or_, select, text, union_all
 from sqlalchemy.orm import Session
 
 from .buckets import Row
@@ -52,7 +52,6 @@ _PAIRS = {
         "(value->>1)::double precision",
     ),
 }
-
 
 
 # The character that escapes a LIKE wildcard in `metadata_ids`. A slug is
@@ -189,22 +188,33 @@ def rows_before(
     return {metadata_id: sorted(rows) for metadata_id, rows in found.items()}
 
 
-def _seek_id(metadata_id: int, edge: float) -> Any:
-    """The id of the newest row before an edge, as a constant-bound seek."""
+def _seek(column: Any, metadata_id: int, edge: float | None = None) -> Any:
+    """One row of one statistic, as a constant-bound seek on `(metadata_id, start_ts)`.
+
+    The newest row before an edge, or - with no edge - the oldest row
+    the statistic holds, which is the same index walked the other way.
+    """
     return (
-        select(Statistics.id)
+        select(column)
         .where(
             Statistics.metadata_id == metadata_id,
             Statistics.sum.is_not(None),
-            Statistics.start_ts < edge,
+            *(() if edge is None else (Statistics.start_ts < edge,)),
         )
-        .order_by(Statistics.start_ts.desc())
+        .order_by(
+            Statistics.start_ts.asc() if edge is None else Statistics.start_ts.desc()
+        )
         .limit(1)
         # The arm carries its own FROM: correlating it against the outer
         # join would drop the bounds this is built for.
         .correlate(None)
         .scalar_subquery()
     )
+
+
+def _seek_id(metadata_id: int, edge: float) -> Any:
+    """The id of the newest row before an edge, as a constant-bound seek."""
+    return _seek(Statistics.id, metadata_id, edge)
 
 
 def _arms(batch: Sequence[tuple[int, float]]) -> Any:
@@ -382,17 +392,34 @@ def sums_at(
         }
 
 
+def _earliest(batch: Sequence[int]) -> Any:
+    """One arm per statistic, each the start of its oldest row."""
+    return union_all(
+        *(
+            select(_seek(Statistics.start_ts, metadata_id).label("start_ts"))
+            for metadata_id in batch
+        )
+    )
+
+
 def series_start(hass: HomeAssistant, statistic_ids: set[str]) -> float | None:
-    """The start of the earliest row across the statistics, or None. Executor."""
+    """The start of the earliest row across the statistics, or None. Executor.
+
+    One seek per statistic, unioned, and the minimum taken in Python.
+    `min(start_ts)` over the set reads as a scan to Postgres, which walks
+    `ix_statistics_start_ts` from the oldest row in the table filtering
+    for ours - 4.6 M rows and over a second where the seeks are two
+    index lookups. A statistic with no row contributes nothing.
+    """
     with session_scope(hass=hass, read_only=True) as session:
         metadata = get_metadata_with_session(
             get_instance(hass), session, statistic_ids=statistic_ids
         )
-        ids = {metadata_id for metadata_id, _ in metadata.values()}
-        if not ids:
-            return None
-        return session.execute(
-            select(func.min(Statistics.start_ts)).where(
-                Statistics.metadata_id.in_(ids), Statistics.sum.is_not(None)
-            )
-        ).scalar()
+        ids = list({metadata_id for metadata_id, _ in metadata.values()})
+        found = [
+            start_ts
+            for at in range(0, len(ids), SEEK_BATCH)
+            for (start_ts,) in session.execute(_earliest(ids[at : at + SEEK_BATCH]))
+            if start_ts is not None
+        ]
+        return min(found, default=None)

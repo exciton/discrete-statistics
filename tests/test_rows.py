@@ -184,9 +184,9 @@ async def before(hass, pairs):
                 session, [(ids[sid], edge.timestamp()) for sid, edge in pairs]
             )
             return {
-                (sid, edge): before_edges(
-                    found.get(ids[sid], ()), [edge.timestamp()]
-                )[edge.timestamp()]
+                (sid, edge): before_edges(found.get(ids[sid], ()), [edge.timestamp()])[
+                    edge.timestamp()
+                ]
                 for sid, edge in pairs
             }
 
@@ -304,7 +304,10 @@ async def test_the_arms_answer_every_pair_as_the_expanded_form_does(
         ((T0 + timedelta(hours=2)).timestamp(), 1.5),
     ]
     resolved = before_edges(armed[ON], [edge.timestamp() for edge in edges])
-    assert resolved[edges[2].timestamp()] == ((T0 + timedelta(hours=1)).timestamp(), 1.0)
+    assert resolved[edges[2].timestamp()] == (
+        (T0 + timedelta(hours=1)).timestamp(),
+        1.0,
+    )
     assert resolved[edges[500].timestamp()] == (
         (T0 + timedelta(hours=2)).timestamp(),
         1.5,
@@ -370,6 +373,22 @@ def test_the_postgresql_rendering_seeks_once_per_jsonb_element():
     # Filtering the picked id would have Postgres evaluate the subplan twice.
     assert "id IS NOT NULL" not in sql
     assert "UNION ALL" not in sql
+
+
+def test_the_series_start_rendering_is_one_ascending_seek_per_statistic():
+    sql = str(
+        rows._earliest([7, 9, 11]).compile(
+            dialect=mysql.dialect(), compile_kwargs={"literal_binds": True}
+        )
+    )
+
+    # One arm per statistic, each an index seek, and no aggregate: a
+    # `min(start_ts)` over the set scans on Postgres.
+    assert arms(sql) == 3
+    assert sql.count("LIMIT 1") == 3
+    assert "min(" not in sql.lower()
+    assert "DESC" not in sql
+    assert sql.count("sum IS NOT NULL") == 3
 
 
 def test_an_unknown_engine_falls_back_to_the_arms():
