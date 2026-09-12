@@ -238,7 +238,9 @@ def hour_change(
     The sums are cumulative, so an hour's change is the difference
     between its two edges; durations are stored in hours and answered
     here in seconds, as a tally is. Two statistics of one token add, as
-    they do everywhere.
+    they do everywhere. `sum_at` answers zero for an edge with no row: a
+    statistic has no time in its state before its first row, which is
+    what lets the coordinator supply `sums.get(..., 0.0)`.
     """
     seconds: dict[str, float] = {}
     counts: dict[str, float] = {}

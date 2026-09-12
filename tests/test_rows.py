@@ -92,6 +92,24 @@ async def test_sums_at_every_edge_are_one_statement(recorder, statements):
     }
 
 
+async def test_the_rows_session_is_read_only(recorder, monkeypatch):
+    """`_ids` must open its session `read_only=True` - it never writes."""
+    original = session_scope
+    calls = []
+
+    def wrapper(*args, **kwargs):
+        calls.append(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(rows, "session_scope", wrapper)
+    await seed(recorder, ON, T0, [0.5])
+    await get_instance(recorder).async_add_executor_job(
+        rows.series_start, recorder, {ON}
+    )
+    assert calls
+    assert all(call.get("read_only") is True for call in calls)
+
+
 async def test_series_start_is_the_earliest_row_across_statistics(recorder):
     await seed(recorder, ON, T0 + timedelta(hours=2), [0.5])
     await seed(recorder, OFF, T0, [0.5])
