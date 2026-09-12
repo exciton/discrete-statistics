@@ -79,7 +79,7 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
        ├─ periods           pure: a named period -> its edges, in a zone
        │        │
        ├─ rows              reads the recorder: the newest row before each
-       │        │           of many edges in one statement, the sums at an
+       │        │           of many edges, per-engine SQL, the sums at an
        │        │           edge, a range opened on the row before it, a
        │        │           statistic's newest rows before one, the rows
        │        │           standing in a window, where a series starts
@@ -241,12 +241,13 @@ is answered by the newest row before it whatever its distance — usually
 the row starting the hour before it, or the row running through it in a
 zone half an hour off UTC, where every edge is at half past.
 `rows.rows_before` answers every (statistic, edge) pair in one
-statement: each pair is its own arm of a `UNION ALL`, an index seek on
-`(metadata_id, start_ts)` between two constants, joined back to the
-rows. `SEEK_BATCH` splits at 500 pairs, SQLite's cap on a compound
-select, so the count is `ceil(edges × statistics / 500)` — one for any
-chart a person reads, and 37, all of them seeks, for the ten years of
-daily edges over five states `MAX_BUCKETS` still allows. The hourly
+statement (per 500 pairs on MySQL/MariaDB): one index seek on
+`(metadata_id, start_ts)` per pair, rendered per engine — see the
+"Recorder engines" bullet. Where the pairs are expanded in SQL the
+count is one whatever the range; on the arms it is
+`ceil(edges × statistics / SEEK_BATCH)` — one for any chart a person
+reads, and 37, all of them seeks, for the ten years of daily edges
+over five states `MAX_BUCKETS` still allows. The hourly
 period is one statement too, `rows.rows_from`: there every row in the
 range answers an edge, so the arms seek only the row before the range's
 start and one index range brings back the rest.
@@ -598,14 +599,28 @@ Verified against 2026.8.3.
   previous one's drain can miss a row still committing and leave it
   unrewritten; tests that compile twice back to back wait with
   `async_wait_recording_done` between.
-- Recorder engines differ on how a seek is planned. MariaDB will not use
-  an outer-referenced bound as a range: a correlated `LIMIT 1` walks the
-  series and `MAX` + a re-join scans it, so the portable form is one
-  constant-bound arm per pair, which every engine seeks (measured on a
-  13.9 GB database: 2,408 pairs in 9 ms on SQLite, 108 ms on MariaDB,
-  163 ms on Postgres). SQLite and Postgres would plan a correlated form
-  over the edges as `json_each` / `jsonb_array_elements` more cheaply
-  still — a later per-dialect optimisation, noted in `rows_before`.
+- Recorder engines differ on how a seek is planned, so `rows.rows_before`
+  renders itself per engine, chosen from `session.get_bind().dialect.name`
+  — the same string the recorder parses, and no caller threads it in.
+  SQLite expands the pair list with `json_each(:pairs)` and Postgres with
+  `jsonb_array_elements`, each pair feeding one correlated
+  `ORDER BY start_ts DESC LIMIT 1`: one statement of any size, one plan,
+  and the seek run per pair (Postgres `Index Scan Backward using
+  ix_statistics_statistic_id_start_ts` under a `Limit`, 248 loops of one
+  row; SQLite `SEARCH … USING INDEX (metadata_id=? AND start_ts<?)`).
+  Postgres gets no
+  `WHERE id IS NOT NULL` — the inner join drops the misses, and the filter
+  makes it evaluate the subplan twice. MySQL/MariaDB and an engine we do
+  not know get the portable form instead: one constant-bound arm per pair
+  in a `UNION ALL`, batched at `SEEK_BATCH` (500, SQLite's cap on a
+  compound select). MariaDB will not push an outer-referenced bound into
+  a range — a correlated `LIMIT 1` walks the series and `MAX` + a re-join
+  scans it — while its arms plan as `range` on
+  `(metadata_id, start_ts)`, one row each. Measured on a 13.9 GB
+  database, 2,408 pairs: arms 9 ms SQLite / 108 ms MariaDB / 163 ms
+  Postgres (which plans every arm separately, ~30 µs each), expanded
+  10 ms SQLite / 15 ms Postgres. `rows_from` keeps the arms on every
+  engine: one per statistic, not one per pair.
 - hassfest validates `strings.json` only for placeholder *names*, not
   content. The frontend renders every string through ICU MessageFormat, so a
   literal `{` or `}` anywhere in a string — a template example in a

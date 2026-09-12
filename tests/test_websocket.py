@@ -524,12 +524,13 @@ async def test_five_states_over_a_month_of_days_cost_one_statement(
     assert len(statements) == 1
 
 
-async def test_more_than_five_hundred_pairs_cost_two_statements(
+async def test_more_than_five_hundred_pairs_cost_one_statement(
     hass, client, statements
 ):
     # 167 daily edges over the entity's three duration statistics - the
     # two asked for and the third that judges them: 501 pairs, past the
-    # compound-select cap, so the seeks run in two batches.
+    # compound-select cap the arms batch at, and still one statement here
+    # because SQLite seeks through json_each.
     await hass.config.async_set_time_zone("UTC")
     start, days = utc(2026, 1, 1), 166
     third = "discrete_statistics:binary_sensor_grid_status_unavailable_duration"
@@ -541,7 +542,7 @@ async def test_more_than_five_hundred_pairs_cost_two_statements(
     response = await ask(client, [ON, OFF], start, start + timedelta(days=days), "day")
 
     assert len(response["result"][ON]) == days
-    assert len(statements) == 2
+    assert len(statements) == 1
 
 
 async def test_hourly_buckets_cost_one_statement(hass, client, statements):

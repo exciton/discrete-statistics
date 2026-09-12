@@ -7,11 +7,13 @@ through `websocket`; the sensors read one edge at a time here; the
 compiler reads its base and the rows standing in its window. All go
 through `session_scope(read_only=True)` and none writes - `compiler` is
 the only module that does. Edges are answered by `rows_before`, one
-statement whatever the number of (statistic, edge) pairs.
+statement whatever the number of (statistic, edge) pairs - except on
+MySQL/MariaDB, where the pairs batch at `SEEK_BATCH`.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Sequence
 from typing import Any
 
@@ -20,14 +22,73 @@ from homeassistant.components.recorder.db_schema import Statistics
 from homeassistant.components.recorder.statistics import get_metadata_with_session
 from homeassistant.components.recorder.util import session_scope
 from homeassistant.core import HomeAssistant
-from sqlalchemy import func, literal, select, union_all
+from sqlalchemy import func, literal, select, text, union_all
 from sqlalchemy.orm import Session
 
 from .buckets import Row
 
-# Pairs per statement: SQLite caps a compound SELECT at 500 terms. The
-# hourly period reads a range instead, so a batch is rarely full.
+# Arms per statement: SQLite caps a compound SELECT at 500 terms, and only
+# the arm rendering is compound. The hourly period reads a range instead,
+# so a batch is rarely full.
 SEEK_BATCH = 500
+
+# The engines that expand the pair list in SQL, and the expression that
+# reads a pair out of it. One statement whatever the number of pairs, and
+# one plan: the seek is planned once and run per pair.
+_PAIRS = {
+    "sqlite": (
+        "json_each(:pairs)",
+        "json_extract(value, '$[0]')",
+        "json_extract(value, '$[1]')",
+    ),
+    "postgresql": (
+        "jsonb_array_elements(CAST(:pairs AS jsonb)) AS element(value)",
+        "(value->>0)::integer",
+        "(value->>1)::double precision",
+    ),
+}
+
+
+def _pair_seek(dialect: str) -> Any:
+    """The whole seek as one correlated statement over an expanded pair list.
+
+    The subquery picks the newest row before the pair's edge; the join
+    fetches it. No `id IS NOT NULL` filter - the inner join drops the
+    misses, and the filter has Postgres evaluate the subplan twice.
+    """
+    source, metadata_id, edge = _PAIRS[dialect]
+    return text(
+        f"""
+        SELECT pair.metadata_id, pair.edge, statistics.start_ts, statistics.sum
+        FROM (
+            SELECT {metadata_id} AS metadata_id, {edge} AS edge
+            FROM {source}
+        ) AS pair
+        JOIN statistics ON statistics.id = (
+            SELECT newest.id FROM statistics AS newest
+            WHERE newest.metadata_id = pair.metadata_id
+              AND newest.start_ts < pair.edge
+              AND newest.sum IS NOT NULL
+            ORDER BY newest.start_ts DESC
+            LIMIT 1
+        )
+        """
+    )
+
+
+def seek_statements(
+    dialect: str | None, pairs: Sequence[tuple[int, float]]
+) -> list[Any]:
+    """The statements a dialect runs to answer every (metadata_id, edge) pair.
+
+    Each yields `(metadata_id, edge, start_ts, sum)` rows. One statement
+    on SQLite and Postgres; one per `SEEK_BATCH` arms elsewhere.
+    """
+    if dialect in _PAIRS:
+        return [_pair_seek(dialect).bindparams(pairs=json.dumps(pairs))]
+    return [
+        _arms(pairs[at : at + SEEK_BATCH]) for at in range(0, len(pairs), SEEK_BATCH)
+    ]
 
 
 def rows_before(
@@ -35,20 +96,28 @@ def rows_before(
 ) -> dict[tuple[int, float], Row]:
     """The newest row strictly before each edge, per (metadata_id, edge) pair.
 
-    One index seek on `(metadata_id, start_ts)` per pair, in one round
-    trip, on SQLite, Postgres and MariaDB alike: every pair is its own
-    arm of a UNION ALL, so both bounds of its seek are constants -
-    MariaDB will not push an outer-referenced bound into a range, and
-    plans a correlated form as a walk of the series instead. Cheaper
-    per-dialect forms exist for later: a correlated `LIMIT 1` over the
-    edges as `json_each` (SQLite) or `jsonb_array_elements` (Postgres).
+    One index seek on `(metadata_id, start_ts)` per pair, and the shape
+    of the statement is the engine's: SQLite expands the pairs with
+    `json_each` and Postgres with `jsonb_array_elements`, both a single
+    correlated seek; MySQL/MariaDB and an engine we do not know get one
+    constant-bound arm per pair, batched at `SEEK_BATCH`. MariaDB will
+    not push an outer-referenced bound into a range and walks the series
+    instead, and Postgres plans every arm separately - measured on a
+    13.9 GB database, 2,408 pairs: arms 9 ms SQLite / 108 ms MariaDB /
+    163 ms Postgres, expanded 10 ms SQLite / 15 ms Postgres.
+
+    The engine comes from the session's bind, so no caller threads it
+    through and the read stays a session away from `hass`.
 
     A pair with nothing before its edge is absent.
     """
     unique = list(dict.fromkeys(pairs))
+    if not unique:
+        return {}
     found: dict[tuple[int, float], Row] = {}
-    for start in range(0, len(unique), SEEK_BATCH):
-        found.update(_seek(session, unique[start : start + SEEK_BATCH]))
+    for statement in seek_statements(session.get_bind().dialect.name, unique):
+        for metadata_id, edge, start_ts, sum_ in session.execute(statement):
+            found[(metadata_id, edge)] = Row(start_ts, sum_)
     return found
 
 
@@ -70,9 +139,8 @@ def _seek_id(metadata_id: int, edge: float) -> Any:
     )
 
 
-def _seek(
-    session: Session, batch: Sequence[tuple[int, float]]
-) -> dict[tuple[int, float], Row]:
+def _arms(batch: Sequence[tuple[int, float]]) -> Any:
+    """One constant-bound seek per pair, unioned: the portable rendering."""
     seeks = union_all(
         *(
             select(
@@ -83,15 +151,9 @@ def _seek(
             for metadata_id, edge in batch
         )
     ).subquery()
-    rows = session.execute(
-        select(
-            seeks.c.metadata_id, seeks.c.edge, Statistics.start_ts, Statistics.sum
-        ).join(Statistics, Statistics.id == seeks.c.id)
-    )
-    return {
-        (metadata_id, edge): Row(start_ts, sum_)
-        for metadata_id, edge, start_ts, sum_ in rows
-    }
+    return select(
+        seeks.c.metadata_id, seeks.c.edge, Statistics.start_ts, Statistics.sum
+    ).join(Statistics, Statistics.id == seeks.c.id)
 
 
 def rows_from(
@@ -102,7 +164,9 @@ def rows_from(
     Ascending, and a statistic with no row either side is absent. One
     statement: the seeks are constant-bound arms as in `rows_before`,
     and the rows inside are one index range - which is what the hourly
-    period wants, since there every row answers an edge.
+    period wants, since there every row answers an edge. The arms stay
+    on every engine here: there is one per statistic, not one per pair,
+    so a per-dialect form would save nothing.
     """
     found: dict[int, list[Row]] = {}
     unique = list(dict.fromkeys(metadata_ids))

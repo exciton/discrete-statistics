@@ -13,6 +13,7 @@ from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.components.recorder.common import (
     async_wait_recording_done,
 )
+from sqlalchemy.dialects import mysql, postgresql, sqlite
 
 from custom_components.discrete_statistics import rows
 from custom_components.discrete_statistics.const import METRIC_DURATION
@@ -217,17 +218,67 @@ async def test_rows_before_leaves_a_pair_with_nothing_before_it_absent(recorder)
     assert await before(recorder, [(ON, T0)]) == {(ON, T0): None}
 
 
-async def test_rows_before_batches_at_five_hundred_pairs(recorder, statements):
+async def test_rows_before_is_one_statement_on_sqlite_whatever_the_pair_count(
+    recorder, statements
+):
     await seed(recorder, ON, T0, [0.5])
-    edges = [T0 + timedelta(hours=i + 1) for i in range(rows.SEEK_BATCH)]
+    # Past the compound-select cap the arms would batch at; json_each does not.
+    edges = [T0 + timedelta(hours=i + 1) for i in range(rows.SEEK_BATCH + 1)]
 
     statements.clear()
-    await before(recorder, [(ON, edge) for edge in edges])
+    found = await before(recorder, [(ON, edge) for edge in edges])
+
     assert len(statements) == 1
+    assert found[(ON, edges[-1])] == (T0.timestamp(), 0.5)
 
-    statements.clear()
-    await before(recorder, [(ON, edge) for edge in [*edges, T0 + timedelta(days=90)]])
-    assert len(statements) == 2
+
+def arms(sql: str) -> int:
+    return sql.count("UNION ALL") + 1
+
+
+PAIRS = [(7, 1789038000.0 + hour * 3600) for hour in range(rows.SEEK_BATCH + 1)]
+
+
+def test_the_mysql_rendering_is_constant_bound_arms_batched_at_five_hundred():
+    built = [
+        str(stmt.compile(dialect=mysql.dialect()))
+        for stmt in rows.seek_statements("mysql", PAIRS)
+    ]
+
+    assert [arms(sql) for sql in built] == [rows.SEEK_BATCH, 1]
+    assert all("json" not in sql.lower() for sql in built)
+
+
+def test_the_sqlite_rendering_seeks_once_per_json_each_pair():
+    built = rows.seek_statements("sqlite", PAIRS)
+
+    assert len(built) == 1
+    sql = str(built[0].compile(dialect=sqlite.dialect()))
+    assert "json_each" in sql
+    assert "ORDER BY" in sql and "start_ts DESC" in sql and "LIMIT 1" in sql
+    assert "sum IS NOT NULL" in sql
+    assert "UNION ALL" not in sql
+
+
+def test_the_postgresql_rendering_seeks_once_per_jsonb_element():
+    built = rows.seek_statements("postgresql", PAIRS)
+
+    assert len(built) == 1
+    sql = str(built[0].compile(dialect=postgresql.dialect()))
+    assert "jsonb_array_elements" in sql
+    assert "start_ts DESC" in sql and "LIMIT 1" in sql
+    # Filtering the picked id would have Postgres evaluate the subplan twice.
+    assert "id IS NOT NULL" not in sql
+    assert "UNION ALL" not in sql
+
+
+def test_an_unknown_engine_falls_back_to_the_arms():
+    built = rows.seek_statements(None, PAIRS)
+
+    assert [arms(str(stmt.compile(dialect=mysql.dialect()))) for stmt in built] == [
+        rows.SEEK_BATCH,
+        1,
+    ]
 
 
 async def test_rows_from_opens_each_statistic_on_the_row_before_the_range(
