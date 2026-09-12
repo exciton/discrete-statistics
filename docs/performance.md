@@ -149,7 +149,7 @@ read the edges.
 ## Benchmarks
 
 **The install.** 14 entities, 841 statistics, 400 days of history, Home
-Assistant 2026.8.3, `America/Los_Angeles`. Three engines: SQLite in-process,
+Assistant 2026.8.3. Three engines: SQLite in-process,
 Postgres 16 and MariaDB 11 over the loopback, each holding the same data.
 Medians of 5 repeats after a warm-up, on an otherwise idle machine, with
 `now` anchored at the newest compiled hour so every run asks the same
@@ -167,6 +167,12 @@ The entities named in the tables:
 | an irrigation zone | on daily |
 | a water heater | three states |
 
+**The stock command.** Throughout, "stock" means `recorder/statistics_during_period`,
+the websocket command Home Assistant's own statistics-graph card draws
+from, asked the same question: the same statistic IDs, the same range and
+period, `types: [change]`. Ours is `discrete_statistics/buckets`, the
+command this integration's card draws from.
+
 **Every answer was identical on every engine**, in every case, and all
 22,068 bucket values compared against the stock command agreed — zero
 disagreements. The differences are the deliberate ones: quiet buckets read
@@ -175,20 +181,21 @@ zero here and are absent from the stock answer.
 ### (a) The card's read against the stock command
 
 Same statistic IDs, same range, same period, against the sparse rows this
-integration writes. `ms / rows fetched`; ours is **2 statements** per case
-(one `statistics_meta`, one `statistics`) throughout, the stock command's
-two.
+integration writes. Each cell is `stock ms / rows fetched → ours ms / rows
+fetched`. Both sides run 2 statements per case (one on `statistics_meta`,
+one on `statistics`). A "duration statistic" is a state's cumulative hours
+in that state; a "count statistic" its cumulative transitions into it.
 
 | case | SQLite: stock → ours | Postgres: stock → ours | MariaDB: stock → ours |
 |---|---|---|---|
-| grid status, count, 365 d / month | 4.1 / 25 → **3.8** / 36 | 13.6 / 25 → **5.5** / 36 | 7.9 / 25 → **7.8** / 36 |
-| grid status, three counts, 600 d / month | 5.0 / 50 → **4.2** / 45 | 14.4 / 50 → **5.6** / 45 | 8.2 / 50 → **11.7** / 45 |
-| a door, four durations, 300 d / week | 31.2 / 9,242 → **5.2** / 188 | 45.8 / 9,242 → **9.9** / 188 | 95.8 / 9,242 → **20.6** / 188 |
-| light B, two durations, 10 d / hour | 4.6 / 283 → **8.2** / 287 | 16.8 / 283 → **8.1** / 287 | 14.9 / 283 → **13.2** / 287 |
-| light B, one duration, 3 d / hour | 4.8 / 22 → **5.3** / 96 | 6.9 / 22 → **6.6** / 96 | 9.3 / 22 → **9.5** / 96 |
-| an error sensor, eight durations, 400 d / week | 29.5 / 9,632 → **13.4** / 98 | 58.0 / 9,632 → **11.3** / 98 | 165.8 / 9,632 → **39.9** / 98 |
-| an irrigation zone, one duration, 400 d / month | 3.9 / 225 → **3.4** / 35 | 6.0 / 225 → **12.5** / 35 | 8.9 / 225 → **8.8** / 35 |
-| light B, one duration, 365 d / week | 10.3 / 2,275 → **4.6** / 112 | 12.6 / 2,275 → **15.7** / 112 | 31.3 / 2,275 → **15.8** / 112 |
+| grid status: the count statistic of one state, 365 d / month | 4.1 / 25 → **3.8** / 36 | 13.6 / 25 → **5.5** / 36 | 7.9 / 25 → **7.8** / 36 |
+| grid status: the count statistics of three states, 600 d / month | 5.0 / 50 → **4.2** / 45 | 14.4 / 50 → **5.6** / 45 | 8.2 / 50 → **11.7** / 45 |
+| a door: the duration statistics of its four states, 300 d / week | 31.2 / 9,242 → **5.2** / 188 | 45.8 / 9,242 → **9.9** / 188 | 95.8 / 9,242 → **20.6** / 188 |
+| light B: the duration statistics of two states, 10 d / hour | 4.6 / 283 → **8.2** / 287 | 16.8 / 283 → **8.1** / 287 | 14.9 / 283 → **13.2** / 287 |
+| light B: the duration statistic of one state, 3 d / hour | 4.8 / 22 → **5.3** / 96 | 6.9 / 22 → **6.6** / 96 | 9.3 / 22 → **9.5** / 96 |
+| an error sensor: the duration statistics of eight states, 400 d / week | 29.5 / 9,632 → **13.4** / 98 | 58.0 / 9,632 → **11.3** / 98 | 165.8 / 9,632 → **39.9** / 98 |
+| an irrigation zone: the duration statistic of one state, 400 d / month | 3.9 / 225 → **3.4** / 35 | 6.0 / 225 → **12.5** / 35 | 8.9 / 225 → **8.8** / 35 |
+| light B: the duration statistic of one state, 365 d / week | 10.3 / 2,275 → **4.6** / 112 | 12.6 / 2,275 → **15.7** / 112 | 31.3 / 2,275 → **15.8** / 112 |
 
 Totals over the eight cases — `ms / statements / rows`:
 
@@ -223,7 +230,8 @@ does, by 5–10×, because it reads and reduces every row in the range.
 ### (c) Through the websocket
 
 The same two charts asked through a real websocket connection, JSON
-encoding and transport included:
+encoding and transport included. Each cell is `stock ms, response bytes →
+ours ms, response bytes`:
 
 | engine | a door, 300 d / week | an error sensor, 400 d / week |
 |---|---|---|
@@ -251,9 +259,10 @@ six, `ms / statements`:
 Six statements for six sensors, on every engine and both databases.
 `history_stats` has no equivalent here: warm, it reads nothing at all.
 
-Cold — `history_stats` constructed fresh against a period sensor's
+Cold — a `history_stats` sensor constructed fresh against a period sensor's
 first-ever refresh, frame and edges and part hours and tail included, same
-entity, states and window on both sides. `ms / statements / rows`:
+entity, states and window on both sides. Each cell is `history_stats ms /
+statements / rows fetched → period sensor ms / statements / rows fetched`:
 
 | pair | SQLite | Postgres | MariaDB |
 |---|---|---|---|
