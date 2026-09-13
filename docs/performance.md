@@ -128,7 +128,10 @@ drains the recorder's write queue, then reads:
 
 - the **frame** — which of the entity's statistics exist, the newest
   compiled hour across them, and where the series starts. Each is an index
-  seek; two statements per entity.
+  seek; two statements per entity — read once and kept until a compile
+  signals, so it is paid hourly, not per refresh. Statistics deleted by
+  hand are noticed at the next compile, not before: the sensors show
+  their last value until then.
 - **the edges** the sensors between them ask for, minus the ones already
   cached — every remaining edge in one statement, the same read the card
   makes. Cumulative sums do not change behind you, so a finished window's
@@ -325,8 +328,9 @@ on an entity that drops out.
 ### (e) The frame
 
 `async_compiled` for all 14 configured entities — which statistics each has
-and the newest compiled hour across them. The coordinator pays this once
-per entry per refresh and caches it:
+and the newest compiled hour across them. The coordinator reads it once
+per compile — the compile signal is what invalidates it — so this is an
+hourly cost, not a per-refresh one:
 
 | engine | sparse rows | dense rows |
 |---|---|---|
