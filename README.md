@@ -303,6 +303,8 @@ the stock statistics-graph card, which reduces the rows itself, leaves
 such a period out. A period with no rows at all — the integration was not
 running — is a gap either way.
 
+![Two pairs of hourly charts, stock beside ours: a light's on-time draws as scattered dashes on the stock card and as one line touching zero on ours; a week with no grid outage is "No statistics found" on the stock card and a flat zero on ours](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/quiet-hours-stock-vs-ours.png)
+
 ### Blank states
 
 A state that cannot be recorded at all is treated as `unknown` rather than as

@@ -110,6 +110,11 @@ it found a row: on the same database, 647 buckets that read zero here are
 absent there, and a chart drawn from them is holes where the entity was
 quiet.
 
+![Two pairs of hourly charts, stock beside ours: a light's on-time draws as scattered dashes on the stock card and as one line touching zero on ours; a week with no grid outage is "No statistics found" on the stock card and a flat zero on ours](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/quiet-hours-stock-vs-ours.png)
+
+The same two questions put to both cards, by hour, on the reference
+install: a light's on-time and a week without a grid outage.
+
 ## How a sensor is read
 
 A period sensor's window is read in pieces that never overlap: its whole
