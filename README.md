@@ -735,6 +735,11 @@ data:
   start: "2026-01-01T00:00:00Z"
 ```
 
+The action returns as soon as the work is queued — a rebuild over a long
+history takes minutes, and every entity is done one after another behind
+the hourly run's lock — and posts a notification when it has finished,
+with the hours compiled; each entity is also logged at INFO as it completes.
+
 ### Recompute never deletes
 
 `recompute` only writes. It rewrites the buckets it has recorder history for

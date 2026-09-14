@@ -152,27 +152,53 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
         start_dt = call.data.get("start")
         start = start_dt.timestamp() if start_dt is not None else None
+        since = (
+            "the earliest retained state" if start_dt is None else start_dt.isoformat()
+        )
 
-        # Same lock the hourly run uses. Two overlapping compiles of one
-        # entity can both read the same stale cumulative base, and the second
-        # restarts that statistic's series at zero. asyncio.Lock is NOT
-        # reentrant, so this must never be acquired from inside a context that
-        # already holds it — the service handler is always called from
-        # outside, never from within compile_all.
-        async with data["lock"]:
-            for cfg in targets:
-                # Logged at INFO, unlike the scheduled run's DEBUG: someone
-                # invoked this by hand and should be able to confirm it ran
-                # without first turning on debug logging.
-                hours = await compiler.async_compile(cfg, start)
-                _LOGGER.info(
-                    "Recompute: compiled %s hour(s) for %s from %s",
-                    hours,
-                    cfg.entity_id,
-                    "the earliest retained state"
-                    if start_dt is None
-                    else start_dt.isoformat(),
+        async def run() -> None:
+            # Same lock the hourly run uses. Two overlapping compiles of one
+            # entity can both read the same stale cumulative base, and the
+            # second restarts that statistic's series at zero. asyncio.Lock
+            # is NOT reentrant, so this must never be acquired from inside a
+            # context that already holds it.
+            total = 0
+            try:
+                async with data["lock"]:
+                    for cfg in targets:
+                        # Logged at INFO, unlike the scheduled run's DEBUG:
+                        # someone invoked this by hand and should be able to
+                        # confirm it ran without first turning on debug
+                        # logging.
+                        hours = await compiler.async_compile(cfg, start)
+                        total += hours
+                        _LOGGER.info(
+                            "Recompute: compiled %s hour(s) for %s from %s",
+                            hours,
+                            cfg.entity_id,
+                            since,
+                        )
+            except Exception as err:  # reported, not swallowed
+                _LOGGER.exception("Recompute failed")
+                message = f"Recompute failed: {err}"
+            else:
+                message = (
+                    f"Recomputed {total} hour(s) of statistics across "
+                    f"{len(targets)} entit{'y' if len(targets) == 1 else 'ies'} "
+                    f"from {since}."
                 )
+            persistent_notification.async_create(
+                hass,
+                message,
+                title="Discrete Statistics",
+                notification_id=f"{DOMAIN}_recompute",
+            )
+
+        # A recompute can run for minutes, or hours over a long history; a
+        # service call held open that long is dropped somewhere between the
+        # browser and core and the UI reports a failure that never happened.
+        # The notification is the completion report.
+        hass.async_create_background_task(run(), f"{DOMAIN}.recompute")
 
     hass.services.async_register(
         DOMAIN, SERVICE_RECOMPUTE, _async_recompute, schema=RECOMPUTE_SCHEMA
