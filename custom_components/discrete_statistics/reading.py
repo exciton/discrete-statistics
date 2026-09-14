@@ -12,13 +12,13 @@ after the watermark from a live `Timeline` tallied per state.
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from datetime import tzinfo
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from homeassistant.util import slugify
 
-from .bucketer import hour_start, tally
+from .bucketer import first_whole_hour, hour_start, tally
 from .config import CONF_STATES, EntityConfig
 from .const import (
     CONF_LIVE,
@@ -108,6 +108,22 @@ class Pieces(NamedTuple):
     tail: tuple[float, float] | None
 
 
+class Plan(NamedTuple):
+    """A sensor's window and the pieces it is read in.
+
+    One resolution of the window, made once and then spent: the
+    coordinator reads the edges `edges_of` names and `compute` reads the
+    sums at those same edges, so the two cannot disagree about which.
+    `pieces` is None when nothing is compiled yet, and `start` is None
+    when an all-time window has no series to open at - so only `end`
+    reaches the sensor, and the window is still reported.
+    """
+
+    start: float | None
+    end: float
+    pieces: Pieces | None
+
+
 def spec_from(data: Mapping[str, Any]) -> Spec:
     period = data.get(CONF_PERIOD, "this_month")
     custom = (
@@ -128,13 +144,13 @@ def spec_from(data: Mapping[str, Any]) -> Spec:
     )
 
 
-def tokens_of(spec: Spec) -> tuple[str, ...]:
+def _tokens_of(spec: Spec) -> tuple[str, ...]:
     return tuple(state_token(state) for state in spec.states)
 
 
-def statistic_ids(spec: Spec, existing: Mapping[str, str], metric: str) -> list[str]:
+def _ids_for(spec: Spec, existing: Mapping[str, str], metric: str) -> list[str]:
     """The entity's statistics of one metric for the spec's states - all when none."""
-    wanted = tokens_of(spec)
+    wanted = _tokens_of(spec)
     return [
         statistic_id
         for statistic_id in existing
@@ -146,11 +162,6 @@ def statistic_ids(spec: Spec, existing: Mapping[str, str], metric: str) -> list[
 
 def _source_metric(spec: Spec) -> str:
     return METRIC_COUNT if spec.metric == METRIC_COUNT else METRIC_DURATION
-
-
-def _ceil_hour(timestamp: float) -> float:
-    floor = hour_start(timestamp)
-    return floor if floor == timestamp else floor + HOUR
 
 
 def pieces(start: float, end: float, watermark_end: float, now: float) -> Pieces:
@@ -165,7 +176,7 @@ def pieces(start: float, end: float, watermark_end: float, now: float) -> Pieces
     if start >= watermark_end:
         return Pieces(None, (), (start, until))
     compiled_until = min(until, watermark_end)
-    first = _ceil_hour(start)
+    first = first_whole_hour(start)
     last = hour_start(compiled_until)
     partials: list[Partial] = []
     if start < first:
@@ -202,20 +213,20 @@ def plan(
     now: float,
     tz: tzinfo,
     window: tuple[float, float] | None = None,
-) -> Pieces | None:
-    """The pieces `compute` will read, or None when nothing is compiled yet."""
+) -> Plan:
+    """Resolve the window and split it into the pieces `compute` will read."""
     start, end = _window(spec, frame, now, tz, window)
     if start is None or frame.watermark_end is None:
-        return None
-    return pieces(start, end, frame.watermark_end, now)
+        return Plan(start, end, None)
+    return Plan(start, end, pieces(start, end, frame.watermark_end, now))
 
 
-def edges_of(pieces_: Pieces | None) -> set[float]:
-    """The edges whose sums the pieces need: the whole hours' and each part hour's."""
-    if pieces_ is None:
+def edges_of(planned: Plan) -> set[float]:
+    """The edges whose sums the plan needs: the whole hours' and each part hour's."""
+    if planned.pieces is None:
         return set()
-    edges: set[float] = set(pieces_.compiled or ())
-    for partial in pieces_.partials:
+    edges: set[float] = set(planned.pieces.compiled or ())
+    for partial in planned.pieces.partials:
         edges |= {partial.hour, partial.hour + HOUR}
     return edges
 
@@ -231,6 +242,34 @@ def exact_partial(partial: Partial, timeline: Timeline) -> PartialValue:
         seconds[token] = seconds.get(token, 0.0) + state_seconds
         counts[token] = counts.get(token, 0) + count
     return PartialValue(seconds, counts, True)
+
+
+def hour_change(
+    existing: Iterable[str],
+    sum_at: Callable[[str, float], float],
+    hour: float,
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Seconds and counts per state token over `[hour, hour + HOUR)`.
+
+    The sums are cumulative, so an hour's change is the difference
+    between its two edges; durations are stored in hours and answered
+    here in seconds, as a tally is. Two statistics of one token add, as
+    they do everywhere. `sum_at` answers zero for an edge with no row: a
+    statistic has no time in its state before its first row, which is
+    what lets the coordinator supply `sums.get(..., 0.0)`.
+    """
+    seconds: dict[str, float] = {}
+    counts: dict[str, float] = {}
+    for statistic_id in existing:
+        if (parts := parse(statistic_id)) is None:
+            continue
+        token, metric = parts[1], parts[2]
+        change = sum_at(statistic_id, hour + HOUR) - sum_at(statistic_id, hour)
+        if metric == METRIC_DURATION:
+            seconds[token] = seconds.get(token, 0.0) + change * HOUR
+        else:
+            counts[token] = counts.get(token, 0.0) + change
+    return seconds, counts
 
 
 def prorate(
@@ -253,34 +292,32 @@ def compute(
     cfg: EntityConfig,
     spec: Spec,
     frame: Frame,
+    planned: Plan,
     sum_at: Callable[[str, float], float],
     partial_at: Callable[[Partial], PartialValue | None],
     timeline: Timeline | None,
     now: float,
-    tz: tzinfo,
-    window: tuple[float, float] | None = None,
 ) -> Reading:
-    """The sensor's value as of now.
+    """The sensor's value as of now, over the pieces `plan` resolved from this frame.
 
     `partial_at` answers None for a part hour nobody can speak for.
     Rounded to what the display shows, so a tick where nothing changed
     writes nothing to the recorder.
     """
-    start, end = _window(spec, frame, now, tz, window)
+    start, end, parts = planned
     period_end = None if end == math.inf else end
-    if start is None or frame.watermark_end is None:
+    if start is None or parts is None:
         return Reading(None, start, period_end, None)
 
-    ids = statistic_ids(spec, frame.existing, _source_metric(spec))
+    ids = _ids_for(spec, frame.existing, _source_metric(spec))
     if spec.states and not ids and all(cfg.resolve(s) is None for s in spec.states):
         return Reading(None, start, period_end, REASON_NOT_RECORDED)
 
-    wanted = tokens_of(spec)
+    wanted = _tokens_of(spec)
 
     def counted(token: str) -> bool:
         return not wanted or token in wanted
 
-    parts = pieces(start, end, frame.watermark_end, now)
     compiled = 0.0
     if parts.compiled is not None:
         first, last = parts.compiled
@@ -335,7 +372,7 @@ def suggested_entity_id(entity_id: str, spec: Spec) -> str:
     rather than a suffix, since `_this_month` is anyone's - one
     `entity_globs` exclude, `sensor.discrete_*`, covers them all.
     """
-    states = "_".join(tokens_of(spec)) or "all"
+    states = "_".join(_tokens_of(spec)) or "all"
     return (
         f"sensor.discrete_{slugify(entity_id, separator='_')}"
         f"_{states}_{spec.metric}_{spec.period}"

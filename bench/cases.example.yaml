@@ -1,0 +1,110 @@
+# What the bench measures. Copy to bench/cases.yaml and edit, or keep it
+# anywhere and point BENCH_CASES at it.
+#
+# Every case is asked at a fixed instant - the newest hour the database
+# holds statistics of ours for - so repeated runs ask the same question.
+
+# The instance's time zone. Periods are cut on local midnights and Monday
+# weeks, so this decides where the edges fall; use the zone the database
+# was recorded in. UTC when left out.
+# time_zone: Europe/Amsterdam
+
+# Times each case is run after a warm-up pass. The median is reported.
+repeat: 5
+
+# The entities whose frame - which statistics exist, and the newest
+# compiled hour across them - is timed. Omit, or leave empty, for every
+# entity `entries.json` configures.
+entities:
+  - light.kitchen_lights
+  - binary_sensor.grid_status
+
+# The card's read: one case per chart, as `discrete_statistics/buckets`
+# would be asked for it. Each is also asked of the stock
+# `recorder/statistics_during_period` with `types: change`, and the two
+# answers are compared.
+bucket_cases:
+    # Free text; it names the case in every table and result file.
+  - name: 1 grid off count / 365d / month
+    # Either an entity and the states to chart ...
+    entity: binary_sensor.grid_status
+    states: ["off"]
+    # ... duration (hours in the state) or count (transitions into it).
+    metric: count
+    # How far back from the anchor, in days, and how the range is cut:
+    # hour, day, week, month or year.
+    days: 365
+    period: month
+
+  - name: 2 garage 4 durations / 300d / week
+    entity: cover.garage_door
+    states: [closed, closing, open, opening]
+    metric: duration
+    days: 300
+    period: week
+    # Also asked through the real websocket, both commands, so transport
+    # and JSON are counted and the response sizes recorded.
+    websocket: true
+
+  - name: 3 kitchen on duration / 10d / hour
+    # ... or the statistic IDs outright, for anything the entity/states
+    # form cannot say.
+    statistic_ids:
+      - discrete_statistics:light_kitchen_lights_on_duration
+      - discrete_statistics:light_kitchen_lights_off_duration
+    days: 10
+    period: hour
+    # Set false to skip the stock comparison for this case.
+    stock: true
+
+# Period sensors, as their subentries configure them. Timed warm - the
+# sums at the planned edges in one read, which is what a refresh costs
+# once the coordinator has its frame.
+sensors:
+  - name: kitchen on duration this_month
+    entity: light.kitchen_lights
+    # Empty or omitted means every state the entity records.
+    states: ["on"]
+    metric: duration
+    # this_hour, today, this_week, this_month, this_year, last_24_hours,
+    # last_7_days, last_30_days, last_365_days, ...
+    period: this_month
+    # Live sensors read the hours after the newest compiled one.
+    live: true
+
+  - name: kitchen all count this_month
+    entity: light.kitchen_lights
+    states: []
+    metric: count
+    period: this_month
+    live: true
+
+# The same question put to Home Assistant's `history_stats` (which reads
+# `states` rows) and to a period sensor's first, cold refresh. Both
+# answers are recorded and compared; a disagreement is reported, never
+# asserted. Needs the entities' `states` rows in the database - so a
+# database loaded without `--states` should leave this out.
+history_pairs:
+  - name: 1 kitchen on this_month time
+    entity: light.kitchen_lights
+    states: ["on"]
+    # What history_stats would be configured as: time, count or ratio.
+    kind: time
+    # The sensor's equivalent: duration, count or share.
+    metric: duration
+    period: this_month
+    # Print the statements both sides issue, once, after the timing.
+    show_sql: true
+
+  - name: 2 kitchen on last_24_hours time
+    entity: light.kitchen_lights
+    states: ["on"]
+    kind: time
+    metric: duration
+    period: last_24_hours
+
+# How far a pair may disagree before it is called out. Hours for `time`,
+# percentage points for `ratio`; `count` is never compared, the two sides
+# count different things.
+time_tolerance_hours: 0.05
+ratio_tolerance: 0.2

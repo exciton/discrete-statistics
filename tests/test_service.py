@@ -7,48 +7,16 @@ from unittest.mock import patch
 
 import pytest
 from homeassistant.components.recorder import get_instance
-from homeassistant.components.recorder.statistics import statistics_during_period
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.setup import async_setup_component
 
 from custom_components.discrete_statistics.const import DOMAIN
+from tests.conftest import read_sums
 
 ENTITY = "binary_sensor.grid_status"
 DURATION_OFF = "discrete_statistics:binary_sensor_grid_status_off_duration"
 
 CONFIG = {DOMAIN: [{"entity_id": ENTITY, "name": "Grid Status"}]}
-
-
-@pytest.fixture(autouse=True)
-def auto_enable_custom_integrations(recorder_db_url, enable_custom_integrations):
-    """Override the root conftest fixture.
-
-    The root fixture pulls in `hass`, which the recorder fixtures refuse to
-    run behind: `recorder_db_url` asserts that hass has not been created
-    yet. Requesting it first restores the required order.
-    """
-    yield
-
-
-@pytest.fixture
-async def recorder(hass, recorder_mock):
-    await async_setup_component(hass, "recorder", {"recorder": {}})
-    await hass.async_block_till_done()
-    return hass
-
-
-async def read_sums(hass, statistic_id, start, end):
-    result = await get_instance(hass).async_add_executor_job(
-        statistics_during_period,
-        hass,
-        start,
-        end,
-        {statistic_id},
-        "hour",
-        None,
-        {"sum"},
-    )
-    return [row["sum"] for row in result.get(statistic_id, [])]
 
 
 async def test_service_is_registered(recorder):

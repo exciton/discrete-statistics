@@ -1,121 +1,30 @@
 """Period sensors end to end: subentries in, states out."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from types import MappingProxyType
 from unittest.mock import patch
 
-import pytest
 from homeassistant.components.recorder import get_instance
-from homeassistant.config_entries import ConfigSubentry, ConfigSubentryData
-from homeassistant.const import CONF_ENTITY_ID, CONF_NAME, STATE_UNAVAILABLE
+from homeassistant.config_entries import ConfigSubentry
+from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.core import callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
-from homeassistant.setup import async_setup_component
-from pytest_homeassistant_custom_component.common import (
-    MockConfigEntry,
-    async_fire_time_changed,
-)
-from pytest_homeassistant_custom_component.components.recorder.common import (
-    async_wait_recording_done,
-)
+from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
 from custom_components.discrete_statistics import rows as rows_module
 from custom_components.discrete_statistics.compiler import Compiler, compiled_signal
-from custom_components.discrete_statistics.config import CONF_DEFAULT
-from custom_components.discrete_statistics.const import (
-    DEFAULT_RECORD_KNOWN,
-    DOMAIN,
-    SUBENTRY_SENSOR,
-)
-from custom_components.discrete_statistics.coordinator import (
-    REFRESH_COOLDOWN,
-    PeriodCoordinator,
-)
+from custom_components.discrete_statistics.const import SUBENTRY_SENSOR
+from custom_components.discrete_statistics.coordinator import PeriodCoordinator
+from tests.conftest import ON_TODAY, T0, changed_state, seeded, sensor
 
 ENTITY = "binary_sensor.grid_status"
-T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
-ON_TODAY = "sensor.discrete_binary_sensor_grid_status_on_duration_today"
 OFF_TODAY = "sensor.discrete_binary_sensor_grid_status_off_duration_today"
 ON_COUNT = "sensor.discrete_binary_sensor_grid_status_on_count_today"
 ON_SHARE = "sensor.discrete_binary_sensor_grid_status_on_share_today"
 ON_YESTERDAY = "sensor.discrete_binary_sensor_grid_status_on_duration_yesterday"
 ON_COUNT_LAST_HOUR = "sensor.discrete_binary_sensor_grid_status_on_count_last_hour"
 ON_LAST_HOUR = "sensor.discrete_binary_sensor_grid_status_on_duration_last_hour"
-
-
-@pytest.fixture(autouse=True)
-def auto_enable_custom_integrations(recorder_db_url, enable_custom_integrations):
-    """Override the root conftest fixture; see tests/test_compiler.py."""
-    yield
-
-
-@pytest.fixture
-async def recorder(recorder_mock, hass):
-    await async_setup_component(hass, "recorder", {"recorder": {}})
-    await hass.config.async_set_time_zone("UTC")
-    await hass.async_block_till_done()
-    return hass
-
-
-def sensor(title, states, metric="duration", period="today", live=True, **data):
-    return ConfigSubentryData(
-        data={
-            "states": states,
-            "metric": metric,
-            "period": period,
-            "live": live,
-            **data,
-        },
-        subentry_id=title,
-        subentry_type=SUBENTRY_SENSOR,
-        title=title,
-        unique_id=None,
-    )
-
-
-async def setup_entry(hass, subentries):
-    assert await async_setup_component(hass, DOMAIN, {})
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={CONF_ENTITY_ID: ENTITY},
-        options={CONF_NAME: "Grid Status", CONF_DEFAULT: DEFAULT_RECORD_KNOWN},
-        unique_id=ENTITY,
-        title="Grid Status",
-        subentries_data=subentries,
-    )
-    entry.add_to_hass(hass)
-    with patch(
-        "custom_components.discrete_statistics.Compiler.async_compile_incremental",
-        return_value=0,
-    ):
-        assert await hass.config_entries.async_setup(entry.entry_id)
-        await hass.async_block_till_done()
-    return entry
-
-
-async def play(hass, freezer, timeline):
-    for when, state in timeline:
-        freezer.move_to(when)
-        hass.states.async_set(ENTITY, state)
-        await hass.async_block_till_done()
-    # The recorder's own queue is empty from the moment its thread picks a
-    # write up, so wait on a task queued behind it instead.
-    await async_wait_recording_done(hass)
-
-
-async def changed_state(hass, freezer, when, state):
-    """Set the entity's state at `when` and let the debounced refresh land.
-
-    The refresh a change asks for is a cooldown behind it, so its timer
-    has to be fired; the freezer stays at `when` so the tail is measured
-    to the instant the change happened.
-    """
-    freezer.move_to(when)
-    hass.states.async_set(ENTITY, state)
-    await hass.async_block_till_done()
-    async_fire_time_changed(hass, when + timedelta(seconds=REFRESH_COOLDOWN + 1))
-    await hass.async_block_till_done(wait_background_tasks=True)
 
 
 def no_hourly_compile():
@@ -159,32 +68,8 @@ def counting_state_changes(calls):
     return patch.object(PeriodCoordinator, "_state_changed", counted)
 
 
-async def compile_by_hand(hass, start):
-    cfg = next(iter(hass.data[DOMAIN]["entry_configs"].values()))
-    await hass.data[DOMAIN]["compiler"].async_compile(cfg, start.timestamp())
-    await async_wait_recording_done(hass)
-    await hass.async_block_till_done()
-
-
-TIMELINE = [
-    (T0 - timedelta(hours=1), "off"),
-    (T0 + timedelta(hours=1), "on"),
-    (T0 + timedelta(hours=1, minutes=30), "off"),
-    (T0 + timedelta(hours=2), "on"),
-]
-
-
-async def seeded(hass, freezer, subentries):
-    """Three compiled hours of today, then the entry with its sensors."""
-    await play(hass, freezer, TIMELINE)
-    freezer.move_to(T0 + timedelta(hours=3))
-    entry = await setup_entry(hass, subentries)
-    await compile_by_hand(hass, T0 - timedelta(hours=1))
-    return entry
-
-
-async def test_sensors_read_the_statistics(recorder, freezer):
-    hass = recorder
+async def test_sensors_read_the_statistics(recorder_utc, freezer):
+    hass = recorder_utc
     await seeded(
         hass,
         freezer,
@@ -212,8 +97,8 @@ async def test_sensors_read_the_statistics(recorder, freezer):
     assert "unit_of_measurement" not in hass.states.get(ON_COUNT).attributes
 
 
-async def test_the_entity_belongs_to_its_subentry(recorder, freezer):
-    hass = recorder
+async def test_the_entity_belongs_to_its_subentry(recorder_utc, freezer):
+    hass = recorder_utc
     entry = await seeded(hass, freezer, [sensor("on today", ["on"])])
     registry = er.async_get(hass)
     registered = registry.async_get(ON_TODAY)
@@ -222,8 +107,8 @@ async def test_the_entity_belongs_to_its_subentry(recorder, freezer):
     assert registered.config_entry_id == entry.entry_id
 
 
-async def test_a_live_sensor_follows_the_entity(recorder, freezer):
-    hass = recorder
+async def test_a_live_sensor_follows_the_entity(recorder_utc, freezer):
+    hass = recorder_utc
     await seeded(
         hass, freezer, [sensor("on today", ["on"]), sensor("off today", ["off"])]
     )
@@ -242,8 +127,8 @@ async def test_a_live_sensor_follows_the_entity(recorder, freezer):
     assert hass.states.get(OFF_TODAY).state == "1.67"
 
 
-async def test_a_tick_where_nothing_changed_writes_nothing(recorder, freezer):
-    hass = recorder
+async def test_a_tick_where_nothing_changed_writes_nothing(recorder_utc, freezer):
+    hass = recorder_utc
     await seeded(hass, freezer, [sensor("on today", ["on"], live=False)])
     before = hass.states.get(ON_TODAY)
     freezer.move_to(T0 + timedelta(hours=3, minutes=1))
@@ -256,17 +141,17 @@ async def test_a_tick_where_nothing_changed_writes_nothing(recorder, freezer):
 
 
 async def test_a_sensor_over_ignored_states_is_unavailable_with_a_warning(
-    recorder, freezer, caplog
+    recorder_utc, freezer, caplog
 ):
-    hass = recorder
+    hass = recorder_utc
     await seeded(hass, freezer, [sensor("unknown", ["unknown"])])
     entity_id = "sensor.discrete_binary_sensor_grid_status_unknown_duration_today"
     assert hass.states.get(entity_id).state == STATE_UNAVAILABLE
     assert "not recorded by this entry's settings" in caplog.text
 
 
-async def test_subentries_come_and_go_with_their_sensors(recorder, freezer):
-    hass = recorder
+async def test_subentries_come_and_go_with_their_sensors(recorder_utc, freezer):
+    hass = recorder_utc
     entry = await seeded(hass, freezer, [sensor("on today", ["on"])])
     hass.config_entries.async_add_subentry(
         entry,
@@ -294,8 +179,8 @@ async def test_subentries_come_and_go_with_their_sensors(recorder, freezer):
     assert hass.states.get(OFF_TODAY).state == "1.5"
 
 
-async def test_reconfiguring_keeps_the_entity(recorder, freezer):
-    hass = recorder
+async def test_reconfiguring_keeps_the_entity(recorder_utc, freezer):
+    hass = recorder_utc
     entry = await seeded(hass, freezer, [sensor("on today", ["on"])])
     hass.config_entries.async_update_subentry(
         entry,
@@ -310,8 +195,8 @@ async def test_reconfiguring_keeps_the_entity(recorder, freezer):
     assert "unit_of_measurement" not in state.attributes
 
 
-async def test_one_update_reaches_every_sensor(recorder, freezer):
-    hass = recorder
+async def test_one_update_reaches_every_sensor(recorder_utc, freezer):
+    hass = recorder_utc
     entry = await seeded(
         hass, freezer, [sensor("on today", ["on"]), sensor("off today", ["off"])]
     )
@@ -342,8 +227,8 @@ async def test_one_update_reaches_every_sensor(recorder, freezer):
     assert "unit_of_measurement" not in off.attributes
 
 
-async def test_an_entry_without_sensors_reads_nothing(recorder, freezer):
-    hass = recorder
+async def test_an_entry_without_sensors_reads_nothing(recorder_utc, freezer):
+    hass = recorder_utc
     entry = await seeded(hass, freezer, [])
     with patch.object(PeriodCoordinator, "_async_update_data") as refresh:
         hass.states.async_set(ENTITY, "off")
@@ -372,8 +257,8 @@ async def test_an_entry_without_sensors_reads_nothing(recorder, freezer):
     assert hass.states.get(ON_TODAY).state == "1.5"
 
 
-async def test_the_last_sensor_leaving_stops_the_reads(recorder, freezer):
-    hass = recorder
+async def test_the_last_sensor_leaving_stops_the_reads(recorder_utc, freezer):
+    hass = recorder_utc
     entry = await seeded(hass, freezer, [sensor("on today", ["on"])])
     hass.config_entries.async_remove_subentry(entry, "on today")
     await hass.async_block_till_done()
@@ -390,8 +275,8 @@ async def test_the_last_sensor_leaving_stops_the_reads(recorder, freezer):
             wraps=get_instance,
         ) as recorder_instance,
         patch(
-            "custom_components.discrete_statistics.coordinator.rows.sums_at",
-            wraps=rows_module.sums_at,
+            "custom_components.discrete_statistics.coordinator.rows.sums_at_edges",
+            wraps=rows_module.sums_at_edges,
         ) as sums_at,
         patch.object(Compiler, "async_tail") as tail,
     ):
@@ -404,8 +289,8 @@ async def test_the_last_sensor_leaving_stops_the_reads(recorder, freezer):
     assert tail.call_count == 0
 
 
-async def test_a_reload_releases_the_old_coordinator(recorder, freezer):
-    hass = recorder
+async def test_a_reload_releases_the_old_coordinator(recorder_utc, freezer):
+    hass = recorder_utc
     changes, refreshes = [], []
     with (
         counting_state_changes(changes),
@@ -438,9 +323,9 @@ async def test_a_reload_releases_the_old_coordinator(recorder, freezer):
     assert hass.states.get(ON_TODAY).state == "1.83"
 
 
-async def test_a_rolling_sensor_slides_with_the_clock(recorder, freezer):
+async def test_a_rolling_sensor_slides_with_the_clock(recorder_utc, freezer):
     """The end-to-end form of history_stats' one-hour `duration` measure."""
-    hass = recorder
+    hass = recorder_utc
     await seeded(
         hass, freezer, [sensor("on count last hour", ["on"], "count", "last_hour")]
     )
@@ -473,9 +358,9 @@ async def test_a_rolling_sensor_slides_with_the_clock(recorder, freezer):
 
 
 async def test_a_rolling_sensor_that_is_not_live_moves_only_with_a_compile(
-    recorder, freezer
+    recorder_utc, freezer
 ):
-    hass = recorder
+    hass = recorder_utc
     await seeded(
         hass,
         freezer,
@@ -500,8 +385,8 @@ async def test_a_rolling_sensor_that_is_not_live_moves_only_with_a_compile(
     assert after.last_updated == state.last_updated
 
 
-async def test_a_part_hour_the_recorder_has_lost_is_estimated(recorder, freezer):
-    hass = recorder
+async def test_a_part_hour_the_recorder_has_lost_is_estimated(recorder_utc, freezer):
+    hass = recorder_utc
     await seeded(
         hass, freezer, [sensor("on count last hour", ["on"], "count", "last_hour")]
     )
@@ -528,3 +413,21 @@ async def test_a_part_hour_the_recorder_has_lost_is_estimated(recorder, freezer)
     state = hass.states.get(ON_COUNT_LAST_HOUR)
     assert state.state == "1"
     assert state.attributes["estimated"] is True
+
+
+async def test_a_state_with_no_row_in_a_compiled_period_reads_zero(
+    recorder_utc, freezer
+):
+    hass = recorder_utc
+    # The third hour is compiled and wholly "on", so "off" has no row in
+    # it: its sum is the one carried from the hour before, not nothing.
+    await seeded(
+        hass,
+        freezer,
+        [sensor("off last hour", ["off"], period="last_hour", live=False)],
+    )
+    state = hass.states.get(
+        "sensor.discrete_binary_sensor_grid_status_off_duration_last_hour"
+    )
+    assert state.state == "0.0"
+    assert state.attributes["period_start"] == (T0 + timedelta(hours=2)).isoformat()

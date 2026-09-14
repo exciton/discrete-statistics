@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# The two engine containers the bench measures against.
+#
+#   script/bench-db up [variant...]   # start mariadb:11 and postgres:16, wait
+#   script/bench-db down              # stop and remove them (volumes stay)
+#   script/bench-db purge             # ... and remove the named volumes too
+#   script/bench-db status            # what is running, and which databases exist
+#
+# Host network, fixed ports, named volumes: the point is that they stay up
+# between branches so a re-measure is one command. One database per
+# variant in each engine, named as the variant is ($BENCH_VARIANTS, or the
+# names given to `up`).
+#
+# The ports default off the standard ones - MariaDB 3307, Postgres 5433 -
+# because a host that runs its own mysqld or postgres already holds 3306
+# and 5432, and a host-network container cannot share a port. Override
+# with BENCH_MARIADB_PORT and BENCH_POSTGRES_PORT, and pass the same
+# values to `script/bench` and `script/bench-load`.
+set -euo pipefail
+
+MARIADB=ds-bench-mariadb
+POSTGRES=ds-bench-postgres
+MARIADB_VOL=ds-bench-mariadb-data
+POSTGRES_VOL=ds-bench-postgres-data
+USER_NAME=bench
+PASSWORD=bench
+MARIADB_PORT="${BENCH_MARIADB_PORT:-3307}"
+POSTGRES_PORT="${BENCH_POSTGRES_PORT:-5433}"
+
+my() { docker exec -i "$MARIADB" mariadb --port="$MARIADB_PORT" -h 127.0.0.1 -u root -p"$PASSWORD" "$@"; }
+pg() { docker exec -i -e PGPASSWORD="$PASSWORD" "$POSTGRES" psql -U "$USER_NAME" -d postgres -p "$POSTGRES_PORT" "$@"; }
+
+up() {
+  local variants=("$@")
+  if [[ ${#variants[@]} -eq 0 ]]; then
+    read -r -a variants <<<"${BENCH_VARIANTS:-dense sparse}"
+  fi
+  if ! docker ps --format '{{.Names}}' | grep -qx "$MARIADB"; then
+    docker rm -f "$MARIADB" >/dev/null 2>&1 || true
+    docker run -d --name "$MARIADB" --network host \
+      -e MARIADB_ROOT_PASSWORD="$PASSWORD" \
+      -e MARIADB_USER="$USER_NAME" -e MARIADB_PASSWORD="$PASSWORD" \
+      -v "$MARIADB_VOL:/var/lib/mysql" \
+      mariadb:11 \
+      --port="$MARIADB_PORT" \
+      --local-infile=1 \
+      --innodb-buffer-pool-size=2G \
+      --max-allowed-packet=256M >/dev/null
+    echo "started $MARIADB on $MARIADB_PORT"
+  fi
+  if ! docker ps --format '{{.Names}}' | grep -qx "$POSTGRES"; then
+    docker rm -f "$POSTGRES" >/dev/null 2>&1 || true
+    docker run -d --name "$POSTGRES" --network host \
+      -e POSTGRES_USER="$USER_NAME" -e POSTGRES_PASSWORD="$PASSWORD" \
+      -e PGPORT="$POSTGRES_PORT" \
+      -v "$POSTGRES_VOL:/var/lib/postgresql/data" \
+      postgres:16 \
+      -c shared_buffers=2GB -c work_mem=64MB >/dev/null
+    echo "started $POSTGRES on $POSTGRES_PORT"
+  fi
+
+  for _ in $(seq 60); do
+    my -e 'SELECT 1' >/dev/null 2>&1 && break; sleep 2
+  done
+  my -e 'SELECT 1' >/dev/null 2>&1 || { echo "mariadb did not come up" >&2; exit 1; }
+  for _ in $(seq 60); do
+    pg -c 'SELECT 1' >/dev/null 2>&1 && break; sleep 2
+  done
+  pg -c 'SELECT 1' >/dev/null 2>&1 || { echo "postgres did not come up" >&2; exit 1; }
+
+  # One database per variant per engine, and the bench user owning them.
+  for v in "${variants[@]}"; do
+    my -e "CREATE DATABASE IF NOT EXISTS \`$v\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+           GRANT ALL ON \`$v\`.* TO '$USER_NAME'@'%'; FLUSH PRIVILEGES;"
+    pg -tAc "SELECT 1 FROM pg_database WHERE datname='$v'" | grep -q 1 \
+      || pg -c "CREATE DATABASE \"$v\" OWNER \"$USER_NAME\""
+  done
+  echo "ready: mysql+pymysql://$USER_NAME:$PASSWORD@127.0.0.1:$MARIADB_PORT/<variant>?charset=utf8mb4"
+  echo "       postgresql://$USER_NAME:$PASSWORD@127.0.0.1:$POSTGRES_PORT/<variant>"
+}
+
+command="${1:-status}"
+shift || true
+case "$command" in
+  up) up "$@" ;;
+  down) docker rm -f "$MARIADB" "$POSTGRES" >/dev/null 2>&1 || true; echo "stopped" ;;
+  purge)
+    docker rm -f "$MARIADB" "$POSTGRES" >/dev/null 2>&1 || true
+    docker volume rm "$MARIADB_VOL" "$POSTGRES_VOL" >/dev/null 2>&1 || true
+    echo "stopped and volumes removed" ;;
+  status)
+    docker ps --filter "name=ds-bench-" --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'
+    my -e 'SHOW DATABASES' 2>/dev/null || true
+    pg -c '\l' 2>/dev/null | head -12 || true ;;
+  *) echo "usage: script/bench-db {up|down|purge|status} [variant...]" >&2; exit 1 ;;
+esac

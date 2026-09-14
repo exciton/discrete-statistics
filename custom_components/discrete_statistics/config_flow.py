@@ -8,6 +8,7 @@ releases.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from datetime import timedelta
 from typing import Any
@@ -39,6 +40,7 @@ from homeassistant.helpers import selector
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from . import periods
 from .config import (
     CONF_BLANK,
     CONF_DEFAULT,
@@ -74,7 +76,6 @@ from .const import (
     SENSOR_METRICS,
     SUBENTRY_SENSOR,
 )
-from .coordinator import render_datetime
 from .naming import (
     async_warm_state_translations,
     describe,
@@ -86,6 +87,7 @@ from .payload import readable_state
 from .periods import PERIODS, is_custom
 from .reading import Custom, Spec, spec_from
 from .statistic_ids import build, is_blank, parse, state_token
+from .templates import render_datetime
 
 # `ignore` is deliberately absent. With no per-state mapping to supply
 # exceptions it makes resolve() return None for every state, so nothing is
@@ -586,12 +588,12 @@ def _custom_window(
     given = sum(value is not None for value in data.values())
     if not is_custom(period):
         return dict.fromkeys(data), {"base": "custom_only"} if given else {}
-    if given == 3 or given == 0 or (given == 1 and start is None):
-        return data, {"base": "custom_needs_two"}
-    rendered: dict[str, float] = {}
-    # Start is checked first, so a template broken in both fields is blamed
-    # on Start - the field a person reads first, and the one whose error
-    # would otherwise be masked by End's.
+    rendered: dict[str, float | None] = {CONF_WINDOW_START: None, CONF_WINDOW_END: None}
+    # Rendered before the combination is judged, so a broken template is
+    # blamed on itself rather than on the combination it also breaks; Start
+    # is checked first, so a template broken in both fields is blamed on
+    # Start - the field a person reads first, and the one whose error would
+    # otherwise be masked by End's.
     for key, text in ((CONF_WINDOW_START, start), (CONF_WINDOW_END, end)):
         if text is None:
             continue
@@ -600,7 +602,17 @@ def _custom_window(
         except ValueError:
             field = "start" if key == CONF_WINDOW_START else "end"
             return data, {"base": f"template_invalid_{field}"}
-    if len(rendered) == 2 and rendered[CONF_WINDOW_END] <= rendered[CONF_WINDOW_START]:
+    # Which combinations are legal is periods.custom_window's rule, asked
+    # rather than repeated: the dialog refuses exactly what the coordinator
+    # cannot render. A window running to now is judged as configured, not
+    # at this instant - its end moves - so `now` is infinite here and only
+    # a written end can sit before the start.
+    resolved = periods.custom_window(
+        rendered[CONF_WINDOW_START], rendered[CONF_WINDOW_END], duration, math.inf
+    )
+    if resolved is None:
+        return data, {"base": "custom_needs_two"}
+    if resolved[1] <= resolved[0]:
         return data, {"base": "custom_empty"}
     return data, {}
 

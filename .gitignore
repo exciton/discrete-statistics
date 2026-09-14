@@ -14,3 +14,12 @@ script/verify
 
 # Local working notes: references specific installation detail
 /TODO.md
+
+# Local-only: database backups and the rows extracted from them
+/backups/
+
+# The bench writes its results, plans and run file here.
+/bench/results/
+# A benchmark database and its entries.json, extracted from a backup.
+/bench/data/
+/bench/cases.yaml

@@ -9,10 +9,12 @@ import pytest
 from custom_components.discrete_statistics.buckets import (
     Bucket,
     Row,
+    before_edges,
     cut,
     edges,
-    hours_wanted,
-    row_before,
+    family_of,
+    has_row,
+    judges,
 )
 from custom_components.discrete_statistics.const import HOUR
 
@@ -69,32 +71,6 @@ class TestEdges:
         ]
 
 
-def test_hours_wanted_are_the_hour_before_each_edge():
-    assert hours_wanted([0.0, 7200.0]) == {-3600.0, 3600.0}
-
-
-def test_an_edge_at_half_past_wants_the_hour_running_through_it():
-    # Kolkata is five and a half hours off UTC, so its midnight is half
-    # past a UTC hour and the row holding the sum at the edge starts
-    # thirty minutes before it.
-    edge = datetime(2026, 6, 1, tzinfo=ZoneInfo("Asia/Kolkata")).timestamp()
-    assert edge % HOUR == 1800
-    assert row_before(edge) == edge - 1800
-    assert row_before(0.0) == -HOUR
-
-
-def _lookup(rows: list[Row]):
-    """The newest-before lookup over a sorted list of rows, counting calls."""
-    calls = [0]
-
-    def newest_before(edge: float) -> Row | None:
-        calls[0] += 1
-        found = [r for r in rows if r.start < edge]
-        return found[-1] if found else None
-
-    return newest_before, calls
-
-
 def _dense(hours: range, per_hour: float = 0.25) -> list[Row]:
     return [Row(h * HOUR, per_hour * (i + 1)) for i, h in enumerate(hours)]
 
@@ -104,151 +80,179 @@ def _running(rows: list[Row]) -> list[Row]:
     return [Row(rows[0].start - HOUR, 0.0), *rows]
 
 
-def _at(rows: list[Row], edges_: list[float]) -> dict[float, Row]:
-    wanted = hours_wanted(edges_)
-    return {r.start: r for r in rows if r.start in wanted}
+H = HOUR
+
+
+def _before(rows: list[Row], edges_: list[float]) -> dict[float, Row | None]:
+    """What the read answers with, resolved as `websocket` resolves it."""
+    return before_edges(rows, edges_)
+
+
+def _compiled(before: dict[float, Row | None]):
+    return lambda a, b: has_row(before, a, b)
 
 
 class TestCut:
-    def test_dense_rows_need_no_lookups(self):
+    def test_change_is_between_the_sums_at_the_edges(self):
         rows = _running(_dense(range(48)))
-        e = [0.0, 24 * HOUR, 48 * HOUR]
-        before, calls = _lookup(rows)
-
-        result = cut(e, _at(rows, e), before)
-
-        assert result == [
-            Bucket(0.0, 24 * HOUR, 6.0),
-            Bucket(24 * HOUR, 48 * HOUR, 6.0),
+        e = [0.0, 24 * H, 48 * H]
+        assert cut(e, _before(rows, e), lambda a, b: True) == [
+            Bucket(0.0, 24 * H, 6.0),
+            Bucket(24 * H, 48 * H, 6.0),
         ]
-        assert calls == [0]
 
-    def test_edges_at_half_past_still_need_no_lookups(self):
-        tz = ZoneInfo("Asia/Kolkata")
-        e = edges(
-            datetime(2026, 6, 1, tzinfo=tz).timestamp(),
-            datetime(2026, 6, 3, tzinfo=tz).timestamp(),
-            "day",
-            tz,
-        )
-        # Rows start on UTC hours; the first here is the hour running
-        # through the first edge.
-        first = e[0] - 1800
-        assert first % HOUR == 0
-        rows = [Row(first + i * HOUR, float(i)) for i in range(49)]
-        before, calls = _lookup(rows)
-
-        result = cut(e, _at(rows, e), before)
-
-        assert [b.change for b in result] == [24.0, 24.0]
-        assert calls == [0]
-
-    def test_a_series_beginning_inside_a_bucket_starts_from_zero(self):
-        # A new state has no time in it before its first row, so the base
-        # is zero and the bucket is a whole period, as its siblings are.
-        rows = _dense(range(10, 48))
-        e = [0.0, 24 * HOUR, 48 * HOUR]
-        before, calls = _lookup(rows)
-
-        result = cut(e, _at(rows, e), before)
-
+    def test_a_compiled_bucket_with_no_row_is_zero_and_an_uncompiled_one_is_left_out(
+        self,
+    ):
+        rows = [Row(23 * H, 2.0), Row(72 * H, 5.0)]
+        e = [0.0, 24 * H, 48 * H, 72 * H, 96 * H]
+        result = cut(e, _before(rows, e), lambda a, b: a != 24 * H)
         assert result == [
-            Bucket(0.0, 24 * HOUR, 14 * 0.25),
-            Bucket(24 * HOUR, 48 * HOUR, 24 * 0.25),
+            Bucket(0.0, 24 * H, 2.0),
+            Bucket(48 * H, 72 * H, 0.0),
+            Bucket(72 * H, 96 * H, 3.0),
         ]
-        assert calls == [1]
 
-    def test_a_base_before_the_first_edge_is_looked_up(self):
+    def test_before_the_series_the_sum_is_zero(self):
+        rows = [Row(30 * H, 1.5)]
+        e = [0.0, 24 * H, 48 * H]
+        assert cut(e, _before(rows, e), lambda a, b: True) == [
+            Bucket(0.0, 24 * H, 0.0),
+            Bucket(24 * H, 48 * H, 1.5),
+        ]
+
+
+class TestHoles:
+    def test_a_hole_straddling_an_edge_is_in_neither_bucket(self):
+        # Rows every hour for hours 0-19 and 30-47: the hole spans the day
+        # edge at 24H. Each bucket's change covers only its own rows.
+        near = [Row(h * H, 0.25 * (h + 1)) for h in range(20)]
+        far = [Row(h * H, 5.0 + 0.25 * (h - 29)) for h in range(30, 48)]
+        e = [0.0, 24 * H, 48 * H]
+        before = _before([Row(-H, 0.0), *near, *far], e)
+
+        assert cut(e, before, _compiled(before)) == [
+            Bucket(0.0, 24 * H, pytest.approx(20 * 0.25)),
+            Bucket(24 * H, 48 * H, pytest.approx(18 * 0.25)),
+        ]
+
+    def test_a_hole_inside_a_bucket_stays_inside_it(self):
+        # Hours 10-13 are missing, well within the day: one bucket, its
+        # change spanning the hole rather than the bucket being split.
         rows = [
-            Row(-5 * HOUR, 100.0),
-            *[Row(h * HOUR, 100.0 + h + 1) for h in range(24)],
+            Row(h * H, 0.25 * (h + 1 if h < 10 else h - 3))
+            for h in list(range(10)) + list(range(14, 24))
         ]
-        e = [0.0, 24 * HOUR]
-        before, _ = _lookup(rows)
+        e = [0.0, 24 * H]
+        before = _before([Row(-H, 0.0), *rows], e)
 
-        result = cut(e, _at(rows, e), before)
+        assert cut(e, before, _compiled(before)) == [
+            Bucket(0.0, 24 * H, pytest.approx(20 * 0.25))
+        ]
 
-        assert result == [Bucket(0.0, 24 * HOUR, 24.0)]
 
-    def test_a_hole_straddling_an_edge_lands_in_neither_bucket(self):
-        # Rows for hours 0-19 and 30-47: the hole 20-29 crosses the edge at
-        # 24. The left bucket's change ends at the last row before the
-        # hole and the right one's begins there, because the sum carried:
-        # both buckets are whole periods with the hole's time in neither.
-        rows = _running(
-            [Row(h * HOUR, float(h + 1)) for h in range(20)]
-            + [Row(h * HOUR, 20.0 + (h - 29)) for h in range(30, 48)]
+def test_half_past_edges_cut_the_hours_between_them():
+    # Kolkata days start at 18:30 UTC, so no row starts the hour before an
+    # edge: each edge resolves to the row running through it, and a day is
+    # still the twenty-four rows between two such edges - the same tally an
+    # hour-aligned zone gets.
+    kolkata = ZoneInfo("Asia/Kolkata")
+    start = datetime(2026, 6, 1, tzinfo=kolkata)
+    end = datetime(2026, 6, 4, tzinfo=kolkata)
+    half_past = edges(start.timestamp(), end.timestamp(), "day", kolkata)
+    assert all(edge % H == 1800 for edge in half_past)
+
+    # A different value every hour, so a bucket reading an hour early or
+    # late reads a different number.
+    first = (half_past[0] // H - 24) * H
+    values = [0.01 * (i + 1) for i in range(24 * (len(half_past) + 1))]
+    total = 0.0
+    rows = []
+    for i, value in enumerate(values):
+        total += value
+        rows.append(Row(first + i * H, total))
+    before = _before(rows, half_past)
+
+    # The row running through edge k is the (24 + 24k)th; the day after it
+    # is the twenty-four values that follow.
+    expected = [
+        pytest.approx(sum(values[24 + 24 * k + 1 : 24 + 24 * k + 25]))
+        for k in range(len(half_past) - 1)
+    ]
+    assert [b.change for b in cut(half_past, before, _compiled(before))] == expected
+
+
+class TestBeforeEdges:
+    def test_each_edge_takes_the_newest_row_starting_before_it(self):
+        rows = [Row(0.0, 1.0), Row(2 * H, 2.0), Row(3 * H, 3.0)]
+        assert before_edges(rows, [0.0, H, 3 * H, 4 * H]) == {
+            # A row starting exactly on an edge is not before it.
+            0.0: None,
+            H: Row(0.0, 1.0),
+            3 * H: Row(2 * H, 2.0),
+            4 * H: Row(3 * H, 3.0),
+        }
+
+    def test_one_row_answers_every_edge_after_it(self):
+        # A rare state: one transition in a year, and the read returns that
+        # row once rather than once per edge it answers.
+        rows = [Row(5 * H, 1.0)]
+        e = [k * H for k in range(12)]
+        assert before_edges(rows, e) == {
+            edge: (Row(5 * H, 1.0) if edge > 5 * H else None) for edge in e
+        }
+
+    def test_an_empty_series_answers_nothing(self):
+        assert before_edges([], [0.0, H]) == {0.0: None, H: None}
+
+
+class TestHasRow:
+    def test_a_row_inside_the_bucket(self):
+        e = [0.0, 24 * H, 48 * H, 72 * H]
+        before = _before([Row(30 * H, 1.0)], e)
+        assert has_row(before, 24 * H, 48 * H)
+        assert not has_row(before, 48 * H, 72 * H)
+        assert not has_row(before, 0.0, 24 * H)
+
+
+class TestJudges:
+    ON = "discrete_statistics:sensor_grid_on_duration"
+    OFF = "discrete_statistics:sensor_grid_off_duration"
+    ON_COUNT = "discrete_statistics:sensor_grid_on_count"
+    OFF_COUNT = "discrete_statistics:sensor_grid_off_count"
+    OTHER = "discrete_statistics:sensor_door_open_duration"
+
+    def test_every_duration_of_the_family_judges_it_asked_for_or_not(self):
+        # A chart of one rare state must not show a gap in every period
+        # that state did not occur, so the siblings judge too.
+        ours = {self.ON, self.OFF, self.ON_COUNT, self.OFF_COUNT}
+        assert judges(ours, {self.ON_COUNT}) == {
+            "sensor_grid": {self.ON, self.OFF},
+        }
+
+    def test_a_family_without_durations_is_judged_on_what_was_asked(self):
+        ours = {self.ON_COUNT, self.OFF_COUNT}
+        assert judges(ours, {self.ON_COUNT, self.OFF_COUNT}) == {
+            "sensor_grid": {self.ON_COUNT, self.OFF_COUNT},
+        }
+
+    def test_another_entitys_duration_does_not_judge_this_one(self):
+        ours = {self.ON_COUNT, self.OTHER}
+        assert judges(ours, {self.ON_COUNT}) == {"sensor_grid": {self.ON_COUNT}}
+
+    def test_an_unparseable_id_is_its_own_family(self):
+        renamed = "discrete_statistics:renamed"
+        ours = {self.ON, self.OFF, renamed}
+        assert judges(ours, {renamed, self.ON_COUNT}) == {
+            renamed: {renamed},
+            "sensor_grid": {self.ON, self.OFF},
+        }
+
+    def test_a_family_is_the_entity_slug_of_an_id_we_built(self):
+        assert family_of(self.ON) == "sensor_grid"
+        assert family_of("discrete_statistics:renamed") == (
+            "discrete_statistics:renamed"
         )
-        e = [0.0, 24 * HOUR, 48 * HOUR]
-        before, calls = _lookup(rows)
-
-        result = cut(e, _at(rows, e), before)
-
-        assert result == [
-            Bucket(0.0, 24 * HOUR, 20.0),
-            Bucket(24 * HOUR, 48 * HOUR, 18.0),
-        ]
-        assert calls == [1]
-
-    def test_a_hole_inside_a_bucket_stays_in_its_span(self):
-        rows = [Row(h * HOUR, float(h + 1)) for h in range(10)] + [
-            Row(h * HOUR, 10.0 + (h - 13)) for h in range(14, 24)
-        ]
-        e = [0.0, 24 * HOUR]
-        before, _ = _lookup(rows)
-
-        assert cut(e, _at(rows, e), before) == [Bucket(0.0, 24 * HOUR, 20.0)]
-
-    def test_a_hole_starting_on_an_edge_stays_in_the_bucket_after_it(self):
-        # Rows for hours 0-23 and 30-47: the row before the edge at 24 is
-        # there, so no lookup is needed and the hole is inside the second
-        # bucket, as any inner hole is.
-        rows = _running(
-            [Row(h * HOUR, float(h + 1)) for h in range(24)]
-            + [Row(h * HOUR, 24.0 + (h - 29)) for h in range(30, 48)]
-        )
-        e = [0.0, 24 * HOUR, 48 * HOUR]
-        before, calls = _lookup(rows)
-
-        result = cut(e, _at(rows, e), before)
-
-        assert result == [
-            Bucket(0.0, 24 * HOUR, 24.0),
-            Bucket(24 * HOUR, 48 * HOUR, 18.0),
-        ]
-        assert calls == [0]
-
-    def test_an_empty_bucket_is_left_out(self):
-        rows = _dense(range(24)) + [
-            Row(h * HOUR, 6.0 + 0.25 * (h - 47)) for h in range(48, 72)
-        ]
-        e = [0.0, 24 * HOUR, 48 * HOUR, 72 * HOUR]
-        before, _ = _lookup(rows)
-
-        result = cut(e, _at(rows, e), before)
-
-        assert [b.start for b in result] == [0.0, 48 * HOUR]
-        assert result[1].change == 6.0
-
-    def test_a_long_run_of_empty_edges_costs_one_lookup(self):
-        # A statistic that begins in the last of ten buckets: every earlier
-        # edge misses, and one answer covers them all.
-        rows = _dense(range(9 * 24, 10 * 24))
-        e = [float(d * 24 * HOUR) for d in range(11)]
-        before, calls = _lookup(rows)
-
-        result = cut(e, _at(rows, e), before)
-
-        assert result == [Bucket(9 * 24 * HOUR, 10 * 24 * HOUR, 6.0)]
-        assert calls == [1]
-
-    def test_no_rows_at_all(self):
-        before, _ = _lookup([])
-        assert cut([0.0, HOUR], {}, before) == []
-
-    def test_fewer_than_two_edges(self):
-        before, _ = _lookup(_dense(range(2)))
-        assert cut([0.0], {}, before) == []
 
 
 @pytest.mark.parametrize("period", ["hour", "day", "week", "month", "year"])

@@ -28,6 +28,7 @@ def cfg(name=None):
 DURATION_ON = "discrete_statistics:binary_sensor_grid_status_on_duration"
 COUNT_ON = "discrete_statistics:binary_sensor_grid_status_on_count"
 DURATION_OFF = "discrete_statistics:binary_sensor_grid_status_off_duration"
+COUNT_OFF = "discrete_statistics:binary_sensor_grid_status_off_count"
 
 
 def test_single_hour_single_state():
@@ -43,9 +44,6 @@ def test_single_hour_single_state():
         {
             "start": datetime.fromtimestamp(T0, tz=timezone.utc),
             "sum": 1.0,
-            "mean": 1.0,
-            "min": 1.0,
-            "max": 1.0,
         }
     ]
 
@@ -74,19 +72,6 @@ def test_base_sums_continue_the_running_total():
     )
     _, rows = payloads[DURATION_ON]
     assert rows[0]["sum"] == 500.0 + 1.0
-
-
-def test_rows_are_dense_even_when_a_state_is_absent_from_an_hour():
-    # "off" occurs only in the second hour, but must have a row in both.
-    buckets = {
-        ("on", T0): (HOUR, 0),
-        ("off", T0 + HOUR): (HOUR, 1),
-    }
-    payloads = build_payloads(cfg(), buckets, T0, T0 + 2 * HOUR, {})
-    _, off_rows = payloads[DURATION_OFF]
-    assert len(off_rows) == 2
-    assert off_rows[0]["sum"] == 0.0
-    assert off_rows[1]["sum"] == 1.0
 
 
 def test_sums_never_decrease():
@@ -121,68 +106,100 @@ def test_start_times_are_utc_aware():
     assert rows[0]["start"].tzinfo is not None
 
 
-def test_metadata_declares_an_arithmetic_mean_alongside_the_sum():
-    """A statistic carries both, and the two answer different questions."""
-    payloads = build_payloads(cfg(), {("on", T0): (HOUR, 0)}, T0, T0 + HOUR, {})
-    metadata, _ = payloads[DURATION_ON]
-    assert metadata["has_sum"] is True
-    assert metadata["has_mean"] is True
-    assert metadata["mean_type"] == StatisticMeanType.ARITHMETIC
+def test_an_hour_in_one_state_writes_one_duration_row_and_no_count_row():
+    # A whole hour on, carried in: seconds but no transition.
+    buckets = {("on", T0): (3600.0, 0)}
+    payloads = build_payloads(cfg(), buckets, T0, T0 + HOUR, {})
+
+    _, on = payloads[DURATION_ON]
+    assert [(r["start"].timestamp(), r["sum"]) for r in on] == [(T0, 1.0)]
+    assert payloads[COUNT_ON][1] == []
+    assert set(on[0]) == {"start", "sum"}
 
 
-def test_mean_min_and_max_are_the_hourly_value_not_the_running_sum():
-    """The sum accumulates; mean/min/max describe the hour on its own.
+def test_a_transition_writes_a_count_row_for_the_state_entered_and_durations_for_both():
+    # Off for the first half hour, then on.
+    buckets = {("off", T0): (1800.0, 0), ("on", T0): (1800.0, 1)}
+    payloads = build_payloads(cfg(), buckets, T0, T0 + HOUR, {})
 
-    Writing the running sum into `mean` would make a day's average climb
-    forever instead of reporting the average hour.
-    """
-    buckets = {
-        ("on", T0): (HOUR, 1),
-        ("on", T0 + HOUR): (HOUR / 2, 3),
-        ("on", T0 + 2 * HOUR): (HOUR, 1),
-    }
-    payloads = build_payloads(cfg(), buckets, T0, T0 + 3 * HOUR, {})
-
-    _, duration_rows = payloads[DURATION_ON]
-    assert [row["sum"] for row in duration_rows] == [1.0, 1.5, 2.5]
-    assert [row["mean"] for row in duration_rows] == [1.0, 0.5, 1.0]
-    assert [row["min"] for row in duration_rows] == [1.0, 0.5, 1.0]
-    assert [row["max"] for row in duration_rows] == [1.0, 0.5, 1.0]
-
-    _, count_rows = payloads[COUNT_ON]
-    assert [row["sum"] for row in count_rows] == [1, 4, 5]
-    assert [row["mean"] for row in count_rows] == [1, 3, 1]
+    assert [r["sum"] for r in payloads[DURATION_OFF][1]] == [0.5]
+    assert [r["sum"] for r in payloads[DURATION_ON][1]] == [0.5]
+    assert [r["sum"] for r in payloads[COUNT_ON][1]] == [1]
+    assert payloads[COUNT_OFF][1] == []
 
 
-def test_a_quiet_hour_gets_a_zero_mean_not_a_missing_one():
-    """A state seen elsewhere in the window still gets a zero-valued hour.
+def test_a_quiet_hour_writes_nothing_for_an_absent_state_but_the_sum_still_carries():
+    # On in hour 0 and hour 2, absent in hour 1: two rows, the second
+    # continuing from the first.
+    buckets = {("on", T0): (3600.0, 0), ("on", T0 + 2 * HOUR): (1800.0, 1)}
+    _, rows = build_payloads(cfg(), buckets, T0, T0 + 3 * HOUR, {})[DURATION_ON]
 
-    `_reduce_statistics` skips rows whose mean is None, so an omitted hour
-    would silently raise a day's average by leaving out the quiet hours.
-    Both states are in the buckets here - see the test below for the harder
-    case, where the statistic is known only from `existing`.
-    """
-    buckets = {("on", T0): (HOUR, 1), ("off", T0 + HOUR): (HOUR, 1)}
-    payloads = build_payloads(
+    assert [(r["start"].timestamp(), r["sum"]) for r in rows] == [
+        (T0, 1.0),
+        (T0 + 2 * HOUR, 1.5),
+    ]
+
+
+def test_a_standing_row_is_rewritten_even_when_the_state_is_absent():
+    # Hour 1 once held a row for "on"; a recompile finds "on" absent there.
+    # Without the rewrite the old row's higher sum would stand ahead of
+    # every later one.
+    buckets = {("on", T0): (3600.0, 0), ("off", T0 + HOUR): (3600.0, 1)}
+    _, rows = build_payloads(
         cfg(),
         buckets,
         T0,
         T0 + 2 * HOUR,
         {},
-        {DURATION_ON: "x: on (h)", DURATION_OFF: "x: off (h)"},
-    )
-    _, on_rows = payloads[DURATION_ON]
-    assert [row["mean"] for row in on_rows] == [1.0, 0.0]
+        standing={DURATION_ON: {T0 + HOUR}},
+    )[DURATION_ON]
+
+    assert [(r["start"].timestamp(), r["sum"]) for r in rows] == [
+        (T0, 1.0),
+        (T0 + HOUR, 1.0),
+    ]
 
 
-def test_base_sums_do_not_leak_into_the_mean():
-    """A carried-over base belongs to the sum alone."""
+@pytest.mark.parametrize(
+    ("stands", "expected"),
+    [
+        # Outside the window: no row of its own, and none conjured for the
+        # hour it names.
+        (T0 + 5 * HOUR, [(T0, 1.0)]),
+        # Inside it: the quiet hour is rewritten with the carried sum.
+        (T0 + HOUR, [(T0, 1.0), (T0 + HOUR, 1.0)]),
+    ],
+)
+def test_a_standing_row_is_rewritten_only_inside_the_window(stands, expected):
+    buckets = {("on", T0): (3600.0, 0)}
+    _, rows = build_payloads(
+        cfg(), buckets, T0, T0 + 2 * HOUR, {}, standing={DURATION_ON: {stands}}
+    )[DURATION_ON]
+    assert [(r["start"].timestamp(), r["sum"]) for r in rows] == expected
+
+
+def test_metadata_declares_a_sum_and_no_mean():
+    payloads = build_payloads(cfg(), {("on", T0): (3600.0, 0)}, T0, T0 + HOUR, {})
+    metadata, _ = payloads[DURATION_ON]
+    assert metadata["has_sum"] is True
+    assert metadata["has_mean"] is False
+    assert metadata["mean_type"] is StatisticMeanType.NONE
+
+
+def test_a_statistic_with_nothing_to_write_still_carries_its_metadata():
+    # Known only from `existing`, absent from the window: no rows, but the
+    # metadata - and so the name - is still returned for the import.
     payloads = build_payloads(
-        cfg(), {("on", T0): (HOUR, 0)}, T0, T0 + HOUR, {DURATION_ON: 500.0}
+        cfg(name="Grid"),
+        {("on", T0): (3600.0, 0)},
+        T0,
+        T0 + HOUR,
+        {DURATION_OFF: 4.0},
+        existing={DURATION_OFF: "Old: off (h)"},
     )
-    _, rows = payloads[DURATION_ON]
-    assert rows[0]["sum"] == 501.0
-    assert rows[0]["mean"] == 1.0
+    metadata, rows = payloads[DURATION_OFF]
+    assert rows == []
+    assert metadata["name"] == "Grid: off (h)"
 
 
 DURATION_HEATCOOL = "discrete_statistics:binary_sensor_grid_status_heatcool_duration"
@@ -225,8 +242,9 @@ def test_a_rename_reaches_a_state_absent_from_the_window():
         {},
         {DURATION_ON: "Old Name: on (h)"},
     )
-    metadata, _ = payloads[DURATION_ON]
+    metadata, rows = payloads[DURATION_ON]
     assert metadata["name"] == "Grid Status: on (h)"
+    assert rows == []
 
 
 def test_a_rename_survives_a_colon_in_the_old_display_name():
@@ -252,26 +270,21 @@ def test_an_unrecognisable_name_is_left_alone_rather_than_mangled():
 
 
 def test_a_statistic_known_only_from_existing_is_carried_at_its_base():
-    """The density case that has no bucket at all.
+    """A base sum from `existing` still carries once the state recurs.
 
-    Nothing of this statistic's state occurs in the window, so its rows can
-    only come from `existing`. It must still get one per hour, holding its
-    cumulative sum flat and reporting a zero hourly value - otherwise the
-    next window finds no row in the hour before it, restarts the sum at zero
-    and the series goes backwards for good.
+    "off" is quiet in the first hour and has no row there, but its second
+    hour's row must continue from the stored base rather than from zero.
     """
     payloads = build_payloads(
         cfg(),
-        {("on", T0): (HOUR, 1)},
+        {("on", T0): (HOUR, 1), ("off", T0 + HOUR): (HOUR, 1)},
         T0,
         T0 + 2 * HOUR,
         {DURATION_OFF: 7.5},
         {DURATION_OFF: "x: off (h)"},
     )
     _, off_rows = payloads[DURATION_OFF]
-    assert [row["sum"] for row in off_rows] == [7.5, 7.5]
-    assert [row["mean"] for row in off_rows] == [0.0, 0.0]
-    assert [row["max"] for row in off_rows] == [0.0, 0.0]
+    assert [row["sum"] for row in off_rows] == [8.5]
 
 
 def test_a_colon_in_the_state_cannot_break_a_later_rename():

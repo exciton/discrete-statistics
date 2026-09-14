@@ -1,12 +1,12 @@
-"""The card's query: per-period buckets straight from the rows at the edges.
+"""The card's query: per-period buckets from the rows that answer the edges.
 
 `recorder/statistics_during_period` reads every hourly row in the range
-and reduces them in Python whatever the period is asked for. Our sums are
-cumulative and dense, so the card's buckets need only one row per edge:
-one `start_ts IN (...)` query for every statistic at once - a range query
-when the edges are hours, since then every row is wanted - then a
-`LIMIT 1` lookup before any edge that query left blank. The arithmetic is
-in `buckets` and the queries in `rows`; this module only reads.
+and reduces them in Python whatever the period is asked for. Our sums
+are cumulative, so a bucket needs only the newest row before each of its
+edges, which `rows.edge_rows` answers in one statement. The entity's
+duration statistics ride along so a bucket can be told compiled from a
+hole. The arithmetic is in `buckets` and the queries in `rows`; this
+module only joins the two.
 """
 
 from __future__ import annotations
@@ -17,27 +17,39 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.components.recorder import get_instance
-from homeassistant.components.recorder.statistics import get_metadata_with_session
 from homeassistant.components.recorder.util import session_scope
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import dt as dt_util
 
-from .buckets import Bucket, Period, cut, edges, hours_wanted
+from .buckets import (
+    Bucket,
+    Period,
+    before_edges,
+    cut,
+    edges,
+    family_of,
+    has_row,
+    judges,
+)
 from .const import DOMAIN, HOUR
-from .rows import newest_before, rows_at, rows_between
+from .rows import edge_rows, metadata_ids
+from .statistic_ids import family
 
 # The most buckets one request may ask for. A chart cannot show more, and
-# the edges, the `IN` list and the rows all grow with the count, so a
-# range of centuries must be refused rather than walked on the
-# recorder's thread.
+# the edges and the rows grow with the count - as do the statement's arms
+# on MySQL/MariaDB - so a range of centuries must be refused rather than
+# walked on the recorder's thread.
 MAX_BUCKETS = 10_000
 # The shortest a period can be, for bounding the count before walking it.
+# A spring-forward can only cost a period one hour, however many days it
+# spans, so every period past "hour" is nominal minus one - not nominal
+# minus one per day.
 _SHORTEST: dict[Period, float] = {
     "hour": HOUR,
     "day": 23 * HOUR,
-    "week": 7 * 23 * HOUR,
-    "month": 28 * 24 * HOUR,
-    "year": 365 * 24 * HOUR,
+    "week": 7 * 24 * HOUR - HOUR,
+    "month": 28 * 24 * HOUR - HOUR,
+    "year": 365 * 24 * HOUR - HOUR,
 }
 
 COMMAND = f"{DOMAIN}/buckets"
@@ -110,34 +122,35 @@ def _buckets(
 
     The edges are aligned in the instance's timezone, as the recorder
     aligns its own, so a chart shows the same days and months whichever
-    command drew it.
+    command drew it. The statistics that judge gap from zero ride along
+    in the read, so a chart of one rare state does not show a gap in
+    every period it did not occur.
     """
     edges_ = edges(start, end, period, dt_util.get_default_time_zone())
     with session_scope(hass=hass, read_only=True) as session:
-        metadata = get_metadata_with_session(
-            get_instance(hass), session, statistic_ids=statistic_ids
-        )
-        ids = {
-            metadata_id: statistic_id
-            for statistic_id, (metadata_id, _) in metadata.items()
+        slugs = {slug for sid in statistic_ids if (slug := family(sid)) is not None}
+        ours = metadata_ids(session, statistic_ids, slugs)
+        requested = {sid for sid in statistic_ids if sid in ours}
+        if not requested:
+            return {}
+        judged_by = judges(ours, requested)
+        wanted = requested.union(*judged_by.values())
+        ids = {sid: ours[sid] for sid in wanted}
+        found = edge_rows(session, ids.values(), edges_, hourly=period == "hour")
+        before = {
+            sid: before_edges(found.get(mid, ()), edges_) for sid, mid in ids.items()
         }
-        # Hourly edges want every row in the range, which a range asks
-        # for better than a list of every hour in it.
-        at = (
-            rows_between(session, set(ids), edges_[0] - HOUR, edges_[-1])
-            if period == "hour"
-            else rows_at(session, set(ids), hours_wanted(edges_))
-        )
+
+        def compiled_by(slug: str):
+            judged = [before[sid] for sid in judged_by[slug]]
+            return lambda a, b: any(has_row(rows, a, b) for rows in judged)
+
         return {
-            statistic_id: [
+            sid: [
                 _serialise(b)
-                for b in cut(
-                    edges_,
-                    at.get(metadata_id, {}),
-                    lambda edge, m=metadata_id: newest_before(session, m, edge),
-                )
+                for b in cut(edges_, before[sid], compiled_by(family_of(sid)))
             ]
-            for metadata_id, statistic_id in ids.items()
+            for sid in requested
         }
 
 

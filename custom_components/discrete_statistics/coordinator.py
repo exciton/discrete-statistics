@@ -2,8 +2,9 @@
 
 A refresh drains the recorder's write queue, then reads what it holds
 for the entity once - its statistics, the watermark, the series start -
-then the sums at each edge the sensors between them ask for, then one
-live tail from the watermark end, and computes every sensor from those.
+then the sums at the edges the sensors between them ask for - every edge
+the cache does not answer, in the one read - then one live tail from the
+watermark end, and computes every sensor from those.
 The drain belongs to the refresh rather than to any one of its triggers,
 so whichever of them asked reads rows that are already written. It runs
 after each compile (the compiler's dispatcher signal), on each change of
@@ -23,15 +24,12 @@ reflected within `REFRESH_COOLDOWN` of it instead.
 from __future__ import annotations
 
 import logging
-import math
 from datetime import timedelta
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ENTITY_ID
 from homeassistant.core import CoreState, Event, HomeAssistant, callback
-from homeassistant.exceptions import TemplateError
-from homeassistant.helpers import template
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import (
@@ -44,57 +42,53 @@ from homeassistant.util import dt as dt_util
 from . import rows
 from .compiler import Compiler, Timeline, compiled_signal
 from .config import EntityConfig
-from .const import DOMAIN, HOUR, METRIC_DURATION, SUBENTRY_SENSOR
+from .const import DOMAIN, HOUR, SUBENTRY_SENSOR
 from .periods import custom_window
 from .reading import (
     Frame,
     Partial,
     PartialValue,
-    Pieces,
+    Plan,
     Reading,
     Spec,
     compute,
     edges_of,
     exact_partial,
+    hour_change,
     plan,
     prorate,
     spec_from,
 )
-from .statistic_ids import parse
+from .templates import render_datetime
 
 _LOGGER = logging.getLogger(__name__)
 
 # How long a run of state changes is gathered into one refresh.
 REFRESH_COOLDOWN = 2.0
 REASON_TEMPLATE = "template"
-# `datetime`'s own range, with room: past it a rendering raises rather
-# than answering.
-_TIMESTAMP_LIMIT = 2.5e11
 
 
-def render_datetime(hass: HomeAssistant, text: str) -> float:
-    """A template's rendering as a timestamp, or ValueError saying why not.
+async def frame_of(compiler: Compiler, hass: HomeAssistant, entity_id: str) -> Frame:
+    """What the recorder holds for the entity, in one assembly.
 
-    What `history_stats` accepts: a date and time, or a timestamp. The
-    flow renders once on submit with this same call, so a template that
-    saves is one that renders - as long as what it reads still exists.
+    Shared with the benchmark harness, so what it measures is the read a
+    refresh actually does.
     """
-    try:
-        rendered = template.Template(text, hass).async_render(parse_result=False)
-    except TemplateError as err:
-        raise ValueError(str(err)) from err
-    if (parsed := dt_util.parse_datetime(rendered)) is not None:
-        return dt_util.as_utc(parsed).timestamp()
-    try:
-        value = float(rendered)
-    except ValueError:
-        raise ValueError(f"{rendered!r} is not a date and time") from None
-    # `nan`, `inf` and a number far outside any date reach hour arithmetic
-    # that raises rather than answers, so they are refused here, where the
-    # dialog sees them too.
-    if not math.isfinite(value) or abs(value) > _TIMESTAMP_LIMIT:
-        raise ValueError(f"{rendered!r} is not a date and time")
-    return value
+    existing, watermark = await compiler.async_compiled(entity_id)
+    series_start = (
+        await get_instance(hass).async_add_executor_job(
+            rows.series_start, hass, set(existing)
+        )
+        if existing
+        else None
+    )
+    earliest = await compiler.async_earliest_state_ts(entity_id)
+    return Frame(
+        existing,
+        None if watermark is None else watermark + HOUR,
+        series_start,
+        earliest,
+    )
 
 
 class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
@@ -118,6 +112,9 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
         self._sums: dict[tuple[str, float], float] = {}
         self._known: frozenset[str] | None = None
         self._hours: dict[float, Timeline | None] = {}
+        # Bumped by every compile, so a refresh can tell whether what it
+        # read still describes the caches it is about to write back to.
+        self._generation = 0
         entity_id = entry.data[CONF_ENTITY_ID]
         entry.async_on_unload(
             async_dispatcher_connect(hass, compiled_signal(entity_id), self._compiled)
@@ -137,8 +134,9 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
         # range still stands and one after it does not: a finished window
         # keeps its sums across every hourly compile. Hour timelines go
         # regardless - a recompile after a mapping change reads the same
-        # rows differently. New objects rather than mutation, for the
-        # refresh in flight - see `_async_update_data`.
+        # rows differently. New objects rather than mutation: the refresh
+        # in flight goes on writing into the ones it captured.
+        self._generation += 1
         self._frame = None
         self._sums = {k: v for k, v in self._sums.items() if k[1] <= start}
         self._hours = {}
@@ -208,20 +206,12 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
                 )
             if (timeline := hours[partial.hour]) is not None:
                 return exact_partial(partial, timeline)
-        seconds: dict[str, float] = {}
-        counts: dict[str, float] = {}
-        for statistic_id in frame.existing:
-            if (parts := parse(statistic_id)) is None:
-                continue
-            token, metric = parts[1], parts[2]
-            change = sums.get((statistic_id, partial.hour + HOUR), 0.0) - sums.get(
-                (statistic_id, partial.hour), 0.0
-            )
-            if metric == METRIC_DURATION:
-                seconds[token] = seconds.get(token, 0.0) + change * HOUR
-            else:
-                counts[token] = counts.get(token, 0.0) + change
-        return prorate(partial, seconds, counts)
+        change = hour_change(
+            frame.existing,
+            lambda statistic_id, edge: sums.get((statistic_id, edge), 0.0),
+            partial.hour,
+        )
+        return prorate(partial, *change)
 
     async def _async_update_data(self) -> dict[str, Reading]:
         entry = self.config_entry
@@ -250,43 +240,28 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
         now = dt_util.utcnow().timestamp()
         tz = dt_util.get_default_time_zone()
 
-        # A compile can land in any of the awaits below, and `_compiled`
-        # answers it by dropping the frame and putting fresh caches in
-        # place. Everything read here predates that compile, so it is
-        # written to the cache objects this refresh started with: a stale
-        # sum installed in the new cache would be read as a hit and hide
-        # the trailing window's rewrite of that hour until the compile
-        # after it.
+        # Everything below predates any compile that lands in one of its
+        # awaits, so it is written back only while the generation stands:
+        # otherwise a stale sum this refresh read before the compile would
+        # land in the fresh cache, read as a hit, and hide that hour's
+        # rewrite.
+        generation = self._generation
         sums = self._sums
         hours = self._hours
         frame = self._frame
         if frame is None:
-            existing, watermark = await self._compiler.async_compiled(cfg.entity_id)
+            frame = await frame_of(self._compiler, self.hass, cfg.entity_id)
             # A statistic the user deleted and the entity then returned to is
             # written again from a base of zero, which the compile's range
             # does not say, so its cached sums at older edges are on the base
             # it had before: the whole cache goes when the known set changes.
             # Cleared rather than replaced, so a compile landing mid-refresh
-            # still owns the identity tested below.
-            known = frozenset(existing)
+            # keeps the fresh cache it installed.
+            known = frozenset(frame.existing)
             if self._known is not None and known != self._known:
                 sums.clear()
             self._known = known
-            series_start = (
-                await get_instance(self.hass).async_add_executor_job(
-                    rows.series_start, self.hass, set(existing)
-                )
-                if existing
-                else None
-            )
-            earliest = await self._compiler.async_earliest_state_ts(cfg.entity_id)
-            frame = Frame(
-                existing,
-                None if watermark is None else watermark + HOUR,
-                series_start,
-                earliest,
-            )
-            if self._sums is sums:
+            if generation == self._generation:
                 self._frame = frame
 
         readings: dict[str, Reading] = {}
@@ -302,7 +277,7 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
             windows[subentry_id] = window
         wanted = {k: v for k, v in specs.items() if k not in readings}
 
-        plans: dict[str, Pieces | None] = {}
+        plans: dict[str, Plan] = {}
         for subentry_id, spec in wanted.items():
             try:
                 plans[subentry_id] = plan(spec, frame, now, tz, windows[subentry_id])
@@ -314,29 +289,36 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
         # one costs no read at all.
         timeline = None
         if frame.watermark_end is not None and any(
-            spec.live and plans[subentry_id] is not None and plans[subentry_id].tail
+            spec.live
+            and (parts := plans[subentry_id].pieces) is not None
+            and parts.tail
             for subentry_id, spec in wanted.items()
         ):
             timeline = await self._compiler.async_tail(cfg, frame.watermark_end, now)
 
         edges: set[float] = set()
-        for pieces in plans.values():
-            edges |= edges_of(pieces)
-        for edge in edges:
-            if all((sid, edge) in sums for sid in frame.existing):
-                continue
-            at_edge = await get_instance(self.hass).async_add_executor_job(
-                rows.sums_at, self.hass, set(frame.existing), edge
+        for planned in plans.values():
+            edges |= edges_of(planned)
+        # Every edge the cache does not already answer, in the one read.
+        missing = {
+            edge
+            for edge in edges
+            if not all((sid, edge) in sums for sid in frame.existing)
+        }
+        if missing:
+            at_edges = await get_instance(self.hass).async_add_executor_job(
+                rows.sums_at_edges, self.hass, set(frame.existing), missing
             )
-            for statistic_id in frame.existing:
-                sums[(statistic_id, edge)] = at_edge.get(statistic_id, 0.0)
+            for edge, at_edge in at_edges.items():
+                for statistic_id in frame.existing:
+                    sums[(statistic_id, edge)] = at_edge.get(statistic_id, 0.0)
 
         partials: dict[Partial, PartialValue] = {}
         used_hours: set[float] = set()
-        for pieces in plans.values():
-            if pieces is None:
+        for planned in plans.values():
+            if planned.pieces is None:
                 continue
-            for partial in pieces.partials:
+            for partial in planned.pieces.partials:
                 used_hours.add(partial.hour)
                 if partial not in partials:
                     partials[partial] = await self._partial(
@@ -352,12 +334,11 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
                     cfg,
                     spec,
                     frame,
+                    plans[subentry_id],
                     sum_at,
                     partials.get,
                     timeline,
                     now,
-                    tz,
-                    windows[subentry_id],
                 )
             except (ArithmeticError, ValueError) as err:
                 readings[subentry_id] = self._unreadable(subentry_id, err)
@@ -365,7 +346,7 @@ class PeriodCoordinator(DataUpdateCoordinator[dict[str, Reading]]):
         # Only the edges and hours this refresh planned are worth keeping:
         # a rolling window leaves one behind every hour and a template one
         # every refresh, and nothing else evicts them.
-        if self._sums is sums:
+        if generation == self._generation:
             self._sums = {k: v for k, v in sums.items() if k[1] in edges}
             self._hours = {h: t for h, t in hours.items() if h in used_hours}
         return readings

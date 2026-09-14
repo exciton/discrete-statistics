@@ -7,15 +7,14 @@ import type { HassLike } from "./types";
 
 // mdi:drag-horizontal-variant, the handle the stock row editors use.
 const DRAG_ICON = "M21 11H3V9H21V11M21 13H3V15H21V13Z";
-// The frontend's theme colours plus an entry for the palette, which is
-// what a row has until a colour is picked - shown in the colour the
-// chart would give that row, so the picker says what "automatic" means.
-// A row without a colour hands the picker no value, so it shows that
-// default without the clear button a chosen colour gets.
 const AUTO = "auto";
-// The switch the form draws for its own boolean fields, so the tick under
-// the list looks like the one beside it.
+// The switch `ha-form` draws for its own boolean fields, so the tick under
+// the list looks like the ones beside it.
 const IGNORE_NEW_SELECTOR = { boolean: {} };
+// The theme colours plus an "automatic" entry, drawn in the colour the
+// chart would give the row so the picker says what automatic means. A row
+// with no colour hands the picker no value, so it shows that default
+// without the clear button a chosen colour gets.
 const colorSelector = (automatic: string) => ({
   ui_color: {
     default_color: AUTO,
@@ -23,14 +22,12 @@ const colorSelector = (automatic: string) => ({
   },
 });
 
-// One row per state: a drag handle, a tick for whether it is drawn, its
-// name — the stored one as the placeholder, so a row reads the same
-// until it is renamed — and a colour. `ha-sortable` is the frontend's own, which every
-// dashboard view loads; `ha-input` is what every `ha-form` text field is,
-// so the editor dialog has it; a ui_color selector is fetched by
-// `ha-selector` on first use — so none needs importing here. Changes are announced
-// as a whole new list through `value-changed`; the editor turns it into
-// config.
+// One row per state: drag handle, drawn tick, name — the stored one as the
+// placeholder, so a row reads the same until it is renamed — and colour.
+// Nothing here needs importing: `ha-sortable` comes with every dashboard
+// view, `ha-input` with every `ha-form`, and `ha-selector` fetches the
+// ui_color selector on first use. Changes go out as a whole new list
+// through `value-changed`; the editor turns it into config.
 export class DiscreteStatisticsStateList extends LitElement {
   @property({ attribute: false }) public hass?: HassLike;
 

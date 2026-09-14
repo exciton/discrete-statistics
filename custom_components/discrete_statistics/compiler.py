@@ -11,9 +11,7 @@ from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.history import state_changes_during_period
 from homeassistant.components.recorder.statistics import (
     async_add_external_statistics,
-    get_last_statistics,
     get_metadata,
-    statistics_during_period,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_send
@@ -25,6 +23,7 @@ from .config import EntityConfig
 from .const import DOMAIN, HOUR, METRIC_DURATION
 from .naming import async_warm_state_translations, display_name, state_translator
 from .payload import build_payloads, readable_state
+from .rows import bases, series_end, standing
 from .statistic_ids import belongs_to, parse
 
 # Recompute this many trailing hours on every run, so a state committed by
@@ -64,7 +63,8 @@ class _ChunkState(NamedTuple):
 
     `existing` is every statistic the entity has, including any this chunk
     created - which the recorder cannot report yet, and which the next chunk
-    needs in order to stay dense.
+    needs to relabel every statistic and to know which standing rows it
+    must rewrite.
 
     `carried` is the state in effect at the chunk's end, which the next
     chunk opens in. It is also simply more accurate than any query: the
@@ -107,14 +107,14 @@ def _carried_from_statistics(
     Our own rows already encode the carry-forward decision - an hour spent
     `unavailable` under `record_known` was written as the state carried into
     it, not as a gap - so they are the resolved timeline, which is exactly
-    what a lookback into raw history is trying to reconstruct. And density
-    guarantees a row for that hour however long the entity has been quiet,
-    so there is no distance limit.
+    what a lookback into raw history is trying to reconstruct. And the state
+    the hour was spent in always has a row there however long the entity has
+    been quiet, so there is no distance limit.
 
-    Only when one duration statistic accounts for the hour. Several mean
-    transitions happened inside it, so the recorder has rows there and
+    Only when exactly one duration statistic changed in the hour. Several
+    mean transitions happened inside it, so the recorder has rows there and
     `include_start_time_state` finds them: the two sources answer disjoint
-    questions.
+    questions. A row standing with no change is not a change.
     """
     held = [
         (statistic_id, parts[1])
@@ -166,12 +166,11 @@ class Compiler:
                 return 0
         else:
             start = watermark - (TRAILING_HOURS - 1) * HOUR
-        # `existing` is deliberately NOT handed on. It looks like a wasted
-        # query, but this read happens before _async_watermark's round-trips
-        # and only the later one in async_compile reliably reflects a
-        # statistic deleted moments earlier. Merging them makes the deletion
-        # tests flaky one run in three, and a stale view leaves statistics
-        # sparse, which cannot be repaired.
+        # `existing` is deliberately NOT handed on: this read happens
+        # before `_async_watermark`'s own, and only the later read in
+        # `async_compile` reliably reflects a statistic deleted moments
+        # earlier. A stale view leaves a statistic unrelabelled and its
+        # standing rows unrewritten.
         return await self.async_compile(cfg, start)
 
     async def async_compile(
@@ -223,11 +222,12 @@ class Compiler:
                 compiled += hours
                 chunk_start = chunk_end
         finally:
-            # async_add_external_statistics only enqueues, and density is
-            # read live from statistics_meta. In `finally` because a chunk
+            # async_add_external_statistics only enqueues, and the standing
+            # rows and the metadata are read live. In `finally` because a chunk
             # that raises leaves earlier chunks' writes queued: the next
-            # compile would then see half of them, leave the rest sparse, and
-            # the window after that would restart those at zero.
+            # compile would then see half of them, leave the rest
+            # unrewritten, and the window after that would restart those at
+            # zero.
             await get_instance(self._hass).async_block_till_done()
 
         if compiled:
@@ -338,10 +338,12 @@ class Compiler:
 
         buckets = bucket(carried, transitions, window_start, chunk_end)
 
-        # Every statistic this entity already has must get a row in every
-        # hour, even when this window saw nothing of its state. Otherwise the
-        # next window finds no row in the hour before it, restarts that
-        # statistic's cumulative sum from zero and loses the running total.
+        # A row that already stands in the window is rewritten even when
+        # its state is absent now, or its old sum would stand ahead of
+        # every later one; nothing deletes.
+        stands = await get_instance(self._hass).async_add_executor_job(
+            standing, self._hass, set(state.existing), window_start, chunk_end
+        )
         payloads = build_payloads(
             cfg,
             buckets,
@@ -351,13 +353,19 @@ class Compiler:
             state.existing,
             display=display_name(self._hass, cfg.entity_id, cfg.name),
             translate=state_translator(self._hass, cfg.entity_id),
+            standing=stands,
         )
 
         next_sums = dict(sums)
         next_existing = dict(state.existing)
         for statistic_id, (metadata, statistic_rows) in payloads.items():
             async_add_external_statistics(self._hass, metadata, statistic_rows)
-            next_sums[statistic_id] = statistic_rows[-1]["sum"]
+            # No row means every hour's value was zero: the sum is where it was.
+            next_sums[statistic_id] = (
+                statistic_rows[-1]["sum"]
+                if statistic_rows
+                else sums.get(statistic_id, 0.0)
+            )
             next_existing[statistic_id] = metadata["name"]
 
         return (
@@ -499,109 +507,48 @@ class Compiler:
     async def _async_watermark(self, statistic_ids: Collection[str]) -> float | None:
         """Return the newest compiled hour for an entity, or None.
 
-        Takes the max across every one of the entity's statistics: density
-        is guaranteed only for statistics that existed when a window was
-        compiled, so any single ID can lag the others.
+        The max across every one of the entity's statistics: a statistic
+        gets a row only where it has something to record, so any single ID
+        can lag the others by any distance. `rows.series_end` answers all
+        of them in one read, a seek per statistic.
         """
         if not statistic_ids:
             return None
-        newest: float | None = None
-        for statistic_id in statistic_ids:
-            result = await get_instance(self._hass).async_add_executor_job(
-                get_last_statistics,
-                self._hass,
-                1,
-                statistic_id,
-                True,
-                {"sum"},
-            )
-            if rows := result.get(statistic_id):
-                start = rows[0]["start"]
-                if newest is None or start > newest:
-                    newest = start
-        return newest
+        return await get_instance(self._hass).async_add_executor_job(
+            series_end, self._hass, set(statistic_ids)
+        )
 
     async def _async_base(
         self, statistic_ids: Collection[str], window_start: float
     ) -> tuple[dict[str, float], dict[str, float]]:
         """Return the sums the window continues from, and the previous hour's values.
 
-        Both come from one query of the hour before the window. The values
-        are how much of that hour each statistic accounted for, which is
-        what `_carried_from_statistics` reads.
-
-        A statistic with no row in that hour is looked for further back.
-        The hour before a window is empty on the far side of a hole - hours
-        no source could open, so never compiled - and the sum must carry
-        across it, or the series restarts at zero and every chart shows
-        the drop. The base is the newest row *before* the window, never the
-        newest row: a recompute opening inside a hole has rows on both
-        sides of it, and the ones ahead are what it is about to overwrite.
+        One statement, two edges per statistic: the newest row before the
+        window - never the newest overall, so a recompute opening inside a
+        hole continues from the near side and not from the rows it is
+        about to overwrite - and the newest row before the hour before it.
+        When the base stands at that hour, the two give it its value by
+        difference, which is what `_carried_from_statistics` reads; a row
+        rewritten with the carried sum reads as zero there. A statistic
+        with no row before the window is absent and starts from zero.
         """
         if not statistic_ids:
             return {}, {}
-        result = await get_instance(self._hass).async_add_executor_job(
-            statistics_during_period,
-            self._hass,
-            _as_datetime(window_start - HOUR),
-            _as_datetime(window_start),
-            set(statistic_ids),
-            "hour",
-            None,
-            {"sum", "mean"},
+        previous = window_start - HOUR
+        found = await get_instance(self._hass).async_add_executor_job(
+            bases, self._hass, set(statistic_ids), (previous, window_start)
         )
-        sums = {
-            statistic_id: rows[-1]["sum"]
-            for statistic_id, rows in result.items()
-            if rows and rows[-1].get("sum") is not None
-        }
-        values = {
-            statistic_id: rows[-1]["mean"]
-            for statistic_id, rows in result.items()
-            if rows and rows[-1].get("mean") is not None
-        }
-        for statistic_id in statistic_ids:
-            if statistic_id in sums:
-                continue
-            before = await self._async_newest_sum_before(statistic_id, window_start)
-            if before is not None:
-                sums[statistic_id] = before
+        sums: dict[str, float] = {}
+        values: dict[str, float] = {}
+        for statistic_id, at in found.items():
+            newest = at[window_start]
+            sums[statistic_id] = newest.sum
+            if newest.start == previous:
+                before = at.get(previous)
+                values[statistic_id] = newest.sum - (
+                    0.0 if before is None else before.sum
+                )
         return sums, values
-
-    async def _async_newest_sum_before(
-        self, statistic_id: str, window_start: float
-    ) -> float | None:
-        """The newest sum a statistic holds for an hour before window_start.
-
-        The newest row overall answers when it precedes the window, which
-        is every case but one: a recompute that opens inside a hole, with
-        rows on both sides of it. Only then is the history before the
-        window scanned - hourly rows, from the beginning. That path is
-        rare enough to pay for the scan rather than bound it.
-        """
-        instance = get_instance(self._hass)
-        result = await instance.async_add_executor_job(
-            get_last_statistics, self._hass, 1, statistic_id, True, {"sum"}
-        )
-        rows = result.get(statistic_id)
-        if not rows or rows[0].get("sum") is None:
-            return None
-        if rows[0]["start"] < window_start:
-            return rows[0]["sum"]
-        result = await instance.async_add_executor_job(
-            statistics_during_period,
-            self._hass,
-            EPOCH,
-            _as_datetime(window_start),
-            {statistic_id},
-            "hour",
-            None,
-            {"sum"},
-        )
-        rows = [
-            row for row in result.get(statistic_id, []) if row.get("sum") is not None
-        ]
-        return rows[-1]["sum"] if rows else None
 
     async def async_earliest_state_ts(self, entity_id: str) -> float | None:
         """Return the timestamp to open an entity's history at, or None.

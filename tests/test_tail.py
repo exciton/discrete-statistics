@@ -3,9 +3,7 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from homeassistant.components.recorder import get_instance
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 
 from custom_components.discrete_statistics.bucketer import tally
@@ -16,7 +14,7 @@ from custom_components.discrete_statistics.compiler import (
 )
 from custom_components.discrete_statistics.config import EntityConfig
 from custom_components.discrete_statistics.const import HOUR
-from tests.test_compiler import existing, read_sums
+from tests.conftest import existing, play, read_sums
 
 ENTITY = "binary_sensor.grid_status"
 ON_DURATION = "discrete_statistics:binary_sensor_grid_status_on_duration"
@@ -31,28 +29,6 @@ def cfg(default="record_known", min_duration=0.0):
         states={},
         min_duration=min_duration,
     )
-
-
-@pytest.fixture(autouse=True)
-def auto_enable_custom_integrations(recorder_db_url, enable_custom_integrations):
-    """Override the root conftest fixture; see tests/test_compiler.py."""
-    yield
-
-
-@pytest.fixture
-async def recorder(recorder_mock, hass):
-    await async_setup_component(hass, "recorder", {"recorder": {}})
-    await hass.async_block_till_done()
-    return hass
-
-
-async def play(hass, freezer, timeline, entity_id=ENTITY):
-    """Set each (datetime, state) in turn and let the recorder commit it."""
-    for when, state in timeline:
-        freezer.move_to(when)
-        hass.states.async_set(entity_id, state)
-        await hass.async_block_till_done()
-    await get_instance(hass).async_block_till_done()
 
 
 async def test_tail_is_the_timeline_from_the_watermark(recorder, freezer):

@@ -3,8 +3,7 @@ import type { StateStatistic } from "./statistic-ids";
 import type { ChartType, StatisticValue, Statistics } from "./types";
 
 export interface ChartSeries {
-  // The fields of a series ha-chart-base is given; it types them itself,
-  // this is only what the card sets.
+  // ha-chart-base types a series itself; these are the fields the card sets.
   id: string;
   name: string;
   type: "bar" | "line";
@@ -19,15 +18,14 @@ export interface ChartSeries {
   cursor: "default";
   animationDurationUpdate: 0;
   // [point time, value, bucket start, bucket end], as the stock statistics
-  // chart draws bars (statistics-chart-data.ts:198), so a tooltip can
-  // name the bucket the point represents. Every series holds every bucket
-  // in the same order, null where it has no value: ECharts stacks series
-  // on a time axis by data index, not by x value, so a series missing a
-  // bucket would stack its later bars on the wrong base.
+  // chart draws bars (statistics-chart-data.ts:198), so a tooltip can name
+  // the bucket a point represents. Every series holds every bucket in the
+  // same order, null where it has no value: ECharts stacks on a time axis
+  // by data index, not x value, so a series missing a bucket would stack
+  // its later bars on the wrong base.
   data: [number, number | null, number, number][];
 }
 
-// The earliest bucket start drawn, or undefined when nothing is drawn.
 export function earliestStart(series: ChartSeries[]): number | undefined {
   let earliest: number | undefined;
   for (const s of series) {
@@ -60,7 +58,7 @@ export function valueOf(
       return change / 24;
     case "percent":
       // The denominator is this row's own length, never a nominal hour
-      // count or the sum over states: a 23- or 25-hour bucket (DST) must
+      // count or the sum over states: a 23- or 25-hour DST bucket must
       // still read 100% when the entity held one state throughout.
       return (100 * change) / bucketHours(row);
     default:
@@ -68,12 +66,10 @@ export function valueOf(
   }
 }
 
-// The top of a percent axis: 100 when the visible stack fills the bucket,
-// otherwise the tallest visible stack rounded up to its own order of
-// magnitude — 37 reads to 40, 3.2 to 4, 0.032 to 0.04 — so the axis
-// follows what the legend leaves showing however small that is. Capped
-// rather than rounded at the top because a full stack's float sum can
-// land a hair over 100, which would push the axis out to 110.
+// The tallest visible stack rounded up to its own order of magnitude — 37
+// to 40, 0.032 to 0.04 — so the axis follows what the legend leaves
+// showing however small that is. Capped rather than rounded at 100 because
+// a full stack's float sum can land a hair over, pushing the axis to 110.
 export function percentAxisMax({ max }: { min: number; max: number }): number {
   if (max >= 100) {
     return 100;
@@ -116,8 +112,7 @@ export function buildSeries(
   }
   const starts = [...buckets.keys()].sort((a, b) => a - b);
   stats.forEach((stat, i) => {
-    // A configured colour, or the palette in order; a resolved colour
-    // is six-digit hex, which is what the alpha suffixes below need.
+    // Six-digit hex either way, which is what the alpha suffixes below need.
     const color = stat.color ?? colors[i % colors.length];
     const rows = new Map(
       (data[stat.statisticId] ?? []).map((row) => [row.start, row])
@@ -128,15 +123,13 @@ export function buildSeries(
       return [start, value, start, buckets.get(start)!];
     });
     if (line && points.length) {
-      // A line point sits at its bucket's start, so the last bucket has
-      // no extent until a point closes it at its end, as the stock chart
-      // does (statistics-chart-data.ts:391).
+      // A line point sits at its bucket's start, so the last bucket has no
+      // extent until a point closes it (statistics-chart-data.ts:391).
       const last = points[points.length - 1];
       points.push([last[3], last[1], last[2], last[3]]);
     }
-    // Fills are translucent so overlapping shapes stay legible; the bar
-    // border and the line itself are the solid colour, as the stock chart
-    // draws them.
+    // Translucent fills so overlapping shapes stay legible, solid borders
+    // and lines, as the stock chart draws them.
     const styled: ChartSeries = line
       ? {
           id: stat.statisticId,

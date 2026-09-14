@@ -73,28 +73,11 @@ def describe(hass: HomeAssistant, entity_id: str, name: str | None = None) -> st
     return f"{label} ({entity_id})" if label != entity_id else entity_id
 
 
-# How a composed sensor title reads a period and a metric. The title is a
-# sentence a person would say - "Front Door open time this month" - so
-# the words are prose, not the keys.
-_PERIOD_WORDS = {
-    "today": "today",
-    "yesterday": "yesterday",
-    "this_week": "this week",
-    "last_week": "last week",
-    "this_month": "this month",
-    "last_month": "last month",
-    "this_year": "this year",
-    "last_year": "last year",
-    "all_time": "all time",
-    "last_hour": "last hour",
-    "last_24_hours": "last 24 hours",
-    "last_7_days": "last 7 days",
-    "last_30_days": "last 30 days",
-    "last_365_days": "last 365 days",
-    # Nothing shorter describes an arbitrary window; the Name box is for
-    # the real name.
-    "custom": "custom",
-}
+# How a composed sensor title reads a metric. The title is a sentence a
+# person would say - "Front Door open time this month" - so the words are
+# prose, not the keys. A period's key already reads as prose once its
+# underscores are spaces, so it needs no table and a period added to
+# `periods.PERIODS` needs no entry here.
 _METRIC_WORDS = {METRIC_DURATION: "time", METRIC_SHARE: "share", METRIC_COUNT: "count"}
 
 
@@ -113,7 +96,7 @@ def sensor_title(hass: HomeAssistant, cfg: EntityConfig, spec: Spec) -> str:
         display_name(hass, cfg.entity_id, cfg.name),
         " or ".join(translate(state) for state in spec.states),
         _METRIC_WORDS[spec.metric],
-        _PERIOD_WORDS[spec.period],
+        spec.period.replace("_", " "),
     ]
     return " ".join(part for part in parts if part)
 

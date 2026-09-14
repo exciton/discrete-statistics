@@ -24,24 +24,6 @@ DURATION_ON = "discrete_statistics:binary_sensor_grid_status_on_duration"
 DURATION_OFF = "discrete_statistics:binary_sensor_grid_status_off_duration"
 
 
-@pytest.fixture(autouse=True)
-def auto_enable_custom_integrations(recorder_db_url, enable_custom_integrations):
-    """Override the root conftest fixture.
-
-    The root fixture pulls in `hass`, which the recorder fixtures refuse to
-    run behind: `recorder_db_url` asserts that hass has not been created
-    yet. Requesting it first restores the required order.
-    """
-    yield
-
-
-@pytest.fixture
-async def recorder(recorder_mock, hass):
-    await async_setup_component(hass, "recorder", {"recorder": {}})
-    await hass.async_block_till_done()
-    return hass
-
-
 def make_entry(entity_id: str = ENTITY) -> MockConfigEntry:
     return MockConfigEntry(
         domain=DOMAIN,

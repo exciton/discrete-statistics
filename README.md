@@ -23,13 +23,11 @@ as external statistics, which are never purged.
   stacked or plain bars or lines per hour, day, week, month or year, in
   hours, days or as a percentage of the time — following the dashboard's
   date picker if there is one
-- Draws with the stock statistics-graph card too: `change` for totals over
-  days, weeks and months; `mean`, `min` and `max` for average and peak hours
+- Draws with the stock statistics-graph card too, with `change` for totals
+  over days, weeks and months
 - Period sensors, opt-in: "time on today", "share of this month at the
   office", "openings this year" — a number read from the statistics, so it
   never shrinks when the recorder purges, following the entity live
-- The `mean` of a duration over any period is the share of that period
-  spent in the state — `0.4` is 40 % — straight from the stock card
 - New states are picked up automatically as they appear, in the card as
   well as the statistics; no per-state configuration needed
 - `unavailable`, `unknown`, or any state you choose can be ignored, with
@@ -297,13 +295,15 @@ per-bucket values. Durations are in **hours**, so an hourly bucket in a single
 state reads as `1.0` and a full day sums to `24`. Statistics for a state appear the first time that state
 is observed — no configuration change is needed when a new state shows up.
 
-Each statistic also carries the hour's own value as its `mean`, `min` and
-`max`. Over a longer period Home Assistant reduces the hours itself, so those
-stat types answer questions the cumulative sum cannot: `mean` over a day is
-the **average hourly** duration or count, `max` is the busiest hour and `min`
-the quietest. Every hour has a row — including the ones in which nothing
-happened — so the average is over the whole period rather than only its
-active hours.
+A row is written only for an hour in which something happened: a state
+gets a duration row for each hour it had time in, and a count row for
+each hour it was entered. A period in which the entity was recorded but
+the state never occurred reads as zero on the integration's own card;
+the stock statistics-graph card, which reduces the rows itself, leaves
+such a period out. A period with no rows at all — the integration was not
+running — is a gap either way.
+
+![Two pairs of hourly charts, stock beside ours: a light's on-time draws as scattered dashes on the stock card and as one line touching zero on ours; a week with no grid outage is "No statistics found" on the stock card and a flat zero on ours](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/quiet-hours-stock-vs-ours.png)
 
 ### Blank states
 
@@ -320,8 +320,8 @@ the hour, and recording the minutes before it would describe nothing more
 than the moment it was switched on — and, rarely, a stretch after the
 integration has been off for longer than the recorder's `purge_keep_days`,
 when the source rows for it are gone and nothing else can vouch for the
-state. Such hours have no rows at all: a chart shows nothing there, an
-average skips them, and the cumulative totals carry across unchanged.
+state. Such hours have no rows at all: a chart shows a gap there, and the
+cumulative totals carry across unchanged.
 Everything on either side is untouched, and a `recompute` reaching into
 the stretch leaves it alone too.
 
@@ -330,8 +330,9 @@ the stretch leaves it alone too.
 The statistics are ordinary long-term statistics, so the stock
 statistics-graph card draws them; the integration also ships its own card
 (below), which is configured by entity rather than by statistic ID and
-draws every state the entity has, including one it gains later. Each
-example here is given both ways.
+draws every state the entity has, including one it gains later. Most
+examples here are given both ways; the share of time has no stock-card
+equivalent.
 
 Time in each state per day, stacked:
 
@@ -413,43 +414,7 @@ period: week
 days_to_show: 365
 ```
 
-How often a light is switched on in an average hour each week, and in the
-busiest hour — a chart only the stock card draws, since the card below
-has no `min` or `max`:
-
-```yaml
-type: statistics-graph
-title: Mean/Max Hourly Light On
-chart_type: line
-period: week
-days_to_show: 365
-stat_types:
-  - mean
-  - max
-entities:
-  - discrete_statistics:light_kitchen_lights_on_count
-```
-
-![A year of kitchen light switch-ons: the mean hovers near 0.2 an hour, the busiest hour of each week between one and four](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/light-count-mean-max.png)
-
-The share of time a light is on, as the `mean` of its duration — hours per
-hour is a fraction, so 0.12 is 12 %:
-
-```yaml
-type: statistics-graph
-title: Average Hourly Lighting
-chart_type: line
-period: week
-days_to_show: 365
-stat_types:
-  - mean
-entities:
-  - discrete_statistics:light_kitchen_lights_on_duration
-```
-
-![A year of the kitchen light's share of time on, between 3 % and 19 % week by week](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/light-share-of-time.png)
-
-The card draws the same share as a percentage, on an axis that fits it:
+The share of time a light is on, as a percentage, on an axis that fits it:
 
 ```yaml
 type: custom:discrete-statistics-card
@@ -607,10 +572,10 @@ start, as the stock card draws it.
 names the picker when a dashboard has more than one.
 
 The card asks the integration for its buckets rather than the recorder.
-The sums are cumulative and dense, so a period's value is the difference
-between the rows at its two edges: a year of months is thirteen rows a
-state, not every hour of the year reduced on the server, and the card
-loads in the time it takes to draw. A gap in the statistics — downtime
+The sums are cumulative, so a period's value is the difference between
+the rows at its two edges: a year of months is thirteen rows a state,
+not every hour of the year reduced on the server, and the card loads in
+the time it takes to draw. A gap in the statistics — downtime
 longer than the recorder keeps — is time in no state, so the bars either
 side of it are shorter by exactly the time it took from them.
 
@@ -921,7 +886,8 @@ compiled yet — the hour in progress — and for a rolling or custom window,
 the hour an edge falls in: two hours of state changes at most, for a window
 of a day or a year alike. `history_stats` reads the whole window's state
 changes on every refresh, so a year-long window fetches a year of raw data
-every minute.
+every minute. [`docs/performance.md`](docs/performance.md) has the measured
+cost of both, on three database engines.
 
 **Long-term correctness.** Over a window whose hours the recorder still
 holds, both read the same state rows: no difference. Past the recorder's
@@ -947,10 +913,9 @@ one figure, so *time in each of N states* is N sensors, counts are N more,
 and a new state is two more to be manually added.
 
 
-**Hours that sum to the day.** Every state's duration is written for every
-hour, so a stacked bar of all of an entity's states is always 24 h tall, and
-`mean` and `max` over a day are the average and the busiest hour — with
-quiet hours counted as quiet, not skipped.
+**Hours that sum to the day.** The states an entity was in during an hour
+are written with the time each had, and those add up to the hour, so a
+stacked bar of all of an entity's states is always 24 h tall.
 
 **Transitions counted.** `history_stats` counts the intervals in which a
 state was present within its window, not the transitions into it. This
@@ -992,7 +957,7 @@ while its history is read — and a chart fills in an hour at a time.
 | `unavailable` / `unknown` | not in the list, so they break the interval | recorded or carry the previous state forward; configurable |
 | State mapping | none | `states:` map, `default`, `blank` |
 | Window | any template; two of `start`/`end`/`duration` | calendar periods; the last hour, 24 h, 7, 30 or 365 days; or two of `start`/`end`/`duration` templates |
-| Share of time | `ratio` % | `share` sensor, or the `mean` of a duration: hours per hour is a fraction |
+| Share of time | `ratio` % | `share` sensor, or the card's percentage unit |
 | Debounce | `min_state_duration` | `ignore_short` with `min_duration`, per state or as the default |
 | Usable in automations | yes, it is a sensor | yes, a period sensor |
 | Configuration | UI with live preview, or YAML; one sensor per state × metric × window | UI or YAML; one entry per entity, sensors added to it |

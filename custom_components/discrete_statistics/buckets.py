@@ -1,28 +1,31 @@
 """Cut a statistic's cumulative sums into per-period buckets.
 
-The sums are cumulative and dense, so the change over a bucket is the
-difference between the rows at its two edges - thirteen rows for a year of
-months, not eight thousand hourly ones reduced in Python. This module is
-the arithmetic; `websocket` fetches the rows.
+The sums are cumulative, so the change over a bucket is the difference
+between the rows at its two edges - thirteen rows for a year of months,
+not eight thousand hourly ones reduced in Python. This module is
+the arithmetic; `websocket` fetches the rows, in one statement.
 
 Every edge resolves to the newest row before it, whose sum is the sum at
 the edge, and adjacent buckets share it: a bucket's `change` is `sum(left
 of its end) - sum(left of its start)`, over the whole period between the
-edges. A statistic has no time in its state before its series begins,
-and a hole is time in no state, so the period's length is the right thing
-for a ratio to divide by whichever of those falls inside it.
+edges. The rows are sparse, so an edge may resolve to a row hours or
+months behind it; that resolution is the read's, and this module only
+cuts. A statistic has no time in its state before its series begins, and a
+hole is time in no state, so the period's length is the right thing for
+a ratio to divide by whichever of those falls inside it.
 """
 
 from __future__ import annotations
 
-import math
-from collections.abc import Callable, Mapping
+from bisect import bisect_left
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime, timedelta, tzinfo
 from itertools import pairwise
 from typing import Literal, NamedTuple
 
 from .bucketer import hour_start
-from .const import HOUR
+from .const import HOUR, METRIC_DURATION
+from .statistic_ids import family, parse
 
 Period = Literal["hour", "day", "week", "month", "year"]
 
@@ -102,70 +105,88 @@ def edges(start: float, end: float, period: Period, tz: tzinfo) -> list[float]:
     return result
 
 
-def row_before(edge: float) -> float:
-    """The start of the newest hour that ends at or before edge.
+def before_edges(
+    series: Sequence[Row], edges_: Sequence[float]
+) -> dict[float, Row | None]:
+    """Each edge's row: the newest in `series` that starts before it.
 
-    The hour before it when the edge is on the hour; otherwise the hour
-    containing it, since a zone half an hour off UTC puts every edge at
-    half past and the row holding the sum at the edge is the one running
-    through it - the row the recorder's own reduction puts in that day.
+    `series` is ascending, and needs to hold only the distinct answers -
+    a row left out because it was never the newest before any edge is
+    never the answer here either, since a row between an edge and its
+    answer would itself be the newer one. The read hands back exactly
+    that set, whether it seeks per edge (`rows.rows_before`) or reads a
+    range (`rows.rows_from`), which is why both resolve here.
     """
-    return (math.ceil(edge / HOUR) - 1) * HOUR
+    starts = [row.start for row in series]
+    return {
+        edge: (series[at - 1] if (at := bisect_left(starts, edge)) else None)
+        for edge in edges_
+    }
 
 
-Lookup = Callable[[float], Row | None]
+def family_of(statistic_id: str) -> str:
+    """The entity a statistic belongs to, as its ID names it.
+
+    An ID we cannot parse stands for its own family, so it is judged on
+    itself alone rather than joining somebody else's.
+    """
+    return family(statistic_id) or statistic_id
+
+
+def judges(ours: Iterable[str], requested: set[str]) -> dict[str, set[str]]:
+    """Per family, the statistics whose rows tell a compiled bucket from a hole.
+
+    An entity's duration statistics as a whole, whether or not they were
+    asked for: a chart of one rare state must not show a gap in every
+    period that state did not occur. An entity with none left - both
+    duration statistics deleted - is judged on what was asked of it,
+    every requested ID of that entity rather than just one, since a count
+    row stands wherever that hour was compiled too.
+    """
+    durations: dict[str, set[str]] = {}
+    for statistic_id in ours:
+        parts = parse(statistic_id)
+        if parts is not None and parts[2] == METRIC_DURATION:
+            durations.setdefault(parts[0], set()).add(statistic_id)
+    judged: dict[str, set[str]] = {}
+    for statistic_id in requested:
+        slug = family_of(statistic_id)
+        judged.setdefault(slug, set()).update(durations.get(slug, ()))
+    return {
+        slug: by or {sid for sid in requested if family_of(sid) == slug}
+        for slug, by in judged.items()
+    }
+
+
+def has_row(before: Mapping[float, Row | None], start: float, end: float) -> bool:
+    """Whether a row stands inside [start, end)."""
+    row = before[end]
+    return row is not None and row.start >= start
 
 
 def cut(
     edges_: list[float],
-    at: Mapping[float, Row],
-    newest_before: Lookup,
+    before: Mapping[float, Row | None],
+    compiled: Callable[[float, float], bool],
 ) -> list[Bucket]:
-    """Cut the buckets between consecutive edges.
+    """Cut the buckets between consecutive edges, from the row before each.
 
-    `at` holds `row_before` each edge - one row per edge, whose sum is
-    the sum at the edge - and answers almost every edge in one query. The lookup fills in for an edge with no row, which
-    is a hole or the start or end of the series, and is asked at most
-    once per hole: the row found for one edge answers every edge between
-    it and the next found row.
-
-    A bucket with no row inside it is left out; the card draws that as a
-    gap. The sum before a statistic's first row is zero, which is where
-    its series began.
+    `compiled` says whether the entity was compiled inside a bucket - the
+    caller judges that on the entity's duration rows as a whole - so a
+    statistic with no row of its own in a compiled bucket reads zero, and
+    only a hole is left out for the card to draw as a gap. The sum before
+    a statistic's first row is zero, which is where its series began.
     """
-    if len(edges_) < 2:
-        return []
-
-    # Newest row before each edge, walked from the last edge back so that
-    # one lookup's answer covers the edges it also precedes.
-    lefts: dict[float, Row | None] = {}
-    known: Row | None = None
-    known_for: float | None = None
-    for edge in reversed(edges_):
-        row = at.get(row_before(edge))
-        if row is None:
-            if known_for is None or (known is not None and known.start >= edge):
-                known = newest_before(edge)
-                known_for = edge
-            row = known
-        lefts[edge] = row
-
     buckets: list[Bucket] = []
     for a, b in pairwise(edges_):
-        last = lefts[b]
-        if last is None or last.start < a:
+        if not compiled(a, b):
             continue
-        base = lefts[a]
+        last, base = before[b], before[a]
         buckets.append(
             Bucket(
                 start=a,
                 end=b,
-                change=last.sum - (base.sum if base is not None else 0.0),
+                change=(last.sum if last else 0.0) - (base.sum if base else 0.0),
             )
         )
     return buckets
-
-
-def hours_wanted(edges_: list[float]) -> set[float]:
-    """The hours whose rows answer the edges."""
-    return {row_before(edge) for edge in edges_}

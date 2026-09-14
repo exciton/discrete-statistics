@@ -1,14 +1,12 @@
 // The editor's state list, and the config it stands for.
 //
-// The card takes two lists: `states:`, which orders the states drawn and
-// carries their colours, and `ignore_states:`, which hides. `states:`
-// alone is closed — a state the entity gains later is not drawn — and
-// `ignore_states:` opens it. The editor shows every state the entity has
-// statistics for as one row, ticked when drawn, and a single "ignore new
-// states" tick that decides which of the two the unticked rows become:
-// left out of `states:` when new states are ignored too, or listed in
-// `ignore_states:` — an empty one when every row is ticked, since the
-// key's presence is what opens the list.
+// `states:` orders the states drawn and carries their colours;
+// `ignore_states:` hides. `states:` alone is a closed list — a state the
+// entity gains later is not drawn — and `ignore_states:` opens it. One row
+// per state, ticked when drawn, and one "ignore new states" tick that
+// decides where the unticked rows go: left out of `states:`, or listed in
+// `ignore_states:` — empty when every row is ticked, since the key's
+// presence is what opens the list.
 import { settingMatches, type StateStatistic } from "./statistic-ids";
 import type { StateSetting } from "./types";
 
@@ -31,8 +29,8 @@ export interface StateFilter {
   ignore_states?: string[];
 }
 
-// The rows for the entity's states, listed ones first in their order and
-// the rest by label, as the card draws them.
+// Listed states first in their order, the rest by label, as the card
+// draws them.
 export function stateList(all: StateStatistic[], filter: StateFilter): StateList {
   const ignoreNew = !!filter.states && !filter.ignore_states;
   const ignored = (s: StateStatistic) =>
@@ -88,10 +86,9 @@ export function stateListConfig(list: StateList): StateFilter {
   };
 }
 
-// The palette position a row's state is drawn at: the chart hands out
-// colours in order over the states it draws, so a drawn row's is its
-// place among the drawn rows, and an undrawn row's is the place it would
-// take if it were ticked.
+// The palette position the chart would give a row: it hands out colours in
+// order over the states it draws, so an undrawn row shows the place it
+// would take if it were ticked.
 export function automaticIndex(rows: StateRow[], index: number): number {
   return rows.slice(0, index).filter((row) => row.shown).length;
 }

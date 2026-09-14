@@ -94,6 +94,12 @@ def parse(statistic_id: str) -> tuple[str, str, str] | None:
     return entity_slug, token, metric
 
 
+def family(statistic_id: str) -> str | None:
+    """The entity slug an ID was built for, or None when it is not ours."""
+    parts = parse(statistic_id)
+    return None if parts is None else parts[0]
+
+
 def belongs_to(statistic_id: str, entity_id: str) -> bool:
     """True when this ID was built for this entity.
 
@@ -101,6 +107,4 @@ def belongs_to(statistic_id: str, entity_id: str) -> bool:
     `sensor.a_b` and `sensor_a.b` slugify alike and would claim each other's
     IDs.
     """
-    if (parts := parse(statistic_id)) is None:
-        return False
-    return parts[0] == slugify(entity_id, separator="_")
+    return family(statistic_id) == slugify(entity_id, separator="_")

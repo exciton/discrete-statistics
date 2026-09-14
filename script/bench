@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+# Run the bench harness in the bench container.
+#
+#   script/bench <variant> <engine> [measure|build|compile|schema] [--repeat N]
+#   script/bench selftest
+#
+# <variant> is a label for the database being measured - "sparse",
+# "dense", "live", whatever you loaded - and, on SQLite, the directory
+# under $BENCH_DATA the file sits in. <engine> is sqlite, mariadb or
+# postgres.
+#
+# Configuration, all overridable:
+#
+#   BENCH_CASES     bench/cases.yaml   what to measure
+#   BENCH_DATA      bench/data         entries.json, and <variant>/home-assistant_v2.db
+#   BENCH_RESULTS   bench/results      the result JSON files, plans/, run.json, the lock
+#   BENCH_SQLITE_DB                    a SQLite file elsewhere
+#   BENCH_MARIADB_PORT   3307          see script/bench-db
+#   BENCH_POSTGRES_PORT  5433
+#   BENCH_BRANCH                       the label results are filed under
+#   BENCH_BUILD_ANCHOR                 a SQLite file whose newest compiled
+#                                      hour a `build` stops at
+#
+# The mode, repeat count and those paths travel in $BENCH_RESULTS/run.json,
+# named to the container by BENCH_RUN: pytest runs inside the container and
+# a file in the bind mount is what both sides can see.
+#
+# Modes: `measure` reads only. `build` compiles every configured entity
+# from its earliest retained state and `compile` times the write path -
+# both WRITE to the database they are pointed at.
+set -euo pipefail
+
+IMAGE=ha-discrete-stats-test
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+CASES="$(readlink -f "${BENCH_CASES:-$REPO_ROOT/bench/cases.yaml}")"
+DATA="$(readlink -f "${BENCH_DATA:-$REPO_ROOT/bench/data}")"
+RESULTS="${BENCH_RESULTS:-$REPO_ROOT/bench/results}"
+mkdir -p "$RESULTS"
+RESULTS="$(readlink -f "$RESULTS")"
+
+# The same image `script/test` uses; it carries the MySQL and Postgres
+# drivers the bench needs.
+build_image() {
+  if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    echo "Building $IMAGE (first run only)..." >&2
+    docker build -q -t "$IMAGE" -f "$REPO_ROOT/.devcontainer/Dockerfile" "$REPO_ROOT" >&2
+  fi
+}
+
+# A path as the container names it. Inside the checkout it is already
+# mounted; outside it is bound at the same path, so no URL and no value in
+# run.json needs rewriting.
+inside() {
+  case "$1" in
+    "$REPO_ROOT"/*) echo "/workspace/${1#"$REPO_ROOT"/}" ;;
+    *) echo "$1" ;;
+  esac
+}
+
+# Directories to bind, a directory at a time: a SQLite file needs its `-wal`
+# and `-shm` siblings writable beside it, so the parent is mounted, not the
+# file. A path under the checkout, or under a directory already listed, is
+# already there.
+WANTED=()
+want() {
+  local path="$1"
+  [[ -d "$path" ]] || path="$(dirname "$path")"
+  case "$path" in "$REPO_ROOT" | "$REPO_ROOT"/*) return ;; esac
+  local seen
+  for seen in ${WANTED[@]+"${WANTED[@]}"}; do
+    case "$path" in "$seen" | "$seen"/*) return ;; esac
+  done
+  WANTED+=("$path")
+}
+
+mounts() {
+  local path
+  for path in ${WANTED[@]+"${WANTED[@]}"}; do printf -- '-v\n%s:%s\n' "$path" "$path"; done
+}
+
+if [[ "${1:-}" == "selftest" ]]; then
+  build_image
+  # The default in-memory URL, which `bench/conftest.py` uses to leave
+  # test_bench.py uncollected: only the self-test runs.
+  exec docker run --rm \
+    --user "$(id -u):$(id -g)" \
+    -v "$REPO_ROOT:/workspace" \
+    -w /workspace \
+    "$IMAGE" \
+    python -m pytest bench/ -p no:cacheprovider -o addopts="" -q
+fi
+
+VARIANT="${1:?usage: script/bench <variant> <engine> [mode] [--repeat N]}"
+ENGINE="${2:?usage: script/bench <variant> <engine> [mode] [--repeat N]}"
+MODE="${3:-measure}"
+REPEAT=5
+if [[ "${4:-}" == "--repeat" ]]; then REPEAT="${5:?--repeat needs a number}"; fi
+
+case "$ENGINE" in
+  sqlite)
+    DB="$(readlink -f "${BENCH_SQLITE_DB:-$DATA/$VARIANT/home-assistant_v2.db}")"
+    [[ -f "$DB" ]] || { echo "no database at $DB" >&2; exit 1; }
+    want "$DB"
+    DBURL="sqlite:///$(inside "$DB")" ;;
+  # mysql+pymysql, not plain mysql://: the bench image carries pymysql,
+  # and HA only falls back to MySQLdb for the bare `mysql://` form.
+  # Same recorder code path (MYSQLDB_PYMYSQL_URL_PREFIX), other driver.
+  mariadb)
+    DBURL="mysql+pymysql://bench:bench@127.0.0.1:${BENCH_MARIADB_PORT:-3307}/$VARIANT?charset=utf8mb4" ;;
+  postgres)
+    DBURL="postgresql://bench:bench@127.0.0.1:${BENCH_POSTGRES_PORT:-5433}/$VARIANT" ;;
+  *) echo "engine must be sqlite, mariadb or postgres" >&2; exit 1 ;;
+esac
+
+build_image
+
+# run.json is a single shared file and the measurement wants the machine
+# to itself, so only one bench may run at a time. Without this two
+# concurrent runs label each other's results.
+exec 9>"$RESULTS/.bench.lock"
+if ! flock -n 9; then
+  echo "another script/bench is running ($RESULTS/.bench.lock)" >&2
+  exit 1
+fi
+
+# A detached worktree answers "HEAD" for its branch; name-rev finds the
+# branch it was checked out at, which is what the results are labelled by.
+BRANCH="${BENCH_BRANCH:-$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD)}"
+if [[ "$BRANCH" == "HEAD" ]]; then
+  BRANCH="$(git -C "$REPO_ROOT" name-rev --name-only HEAD | sed 's#^remotes/[^/]*/##;s#[~^].*##')"
+fi
+
+want "$CASES"
+want "$DATA"
+want "$RESULTS"
+
+ANCHOR=null
+if [[ -n "${BENCH_BUILD_ANCHOR:-}" ]]; then
+  BUILD_ANCHOR="$(readlink -f "$BENCH_BUILD_ANCHOR")"
+  want "$BUILD_ANCHOR"
+  ANCHOR="\"$(inside "$BUILD_ANCHOR")\""
+fi
+
+cat > "$RESULTS/run.json" <<JSON
+{
+ "mode": "$MODE",
+ "repeat": $REPEAT,
+ "engine": "$ENGINE",
+ "variant": "$VARIANT",
+ "branch": "$BRANCH",
+ "revision": "$(git -C "$REPO_ROOT" rev-parse --short HEAD)",
+ "cases": "$(inside "$CASES")",
+ "data_dir": "$(inside "$DATA")",
+ "results_dir": "$(inside "$RESULTS")",
+ "build_anchor": $ANCHOR
+}
+JSON
+
+mapfile -t MOUNTS < <(mounts)
+
+# --network host: the engine containers are on the host network.
+exec docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  --network host \
+  -v "$REPO_ROOT:/workspace" \
+  ${MOUNTS[@]+"${MOUNTS[@]}"} \
+  -e "BENCH_RUN=$(inside "$RESULTS")/run.json" \
+  -w /workspace \
+  "$IMAGE" \
+  python -m pytest bench/test_bench.py \
+    --dburl "$DBURL" \
+    -s -p no:cacheprovider -o addopts="" -q

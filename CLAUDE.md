@@ -5,7 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A Home Assistant custom integration that records per-state transition counts
 and durations for binary and enum entities as external long-term statistics,
 retained independently of `purge_keep_days`. See README.md for user-facing
-configuration and chart examples.
+configuration and chart examples, and `docs/performance.md` for the
+user-facing account of what the read and write paths cost, with the
+benchmark numbers.
 
 ## Commands
 
@@ -24,6 +26,18 @@ script/test tests/test_compiler.py::test_name   # one test
 `pytest.ini` and `conftest.py` both live at the repository root. `conftest.py`
 must stay there: declaring `pytest_plugins` in a non-rootdir conftest is an
 error in modern pytest and breaks the entire suite.
+
+`pytest.ini` sets `testpaths = tests`, which is what keeps `bench/` out of a
+bare `pytest` run and out of CI.
+
+`bench/` is the benchmark harness behind `docs/performance.md`, shipped so
+anyone can point it at their own database: `script/bench-extract` for the
+data, `bench/cases.yaml` for what to measure, `script/bench <variant>
+<engine> [measure|build|compile|schema]` to run it, `bench/compare.py` and
+`bench/summarize.py` to read it. It is not a test of behaviour and never
+runs with the suite; its own smoke test is `script/bench selftest`, which
+measures a database it builds itself. `bench/conftest.py` holds fixtures
+only, for the reason above. See `bench/README.md`.
 
 CI (`.github/workflows/validate.yml`) runs the same suite from the same
 `requirements-test.txt`, on a runner-supplied Python rather than the
@@ -69,16 +83,23 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
        │   │                      sensor subentries
        │   └─ statistic_ids       for the blank-state test
        ├─ naming            HA: entity, state -> the names a person recognises
+       ├─ templates         HA: a template -> a timestamp; for config_flow
+       │                    and coordinator alike
        ├─ payload           pure: buckets -> cumulative StatisticData rows
        │        │
        │    compiler        writes the recorder: the only module that does;
        │        │           hands out its read path as a Timeline (async_tail)
-       ├─ buckets           pure: edge rows -> per-period {start, end, change}
+       ├─ buckets           pure: the row before each edge ->
+       │        │           per-period {start, end, change}, and which
+       │        │           statistics judge gap from zero
        │        │
        ├─ periods           pure: a named period -> its edges, in a zone
        │        │
-       ├─ rows              reads the recorder: the rows at edges, the sums
-       │        │           at an edge, where a series starts
+       ├─ rows              reads the recorder: the newest row before each
+       │        │           of many edges, per-engine SQL, the sums at a
+       │        │           set of edges, a range opened on the row before
+       │        │           it, the compile's bases, the rows standing in
+       │        │           a window, where a series starts and where it ends
        ├─ reading           pure: a window in pieces - whole hours, part hours,
        │        │           the tail -> one sensor's value
        │        │
@@ -93,13 +114,21 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
 ```
 
 Everything except `compiler`, `rows`, `websocket`, `config_flow`, `naming`,
-`coordinator` and `sensor` is pure and testable without a `hass` instance.
+`templates`, `coordinator` and `sensor` is pure and testable without a
+`hass` instance.
 Keep it that way: if a change needs recorder access in a lower module, the
 design is drifting. Three recorder boundaries: `compiler` is the only
 module that writes; `rows` reads — `session_scope(read_only=True)`, the
-rows at a set of edges, the newest row before one, the earliest row of a
-series — for `websocket` and the coordinator alike; and `config_flow`
-reads once per options dialog, the entity's distinct states, to draw a
+newest row before each of a set of edges, the sums at a set of edges, the
+rows of a range and the one before it, the rows standing in a window, the
+earliest and the newest row of a series — for `websocket`, the compiler
+and the coordinator alike. Every one of those reads is a single statement,
+`rows.bases` included: the compile's base read asks `rows_before` for two
+edges per statistic — the window and the hour before it — so it is one
+statement whatever the statistic count. On MySQL/MariaDB and an engine we
+do not know, where the pairs are rendered as one arm each rather than
+expanded in SQL, that is one statement per `SEEK_BATCH` pairs. `config_flow` reads
+once per options dialog, the entity's distinct states, to draw a
 mapping row for each, and once per sensor dialog, the entity's statistics,
 to offer their states; so the invariants below are the compiler's alone.
 `Compiler.async_tail` is the compiler's *read* path — the carry chain,
@@ -128,12 +157,20 @@ pro-rated by the part inside and the reading is marked `estimated`. A
 rolling window with `live` off is anchored on the watermark end rather
 than now, so it is exactly its length and moves once an hour. Custom
 windows are rendered in the coordinator, on every refresh, through
-`render_datetime` — the same call the dialog validates with. The compile
+`templates.render_datetime` — the same call the dialog validates with,
+which is why it is its own module rather than the coordinator's: the
+dialog importing the coordinator would pull the compiler and the
+recorder behind it. The compile
 signal carries the range written, and the coordinator drops cached sums
 only at edges after its start: a sum is cumulative, so a finished window's
 edges survive every hourly compile, and the tail is read only when some
 live sensor's window reaches it — a finished window costs no recorder work
-at all between the day changing and a recompute reaching back to it.
+at all between the day changing and a recompute reaching back to it. The
+edges the cache does not answer are read together, `rows.sums_at_edges`
+over all of them: the card's own shape, so a refresh pays one statement
+on the engines that expand the pairs (SQLite, Postgres) however many
+edges its sensors plan, and one per `SEEK_BATCH` pairs on MySQL/MariaDB,
+which batches them — plus the metadata read either way.
 
 `sensor.py` builds the entry's `PeriodCoordinator` lazily, the first time
 the entry has a `sensor` subentry, and keeps it once built. An entry
@@ -227,21 +264,39 @@ two entities compile concurrently and defeat the lock.
 `frontend.py` serves the built card as a static path and registers it as a
 frontend module URL, skipped when the `frontend` component is not loaded.
 The card fetches through `discrete_statistics/buckets`, not
-`recorder/statistics_during_period`: the sums are cumulative and dense, so
-a bucket's `change` is the difference between the rows at its two edges,
-and `websocket` reads only those rows — thirteen for a year of months.
-`buckets.edges` aligns them as the recorder does (local midnight, Monday
-weeks, `dt_util.get_default_time_zone()`), so the two commands draw the
-same periods inside the range asked for — `tests/test_websocket.py`
-holds them to that against the recorder's own reduction. They differ at
-the ends: ours snaps every period outward, the recorder only a day or
+`recorder/statistics_during_period`: the sums are cumulative, so a
+bucket's `change` is the difference between the rows at its two edges,
+and `websocket` reads only the rows that answer the edges. The rows are
+sparse — a state has a row only in an hour it had time in — so an edge
+is answered by the newest row before it whatever its distance — usually
+the row starting the hour before it, or the row running through it in a
+zone half an hour off UTC, where every edge is at half past.
+`rows.rows_before` answers every (statistic, edge) pair in one
+statement (per 500 pairs on MySQL/MariaDB): one index seek on
+`(metadata_id, start_ts)` per pair, rendered per engine — see the
+"Recorder engines" bullet. Where the pairs are expanded in SQL the
+count is one whatever the range; on the arms it is
+`ceil(edges × statistics / SEEK_BATCH)` — one for any chart a person
+reads, and 37, all of them seeks, for the ten years of daily edges
+over five states `MAX_BUCKETS` still allows. The hourly
+period is one statement too, `rows.rows_from`: there every row in the
+range answers an edge, so the arms seek only the row before the range's
+start and one index range brings back the rest. Which of the two the
+period wants is `rows.edge_rows`, so `websocket` asks for the edges and
+not for a statement.
+Gap or zero is judged on `buckets.judges` — the entity's duration
+statistics as a whole, asked for or not — which ride along in the same
+read: a bucket is compiled when any of them
+has a row inside it, a requested statistic with no row of its own there
+reads zero, and only a hole is left out for the card to draw as a gap.
+`buckets.edges` aligns the edges as the
+recorder does (local midnight, Monday weeks,
+`dt_util.get_default_time_zone()`), so the two commands draw the same
+periods inside the range asked for — `tests/test_websocket.py` holds
+them to that against the recorder's own reduction. They differ at the
+ends: ours snaps every period outward, the recorder only a day or
 longer, and the recorder answers an end sitting on an edge with the
-period after it too. `buckets.cut` resolves every edge to the newest row
-before it — `row_before`: the row starting the hour before, whose sum is
-the sum at the edge, or the row running through the edge in a zone half
-an hour off UTC, where every edge is at half past — so the `IN` query is
-one row per edge (a range query when the edges are hours, since then
-every row is wanted). `MAX_BUCKETS` bounds a request before the edges
+period after it too. `MAX_BUCKETS` bounds a request before the edges
 are walked, since they and the query grow with the range asked for and
 the work runs on the recorder's thread. A bucket's `start` and `end` are
 always its edges — every statistic cut on the same edges shares them,
@@ -251,10 +306,7 @@ before its series begins, so a new state's first bucket starts from a
 base of zero, and a hole is time in no state, so with one straddling an
 edge the bucket on the left has the change up to the last row before it
 and the one on the right the change after it, both shorter by the hole's
-time. A bucket with no row inside is left out, and the card draws the
-gap. The `LIMIT 1` lookup is only for edges the `IN` query left blank,
-and one answer is reused for every edge it also precedes, so a long hole
-or a late-arriving state costs one query, not one per edge.
+time.
 The card itself (`frontend/src/`) mirrors the ID rules of `statistic_ids`
 in `statistic-ids.ts` — an ID is parsed from the right, the state is one
 token — and renders through the frontend's `<ha-chart-base>`, an internal
@@ -286,28 +338,25 @@ is a property of compiled hours; a hole (below) has no rows to sum.
 **Values are cumulative monotonic sums.** Charts use `stat_types: change` to
 derive per-bucket values. A sum that decreases is always a bug.
 
-**Rows are dense over every *known* statistic, not merely the states seen in
-the window.** `payload.build_payloads` takes `existing`, which `compiler`
-sources from the recorder's own `statistics_meta`. Emitting only the window's
-own states leaves a statistic with no row in the hour before the next window.
-`_async_newest_sum_before` finds its base further back, but that lookup is
-one or two extra queries per statistic per compile, meant for the rare hole,
-not for every quiet state on every run; and a sparse series still breaks the
-`mean`.
-
-A hole is not sparseness: no statistic has a row there, so every sum carries
-across it and every average skips the hour alike. Density is a property of
-the hours that are compiled.
-
-Density is what makes the `mean` correct. Every row carries the hour's
-own value as its `mean`, `min` and `max` so the recorder's `_reduce_statistics`
-can roll the hours up into an average hourly duration or count. It skips rows
-whose mean is `None`, so a sparse hour would not read as a quiet one — it
-would drop out of the average entirely and inflate it.
+**A duration row where the state had time in the hour, a count row where
+it was entered, and a row wherever one already stands.** The entity's
+duration rows, unioned, therefore cover every compiled hour — the
+state it was in always has one — and the duration rows present in an
+hour sum to 1.0. A hole has none. Count rows are sparse by nature. The
+third clause is what keeps the recorder's upsert idempotent: nothing
+deletes, so a recompile that finds a state absent from an hour it was
+once written into rewrites that row with the carried sum
+(`rows.standing`, read once per chunk), or its old sum would stand
+ahead of every later one. There is no `mean`: the recorder's reduction
+skips absent rows, so over sparse rows it would average the hours the
+state occurred, never the period.
 
 **The watermark is the max across all of an entity's statistic IDs.** Reading a
-single representative ID is wrong: density is only guaranteed from a state's
-first appearance, so any one ID can lag arbitrarily.
+single representative ID is wrong: the rows are sparse, so any one ID can lag
+the others by any distance — a state that has not occurred for a year has no
+row in that year's compiled hours. `rows.series_end` reads all of them in one
+statement — a descending seek per statistic, unioned, the max taken in Python
+— so the breadth costs a round trip, not one per ID.
 
 **Each run recomputes a trailing window (`TRAILING_HOURS`).** The recorder is a
 write queue, so a state change late in an hour may be committed after that hour
@@ -340,8 +389,10 @@ answers a case the one before it cannot.
    nothing recordable in it means the entity held one state throughout — and
    our rows already encode the carry-forward decision, so they *are* the
    resolved timeline. Free: `_async_base` fetches the values in the
-   same query as the sums. Only when one duration statistic accounts for the
-   hour; several would mean transitions inside it, which the recorder holds.
+   same query as the sums. Only when exactly one duration statistic changed
+   in the hour — a row standing with no change is not a change — read by
+   difference from its two newest rows before the window; several changes
+   would mean transitions inside it, which the recorder holds.
 
 Then nothing: the window opens later, at the first whole hour that begins
 in a recordable transition, and the hours passed over are not compiled at
@@ -350,8 +401,8 @@ at a distance and give up past a month, where step 4 is exact and has no
 distance limit at all.
 
 Step 4 has only the state *token* to hand, since that is all an ID carries.
-`_readable_state` recovers the state from the name the statistic already
-holds — the half `rename` leaves alone — so a window carried out of
+`payload.readable_state` recovers the state from the name the statistic
+already holds — the half `rename` leaves alone — so a window carried out of
 statistics still reads `heat_cool` rather than `heatcool`. Verified, not
 trusted: the recovered text must tokenise back to the same token, or the
 name did not have the shape assumed and the token stands. Trusting it would
@@ -379,7 +430,7 @@ evidence and compile nothing.
 `async_compile` walks the window in `CHUNK_HOURS` slices to bound memory during
 a backfill, and each slice returns the sums, the known statistics and the
 carried state that the next one starts from. Re-reading any of the three per
-chunk would break monotonicity, density or the carry in exactly the way those
+chunk would break monotonicity or the carry in exactly the way those
 invariants describe, because the recorder writes are still queued. They
 travel as one named value so the early return — a chunk with nothing to
 compile — cannot pass them on in the wrong order.
@@ -429,7 +480,7 @@ only because `compose_name` strips colons from the state half. A display
 name may hold any number of them; a state may hold none. The state half cannot be
 rebuilt from the ID — the ID holds only the token — so a rename would
 otherwise never reach a state the entity has not been in for months, and
-neither would a change to `mean_type` or the units.
+neither would a change to the units.
 
 **A state older than the purge horizon is still known.** Purge deletes every
 row past `purge_keep_days` with no per-entity reprieve (`queries.py:281`), so
@@ -556,16 +607,6 @@ Verified against 2026.8.3.
   offset at epoch scale is below `datetime`'s microsecond resolution and rounds
   straight back.
 - `StatisticsRow["start"]` is a `float` timestamp, not a `datetime`.
-- A statistic may carry a sum *and* a mean. `mean_type` and `has_sum` are
-  independent fields and nothing in the import path rejects the combination,
-  so one statistic serves both `stat_types: change` and `stat_types: mean`.
-  `has_mean` is deprecated but still a real column, and
-  `StatisticsMeta.from_meta` passes the metadata dict through verbatim — keep
-  it consistent with `mean_type` rather than leaving it stale.
-- Changing metadata is picked up: `StatisticsMetaManager._update_metadata`
-  compares `mean_type` and rewrites the row, so an existing statistic gains a
-  mean on the next compile. Its already-written rows keep a `NULL` mean until
-  they are recompiled.
 - The recorder's upsert on `(metadata_id, start_ts)` is what makes recompilation
   idempotent. It holds only when recomputation starts from a bucket whose base
   sum is known, which is why the base is read from the newest bucket *before*
@@ -573,11 +614,12 @@ Verified against 2026.8.3.
   hole has rows on both sides, and the ones ahead are what it overwrites.
 - `Compiler.async_compile` drains the recorder in a `finally`, not on the
   success path. A chunk that raises leaves earlier chunks' writes queued, and
-  density is read live from `statistics_meta` — so the next compile could
-  see half of them and leave the rest sparse.
+  the standing rows and the metadata are read live — so the next compile
+  would see half of them, leave the rest unrewritten, and the window after
+  that would restart those at zero.
 - The two `async_existing` reads in an incremental compile are not
   redundant. Reusing the first one — taken before `_async_watermark`'s
-  round-trips — makes a recently deleted statistic intermittently still
+  own read — makes a recently deleted statistic intermittently still
   visible, and the deletion tests flaky about one run in three.
 - An `asyncio.Lock` in `hass.data` serialises the hourly run against the
   service. It is not reentrant: never call `compile_all` from inside it.
@@ -588,7 +630,32 @@ Verified against 2026.8.3.
   `tests/test_rows.py`'s `seed` is the pattern. `Compiler.async_compile`'s
   own drain has the same property, so a read scheduled straight after it
   can still see the watermark from before the commit; the coordinator's
-  live tail covers that gap and the next compile corrects it.
+  live tail covers that gap and the next compile corrects it. The same gap
+  applies to `rows.standing`: a compile that runs within milliseconds of the
+  previous one's drain can miss a row still committing and leave it
+  unrewritten; tests that compile twice back to back wait with
+  `async_wait_recording_done` between.
+- Recorder engines differ on how a seek is planned, so `rows.rows_before`
+  renders itself per engine, chosen from `session.get_bind().dialect.name`
+  — the same string the recorder parses, and no caller threads it in.
+  SQLite expands the pair list with `json_each(:pairs)` and Postgres with
+  `jsonb_array_elements`, each pair feeding one correlated
+  `ORDER BY start_ts DESC LIMIT 1`: one statement of any size, one plan,
+  and the seek run per pair. Postgres gets no `WHERE id IS NOT NULL` — the
+  inner join drops the misses, and the filter makes it evaluate the
+  subplan twice. MySQL/MariaDB and an engine we do not know get the
+  portable form instead: one constant-bound arm per pair in a `UNION ALL`,
+  batched at `SEEK_BATCH` (500, SQLite's cap on a compound select), and
+  written out as `text` with the bounds literal — building and compiling
+  five hundred Core subqueries costs more Python than the server spends
+  answering them. MariaDB will not push an outer-referenced bound into a
+  range, so a correlated `LIMIT 1` walks the series where its arms plan as
+  `range` on `(metadata_id, start_ts)`, one row each; that is why the
+  dialect is not in the expanded set. Postgres plans every arm separately,
+  so expanding buys it an order of magnitude; SQLite's switch buys one
+  statement and no 500-pair cap rather than time. The plans and the
+  figures are in `docs/performance.md`. `rows_from` keeps the arms on
+  every engine: one per statistic, not one per pair.
 - hassfest validates `strings.json` only for placeholder *names*, not
   content. The frontend renders every string through ICU MessageFormat, so a
   literal `{` or `}` anywhere in a string — a template example in a
@@ -609,7 +676,13 @@ Every test must fail when its fix is reverted; a test that passes regardless
 of the code under test proves nothing. When adding a test for a bug fix,
 revert the fix, watch it fail, then restore.
 
-Integration tests use `recorder_mock` and `freezer`. Each integration test
-module overrides the root conftest's autouse `auto_enable_custom_integrations`
-fixture to request `recorder_db_url` first; this is fixture ordering against
-`recorder_mock`, not a workaround.
+Integration tests use `recorder_mock` and `freezer`. `tests/conftest.py`
+holds what they share: the `recorder` and `recorder_utc` fixtures, `play`
+and the debounce helpers, `existing` and `read_sums`. It also overrides the
+root conftest's autouse `auto_enable_custom_integrations` fixture to
+request `recorder_db_url` first; this is fixture ordering against
+`recorder_mock`, not a workaround. Being global it reaches the
+pure-module tests too, and costs them nothing: `recorder_db_url` only
+reads `--dburl` and asserts hass has not been built, and it is ordered
+ahead of `hass` — which `enable_custom_integrations` pulls in for every
+test either way.

@@ -4,10 +4,10 @@ import type { HassLike, ResolvedPeriod, Statistics, StatisticsMetaData } from ".
 export const listStatisticIds = (hass: HassLike) =>
   hass.callWS<StatisticsMetaData[]>({ type: "recorder/list_statistic_ids" });
 
-// The integration's own command answers from the rows at the bucket
-// edges, so a year of months costs thirteen rows a statistic rather than
-// every hourly row in the range reduced server-side. A bucket's start and
-// end are its period's edges, which is what the ratio divides by.
+// The integration's own command, not recorder/statistics_during_period: it
+// answers from the rows at the bucket edges rather than reducing every
+// hourly row server-side, and a bucket's start and end are its period's
+// edges, which is what the ratio divides by.
 export const fetchStatistics = (
   hass: HassLike,
   ids: string[],
@@ -24,9 +24,9 @@ export const fetchStatistics = (
 
 // The energy-date-selection card keeps its collection on the connection
 // object under "_<key>"; the default key is "energy_<panel url>", or bare
-// "energy" when there is no panel url (frontend src/data/energy.ts,
-// convertCollectionKeyToConnection). The collection may not exist yet when
-// this card first renders, so poll for it briefly rather than assume.
+// "energy" with no panel url (frontend src/data/energy.ts,
+// convertCollectionKeyToConnection). It may not exist yet when this card
+// first renders, hence the brief poll.
 interface EnergyCollection {
   subscribe(cb: (data: { start: Date; end?: Date }) => void): () => void;
 }
