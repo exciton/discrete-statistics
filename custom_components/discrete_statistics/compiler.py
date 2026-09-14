@@ -399,10 +399,23 @@ class Compiler:
         return await self.async_compile(cfg, start)
 
     async def async_compile(
-        self, cfg: EntityConfig, start: float | None, end: float | None = None
+        self,
+        cfg: EntityConfig,
+        start: float | None,
+        end: float | None = None,
+        *,
+        read_from: str | None = None,
     ) -> int:
-        """Compile [start, end) for one entity. Returns hours compiled."""
-        earliest = await self.async_earliest_state_ts(cfg.entity_id)
+        """Compile [start, end) for one entity. Returns hours compiled.
+
+        `read_from` names the entity whose recorded history is read - a
+        replacement device's temporary ID, whose states the fill writes
+        under `cfg.entity_id`. Only the recorder reads move with it: the
+        statistics, and the state machine carry, are always the entity
+        configured.
+        """
+        source = read_from or cfg.entity_id
+        earliest = await self.async_earliest_state_ts(source)
         if earliest is None:
             return 0
         window_start = hour_start(earliest if start is None else start)
@@ -444,6 +457,7 @@ class Compiler:
                     chunk_end,
                     state,
                     first_chunk=chunk_start == window_start,
+                    read_from=source,
                 )
                 compiled += hours
                 wrote = wrote or imported
@@ -524,7 +538,7 @@ class Compiler:
             existing=existing,
             carried=_carried_from_statistics(previous_hour, _names(existing)),
         )
-        rows = await self._async_history(cfg, start - HOUR, end)
+        rows = await self._async_history(cfg, cfg.entity_id, start - HOUR, end)
         opened = self._open_window(cfg, rows, start, end, state)
         return None if opened is None else Timeline(*opened)
 
@@ -536,9 +550,9 @@ class Compiler:
         return existing, await self._async_watermark(existing)
 
     async def _async_history(
-        self, cfg: EntityConfig, query_start: float, window_end: float
+        self, cfg: EntityConfig, entity_id: str, query_start: float, window_end: float
     ) -> list:
-        """Return the recorder rows for [query_start, window_end).
+        """Return the recorder rows of `entity_id` for [query_start, window_end).
 
         Plus `cfg.min_duration` beyond the end, so a short spell that ends
         after the window can still be measured.
@@ -555,13 +569,13 @@ class Compiler:
             self._hass,
             _as_datetime(query_start - START_MARGIN),
             _as_datetime(window_end + cfg.min_duration),
-            cfg.entity_id,
+            entity_id,
             True,  # no_attributes
             False,  # descending
             None,  # limit
             True,  # include_start_time_state
         )
-        return history.get(cfg.entity_id, [])
+        return history.get(entity_id, [])
 
     async def _async_compile_chunk(
         self,
@@ -571,6 +585,7 @@ class Compiler:
         state: _ChunkState,
         *,
         first_chunk: bool,
+        read_from: str,
     ) -> tuple[_ChunkState, int, bool]:
         """Compile one chunk.
 
@@ -601,7 +616,10 @@ class Compiler:
         # sees both and carries the good one forward. Later chunks need none
         # of this: they are handed the state the previous chunk ended in.
         rows = await self._async_history(
-            cfg, chunk_start - HOUR if first_chunk else chunk_start, chunk_end
+            cfg,
+            read_from,
+            chunk_start - HOUR if first_chunk else chunk_start,
+            chunk_end,
         )
         opened = self._open_window(cfg, rows, chunk_start, chunk_end, state)
         if opened is None:
@@ -852,6 +870,28 @@ class Compiler:
                 )
         return sums, values
 
+    async def async_earliest_recorded_ts(self, entity_id: str) -> float | None:
+        """The oldest retained recorder row's timestamp, or None.
+
+        The recorder alone: `None` here means the entity has no history at
+        all, which is what a fill asks before deciding which entity ID the
+        history is under.
+        """
+        history = await get_instance(self._hass).async_add_executor_job(
+            state_changes_during_period,
+            self._hass,
+            EPOCH,
+            None,
+            entity_id,
+            True,
+            False,
+            1,
+            False,
+        )
+        if rows := history.get(entity_id):
+            return rows[0].last_changed_timestamp
+        return None
+
     async def async_earliest_state_ts(self, entity_id: str) -> float | None:
         """Return the timestamp to open an entity's history at, or None.
 
@@ -868,19 +908,8 @@ class Compiler:
         window opens on a whole hour - a part-known hour cannot both be
         recorded and total wall-clock time.
         """
-        history = await get_instance(self._hass).async_add_executor_job(
-            state_changes_during_period,
-            self._hass,
-            EPOCH,
-            None,
-            entity_id,
-            True,
-            False,
-            1,
-            False,
-        )
-        if rows := history.get(entity_id):
-            return rows[0].last_changed_timestamp
+        if (recorded := await self.async_earliest_recorded_ts(entity_id)) is not None:
+            return recorded
 
         state = self._hass.states.get(entity_id)
         if state is None:

@@ -4,6 +4,7 @@ import functools as ft
 import json
 import re
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pytest
 from homeassistant.components.recorder import get_instance
@@ -34,7 +35,7 @@ from custom_components.discrete_statistics.const import (
 )
 from custom_components.discrete_statistics.payload import metadata_for
 from custom_components.discrete_statistics.statistic_ids import parse
-from tests.conftest import existing, read_sums
+from tests.conftest import T0, existing, play, read_sums
 
 ENTITY = "binary_sensor.grid_status"
 DURATION_OFF = "discrete_statistics:binary_sensor_grid_status_off_duration"
@@ -44,6 +45,7 @@ COUNT_ON = "discrete_statistics:binary_sensor_grid_status_on_count"
 DURATION_UNKNOWN = "discrete_statistics:binary_sensor_grid_status_unknown_duration"
 DURATION_MISSING = "discrete_statistics:binary_sensor_grid_status_missing_duration"
 COUNT_MISSING = "discrete_statistics:binary_sensor_grid_status_missing_count"
+TEMP = "binary_sensor.grid_status_2"
 
 
 def cfg():
@@ -2849,3 +2851,87 @@ async def test_a_bulk_row_that_collides_falls_back_to_the_import(
         (start.timestamp() + 2 * HOUR, 9.5),
         (start.timestamp() + 3 * HOUR, 3.0),
     ]
+
+
+async def test_a_compile_can_read_another_entitys_history(recorder_utc, freezer):
+    """`read_from` moves only the history reads; the IDs stay ours."""
+    hass = recorder_utc
+    await play(
+        hass,
+        freezer,
+        [(T0, "on"), (T0 + timedelta(hours=2), "off")],
+        entity_id=TEMP,
+    )
+    freezer.move_to(T0 + timedelta(hours=4))
+    hours = await compiler_module.Compiler(hass).async_compile(
+        cfg(), T0.timestamp(), (T0 + timedelta(hours=4)).timestamp(), read_from=TEMP
+    )
+    await async_wait_recording_done(hass)
+
+    assert hours == 4
+    # `on` is carried into the window rather than entered, so it gets no
+    # count row of its own - but `build_payloads` still plans and imports
+    # COUNT_ON's metadata, as it does for every state that appears at all,
+    # whether or not it was ever counted.
+    assert await existing(hass) == sorted(
+        [DURATION_ON, DURATION_OFF, COUNT_ON, COUNT_OFF]
+    )
+    assert await existing(hass, TEMP) == []
+    assert await read_sums(hass, DURATION_ON, T0, T0 + timedelta(hours=4)) == [
+        1.0,
+        2.0,
+        2.0,
+        2.0,
+    ]
+
+
+async def test_the_state_machine_carry_is_asked_for_our_entity_not_the_read_one(
+    recorder_utc, freezer
+):
+    """A stale state under the read identity must not open the window.
+
+    The source has a live state whose `last_changed` is before the window
+    and no history until two hours in. Its state machine entry would vouch
+    for `on` across the first two hours; ours has no state at all, so the
+    window must move to the source's first whole hour instead.
+    """
+    hass = recorder_utc
+    freezer.move_to(T0 - timedelta(days=2))
+    hass.states.async_set(TEMP, "on")
+    await hass.async_block_till_done()
+    await async_wait_recording_done(hass)
+    # Purge what the recorder wrote for that change, so only the live
+    # state remains under TEMP for the hours before T0+2h.
+    from homeassistant.components.recorder.purge import purge_old_data
+
+    await get_instance(hass).async_add_executor_job(
+        purge_old_data, get_instance(hass), T0 - timedelta(days=1), False
+    )
+    await async_wait_recording_done(hass)
+    await play(hass, freezer, [(T0 + timedelta(hours=2), "off")], entity_id=TEMP)
+
+    freezer.move_to(T0 + timedelta(hours=4))
+    hours = await compiler_module.Compiler(hass).async_compile(
+        cfg(), T0.timestamp(), (T0 + timedelta(hours=4)).timestamp(), read_from=TEMP
+    )
+    await async_wait_recording_done(hass)
+
+    # Two hours, not four: nothing vouched for T0 and T0+1h.
+    assert hours == 2
+    assert await read_sums(hass, DURATION_OFF, T0, T0 + timedelta(hours=4)) == [
+        1.0,
+        2.0,
+    ]
+
+
+async def test_earliest_recorded_ts_never_consults_the_state_machine(recorder_utc):
+    hass = recorder_utc
+    compiler = compiler_module.Compiler(hass)
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await async_wait_recording_done(hass)
+    assert await compiler.async_earliest_recorded_ts(ENTITY) is not None
+    assert await compiler.async_earliest_recorded_ts(TEMP) is None
+    # The state machine alone still answers `async_earliest_state_ts`.
+    with patch.object(compiler, "async_earliest_recorded_ts", return_value=None):
+        assert await compiler.async_earliest_state_ts(ENTITY) is not None
