@@ -136,7 +136,7 @@ def build_payloads(
     translate: Callable[[str], str] | None = None,
     standing: Mapping[str, Mapping[float, float]] | None = None,
 ) -> dict[str, Payload]:
-    """Return {statistic_id: (metadata, rows)} with cumulative sums.
+    """Return {statistic_id: Payload} - metadata, rows, and the sum reached.
 
     Where no row stands, one is written for a non-zero value. Where one
     stands, it is rewritten only when the sum it holds differs from the

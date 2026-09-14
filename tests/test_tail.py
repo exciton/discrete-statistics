@@ -142,6 +142,13 @@ async def test_compile_signals_what_it_wrote(recorder, freezer):
     # Up to the hour in progress, not into it.
     assert heard == [(T0.timestamp(), T0.timestamp() + 2 * HOUR)]
 
+    # And compiling the same hours again hands the recorder nothing, so
+    # there is nothing for a listener to re-read.
+    heard.clear()
+    await compiler.async_compile(cfg(), T0.timestamp())
+    await hass.async_block_till_done()
+    assert heard == []
+
 
 async def test_async_compiled_reports_the_watermark(recorder, freezer):
     hass = recorder

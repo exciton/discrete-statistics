@@ -1908,6 +1908,48 @@ async def test_a_quiet_statistic_with_an_unchanged_name_is_not_imported(
     assert seen == [DURATION_OFF]
 
 
+async def test_a_rowless_statistic_whose_metadata_drifted_is_imported(
+    recorder, freezer, monkeypatch
+):
+    """The name is not the only field a compile sets.
+
+    A statistic the window never sees must still have its unit, its unit
+    class and its mean type brought to what this version writes - the
+    recorder rewrites the metadata row, and only an import reaches it.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    await _seed_two_states(hass, freezer, start)
+
+    freezer.move_to(start + timedelta(hours=4))
+    compiler = Compiler(hass)
+    await compiler.async_compile(
+        cfg(), start.timestamp(), (start + timedelta(hours=2)).timestamp()
+    )
+    await async_wait_recording_done(hass)
+
+    # A mean where this version writes none, and the same name: the older
+    # scheme, on a state the next window has nothing to say about.
+    drifted = {**metadata_for(METRIC_DURATION, DURATION_ON, "Grid Status: on (h)")}
+    drifted.update(has_mean=True, mean_type=StatisticMeanType.ARITHMETIC)
+    async_add_external_statistics(hass, drifted, [])
+    await async_wait_recording_done(hass)
+
+    seen = _imports(monkeypatch)
+    await compiler.async_compile(
+        cfg(),
+        (start + timedelta(hours=2)).timestamp(),
+        (start + timedelta(hours=4)).timestamp(),
+    )
+    await async_wait_recording_done(hass)
+
+    assert DURATION_ON in seen
+    metadata = await get_instance(hass).async_add_executor_job(
+        ft.partial(get_metadata, hass, statistic_ids={DURATION_ON})
+    )
+    assert metadata[DURATION_ON][1]["mean_type"] is StatisticMeanType.NONE
+
+
 async def test_a_renamed_statistic_is_imported_even_with_no_rows(
     recorder, freezer, monkeypatch
 ):
@@ -1999,9 +2041,6 @@ async def test_the_state_machine_outranks_our_own_statistics(recorder, freezer):
     freezer.move_to(start + timedelta(hours=2))
     compiler = Compiler(hass)
     await compiler.async_compile(cfg(), start.timestamp())
-    # The compile's own drain returns before the popped import task has
-    # committed, and the compile below reads that watermark.
-    await async_wait_recording_done(hass)
 
     # Committed after hour 1 was compiled, then purged with everything else.
     freezer.move_to(start + timedelta(hours=1, minutes=45))
