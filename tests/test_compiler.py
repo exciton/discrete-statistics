@@ -10,6 +10,7 @@ import pytest
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.db_schema import Statistics, StatisticsMeta
 from homeassistant.components.recorder.models import StatisticMeanType
+from homeassistant.components.recorder.purge import purge_old_data
 from homeassistant.components.recorder.statistics import (
     async_add_external_statistics,
     get_metadata,
@@ -2885,25 +2886,23 @@ async def test_a_compile_can_read_another_entitys_history(recorder_utc, freezer)
     ]
 
 
-async def test_the_state_machine_carry_is_asked_for_our_entity_not_the_read_one(
+async def test_read_from_reaches_the_evidence_and_the_opening_floor(
     recorder_utc, freezer
 ):
-    """A stale state under the read identity must not open the window.
+    """`read_from` moves the evidence and the opening floor with it.
 
-    The source has a live state whose `last_changed` is before the window
-    and no history until two hours in. Its state machine entry would vouch
-    for `on` across the first two hours; ours has no state at all, so the
-    window must move to the source's first whole hour instead.
+    The source has no recorded history until two hours in - the earlier
+    row is purged, which is what moves the floor to T0+2h - and no live
+    state either can vouch earlier than that, so the window must move to
+    the source's first whole hour instead of opening at T0.
     """
     hass = recorder_utc
     freezer.move_to(T0 - timedelta(days=2))
     hass.states.async_set(TEMP, "on")
     await hass.async_block_till_done()
     await async_wait_recording_done(hass)
-    # Purge what the recorder wrote for that change, so only the live
-    # state remains under TEMP for the hours before T0+2h.
-    from homeassistant.components.recorder.purge import purge_old_data
-
+    # Purging the row this wrote is what moves the floor to T0+2h: the
+    # source's earliest retained evidence is then the `off` row below.
     await get_instance(hass).async_add_executor_job(
         purge_old_data, get_instance(hass), T0 - timedelta(days=1), False
     )
@@ -2922,6 +2921,38 @@ async def test_the_state_machine_carry_is_asked_for_our_entity_not_the_read_one(
         1.0,
         2.0,
     ]
+
+
+async def test_the_state_machine_carry_is_asked_for_our_entity_not_the_read_one(
+    recorder_utc, freezer
+):
+    """Our own live state opens the window, never the read identity's.
+
+    ENTITY has been `on` since before the window opens; TEMP's only
+    recorded row lands exactly on T0, a transition `canonicalise` cannot
+    fold into a carry, and `first_whole_hour(T0) == T0` so the opening
+    floor never intervenes - the carry decision is genuinely reached.
+    The window must open carried in ENTITY's own `on` and count the `off`
+    row as an entry. Asking TEMP's live state instead would find `off`
+    with `last_changed == T0`, which the guard accepts and which
+    `_open_window` then dedupes against the row itself - losing the count
+    entirely.
+    """
+    hass = recorder_utc
+    freezer.move_to(T0 - timedelta(hours=1))
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await async_wait_recording_done(hass)
+    await play(hass, freezer, [(T0, "off")], entity_id=TEMP)
+
+    freezer.move_to(T0 + timedelta(hours=2))
+    hours = await compiler_module.Compiler(hass).async_compile(
+        cfg(), T0.timestamp(), (T0 + timedelta(hours=2)).timestamp(), read_from=TEMP
+    )
+    await async_wait_recording_done(hass)
+
+    assert hours == 2
+    assert await read_sums(hass, COUNT_OFF, T0, T0 + timedelta(hours=2)) == [1.0, 1.0]
 
 
 async def test_earliest_recorded_ts_never_consults_the_state_machine(recorder_utc):
