@@ -13,6 +13,7 @@ from homeassistant.components.recorder.statistics import (
     get_metadata,
     statistics_during_period,
 )
+from homeassistant.components.recorder.tasks import SynchronizeTask
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.components.recorder.common import (
     async_wait_recording_done,
@@ -1906,6 +1907,64 @@ async def test_a_quiet_statistic_with_an_unchanged_name_is_not_imported(
     # "on" is over, and "off" is entered nowhere in the window: only its
     # duration has a row to write.
     assert seen == [DURATION_OFF]
+
+
+def _queue_spy(monkeypatch, hass, *, swallow_fence=False):
+    """Record the task types the compile queues, optionally dropping the fence."""
+    instance = get_instance(hass)
+    real = instance.queue_task
+    seen: list[str] = []
+
+    def queue_task(task):
+        seen.append(type(task).__name__)
+        if swallow_fence and isinstance(task, SynchronizeTask):
+            return
+        real(task)
+
+    monkeypatch.setattr(instance, "queue_task", queue_task)
+    return seen
+
+
+async def test_a_recorder_that_is_not_running_is_not_fenced(
+    recorder, freezer, monkeypatch
+):
+    """Nothing would serve the task, and the await is inside the compile lock.
+
+    A fence that never resolves there stalls every later hourly run and
+    every `recompute` for the life of the process.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    await _seed_two_states(hass, freezer, start)
+
+    seen = _queue_spy(monkeypatch, hass)
+    monkeypatch.setattr(get_instance(hass), "is_running", False)
+    freezer.move_to(start + timedelta(hours=4))
+    assert await Compiler(hass).async_compile(cfg(), start.timestamp())
+
+    assert "SynchronizeTask" not in seen
+    # The rows were still handed over, which is what the fence waits for.
+    assert "ImportStatisticsTask" in seen
+
+
+async def test_a_fence_that_never_commits_gives_up_and_warns(
+    recorder, freezer, monkeypatch, caplog
+):
+    """A compile that has enqueued its rows must not fail over a late fence."""
+    # Zero rather than a short wait: these tests run under a frozen clock,
+    # where no positive bound ever elapses. A deadline already reached
+    # fires on the next pass of the loop either way.
+    monkeypatch.setattr(compiler_module, "FENCE_TIMEOUT", 0)
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    await _seed_two_states(hass, freezer, start)
+
+    seen = _queue_spy(monkeypatch, hass, swallow_fence=True)
+    freezer.move_to(start + timedelta(hours=4))
+    assert await Compiler(hass).async_compile(cfg(), start.timestamp())
+
+    assert "SynchronizeTask" in seen
+    assert "Timed out waiting" in caplog.text
 
 
 async def test_a_rowless_statistic_whose_metadata_drifted_is_imported(

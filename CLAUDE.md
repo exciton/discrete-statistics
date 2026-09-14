@@ -607,7 +607,7 @@ one an entry already owns, which is also what keeps it out of
 Verified against 2026.8.3.
 
 - `async_add_external_statistics` is a `@callback` — call it, do not await it.
-  It only *enqueues*; `Compiler.async_compile` drains via `async_block_till_done()`
+  It only *enqueues*; `Compiler.async_compile` waits on `_async_fence`
   before returning so a subsequent compile reads a base including those writes.
 - Every other recorder query is synchronous and must run through
   `get_instance(hass).async_add_executor_job(...)`.

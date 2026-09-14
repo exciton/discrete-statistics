@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import functools as ft
+import logging
 from collections.abc import Collection, Mapping
 from datetime import datetime, timezone
 from typing import Any, NamedTuple
@@ -27,6 +29,15 @@ from .naming import async_warm_state_translations, display_name, state_translato
 from .payload import build_payloads, readable_state
 from .rows import bases, series_end, standing
 from .statistic_ids import belongs_to, parse
+
+_LOGGER = logging.getLogger(__name__)
+
+# How long the fence waits for the recorder to commit what a compile
+# queued. Generous, because a backlogged recorder must never be cut short;
+# bounded, because the await sits inside the compile lock and a recorder
+# that stops serving its queue between the check and the task would
+# otherwise hold that lock for the life of the process.
+FENCE_TIMEOUT = 60
 
 # Recompute this many trailing hours on every run, so a state committed by
 # the recorder after we first read its hour is still picked up.
@@ -60,6 +71,12 @@ class _Stored(NamedTuple):
     import that would change none of them can be skipped: a rename, a
     unit, a unit class, a mean type or the sum flag all still reach a
     statistic the window never saw, with no rows beside them.
+
+    `has_mean` is the one field the recorder neither compares nor
+    rewrites: `_update_metadata` leaves it out, and a read derives it from
+    `mean_type`. So `payload.metadata_for` must keep the two consistent,
+    or every rowless statistic would compare unequal and import on every
+    compile.
     """
 
     name: str
@@ -285,7 +302,7 @@ class Compiler:
 
         if wrote:
             # The sensors re-read after a compile rather than on a clock of
-            # their own: the write is drained above, so what they read now
+            # their own: the write is fenced above, so what they read now
             # is what was just written. The range says which of their
             # cached sums a rewrite could have moved.
             async_dispatcher_send(
@@ -308,9 +325,26 @@ class Compiler:
         two serialised by the lock - by one whose base and watermark open
         behind the rows just written, and whose sums would then descend.
         """
+        recorder = get_instance(self._hass)
+        if not recorder.is_running:
+            # Nothing is serving the queue - the thread has stopped, or has
+            # not reached its loop - so the task would never run. The
+            # writes stay queued for whoever starts it.
+            return
         future = self._hass.loop.create_future()
-        get_instance(self._hass).queue_task(SynchronizeTask(future))
-        await future
+        recorder.queue_task(SynchronizeTask(future))
+        try:
+            async with asyncio.timeout(FENCE_TIMEOUT):
+                await future
+        except TimeoutError:
+            # The rows are enqueued either way, so raising here would lose
+            # the compile rather than the write. The next compile may open
+            # behind them, which is what the trailing window corrects.
+            _LOGGER.warning(
+                "Timed out waiting %ss for the recorder to commit what the "
+                "compile wrote; continuing",
+                FENCE_TIMEOUT,
+            )
 
     async def async_tail(
         self, cfg: EntityConfig, start: float, end: float
