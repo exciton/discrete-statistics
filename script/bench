@@ -20,6 +20,9 @@
 #   BENCH_BRANCH                       the label results are filed under
 #   BENCH_BUILD_ANCHOR                 a SQLite file whose newest compiled
 #                                      hour a `build` stops at
+#   BENCH_PROFILE        unset         1: `build` and `compile` profile each
+#                                      entity into results/profiles/
+#   BENCH_CHUNK_HOURS    unset         the compiler's chunk size for this run
 #
 # The mode, repeat count and those paths travel in $BENCH_RESULTS/run.json,
 # named to the container by BENCH_RUN: pytest runs inside the container and
@@ -142,6 +145,10 @@ if [[ -n "${BENCH_BUILD_ANCHOR:-}" ]]; then
   ANCHOR="\"$(inside "$BUILD_ANCHOR")\""
 fi
 
+# Any non-empty value but 0 turns the profile on.
+PROFILE=false
+case "${BENCH_PROFILE:-}" in "" | 0) ;; *) PROFILE=true ;; esac
+
 cat > "$RESULTS/run.json" <<JSON
 {
  "mode": "$MODE",
@@ -153,7 +160,9 @@ cat > "$RESULTS/run.json" <<JSON
  "cases": "$(inside "$CASES")",
  "data_dir": "$(inside "$DATA")",
  "results_dir": "$(inside "$RESULTS")",
- "build_anchor": $ANCHOR
+ "build_anchor": $ANCHOR,
+ "profile": $PROFILE,
+ "chunk_hours": ${BENCH_CHUNK_HOURS:-null}
 }
 JSON
 
