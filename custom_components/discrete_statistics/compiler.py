@@ -36,7 +36,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from .bucketer import bucket, first_whole_hour, hour_start
 from .canonicalise import canonicalise
 from .config import EntityConfig
-from .const import DOMAIN, HOUR, METRIC_DURATION
+from .const import DOMAIN, HOUR, METRIC_COUNT, METRIC_DURATION
 from .naming import async_warm_state_translations, display_name, state_translator
 from .payload import build_payloads, partition_rows, readable_state
 from .rows import bases, metadata_ids, series_end, standing
@@ -548,6 +548,42 @@ class Compiler:
             )
 
         return compiled
+
+    async def async_fill(
+        self, cfg: EntityConfig, source_entity_id: str, before: float
+    ) -> int:
+        """Compile a replacement entity's early history into our series.
+
+        From the last real transition of ours - the newest row across the
+        entity's count statistics, since the watermark marches on over an
+        entity gone unavailable - to the last whole hour before the
+        rename, reading the states under `source_entity_id`. The hour of
+        the rename straddles both IDs and is left to the ordinary compile.
+
+        Fenced first: the recorder's own rename listener runs ahead of
+        ours and moves the states history onto our name when nothing of
+        ours stands in its way, and only after its task has run can the
+        recorder say which ID the history is under.
+        """
+        await self._async_fence()
+        read_from = source_entity_id
+        if await self.async_earliest_recorded_ts(source_entity_id) is None:
+            read_from = cfg.entity_id
+        existing = await self._async_stored(cfg.entity_id)
+        counts = {
+            statistic_id
+            for statistic_id in existing
+            if (parts := parse(statistic_id)) is not None and parts[2] == METRIC_COUNT
+        }
+        start = await self._async_watermark(counts)
+        if start is None:
+            start = await self.async_earliest_recorded_ts(read_from)
+            if start is None:
+                return 0
+        end = hour_start(before)
+        if end <= start:
+            return 0
+        return await self.async_compile(cfg, start, end, read_from=read_from)
 
     async def _async_fence(self) -> None:
         """Wait until everything this compile queued has been committed.
