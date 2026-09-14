@@ -3050,15 +3050,16 @@ async def test_fill_compiles_the_source_history_into_our_series(recorder_utc, fr
     """From the last count row to the hour before the rename, under our IDs."""
     hass = recorder_utc
     compiler = compiler_module.Compiler(hass)
-    cfg_ = cfg()
-    # Ours: on at T0, off at T0+1h (the last transition), gone at T0+2h.
+    ours = cfg()
+    # Ours: on at T0, off at T0+1h (the last transition), then the old
+    # device dies - removed at T0+2h, so hour2 carries `off` forward.
     await play(hass, freezer, [(T0, "on"), (T0 + timedelta(hours=1), "off")])
     freezer.move_to(T0 + timedelta(hours=2))
     hass.states.async_remove(ENTITY)
     await hass.async_block_till_done()
     await async_wait_recording_done(hass)
     freezer.move_to(T0 + timedelta(hours=3))
-    await compiler.async_compile(cfg_, T0.timestamp())
+    await compiler.async_compile(ours, T0.timestamp())
     await async_wait_recording_done(hass)
     # The replacement under its temporary ID: on from T0+3h, off at T0+5h.
     await play(
@@ -3070,13 +3071,14 @@ async def test_fill_compiles_the_source_history_into_our_series(recorder_utc, fr
     renamed_at = T0 + timedelta(hours=6, minutes=20)
     freezer.move_to(renamed_at)
 
-    hours = await compiler.async_fill(cfg_, TEMP, renamed_at.timestamp())
+    hours = await compiler.async_fill(ours, TEMP, renamed_at.timestamp())
     await async_wait_recording_done(hass)
 
     # T0+3h .. T0+6h: three hours of the replacement's states, and nothing
     # under its own ID.
     assert hours == 3
     assert await existing(hass, TEMP) == []
+    # hours 0-5: on, off, off (dead, carried), on, on, off
     assert await read_sums(hass, DURATION_ON, T0, T0 + timedelta(hours=6)) == [
         1.0,
         1.0,
@@ -3101,8 +3103,9 @@ async def test_fill_reads_under_our_own_id_when_the_history_moved(
     """No states_meta row of ours means the recorder's rename succeeded."""
     hass = recorder_utc
     compiler = compiler_module.Compiler(hass)
-    cfg_ = cfg()
-    # Statistics with no state history behind them.
+    ours = cfg()
+    # A duration statistic with no state history and no count statistic
+    # behind it, seeded at a base sum of 1.0 hour before the window.
     await _seed(hass, DURATION_ON, T0 - timedelta(hours=2), [0.5, 1.0])
     # The replacement's history is already under our ID, as the recorder
     # leaves it after a rename that met no collision.
@@ -3110,17 +3113,96 @@ async def test_fill_reads_under_our_own_id_when_the_history_moved(
     renamed_at = T0 + timedelta(hours=2, minutes=5)
     freezer.move_to(renamed_at)
 
-    hours = await compiler.async_fill(cfg_, TEMP, renamed_at.timestamp())
+    hours = await compiler.async_fill(ours, TEMP, renamed_at.timestamp())
     await async_wait_recording_done(hass)
 
     assert hours == 2
+    # hour0: on, adding an hour on top of the seeded 1.0; hour1: off, carried.
     assert await read_sums(hass, DURATION_ON, T0, T0 + timedelta(hours=2)) == [2.0, 2.0]
 
 
 async def test_fill_with_nothing_to_read_compiles_nothing(recorder_utc, freezer):
     hass = recorder_utc
     freezer.move_to(T0)
-    cfg_ = cfg()
+    ours = cfg()
     assert (
-        await compiler_module.Compiler(hass).async_fill(cfg_, TEMP, T0.timestamp()) == 0
+        await compiler_module.Compiler(hass).async_fill(ours, TEMP, T0.timestamp()) == 0
     )
+
+
+async def test_fill_uses_the_count_watermark_not_the_duration_one(
+    recorder_utc, freezer
+):
+    """A dead entity's carried duration rows must not shadow the last transition.
+
+    The old device stops transitioning at T0+1h but is compiled on through
+    T0+6h, carrying `off` the whole way - so its duration rows reach
+    further than its last real change. The replacement's history begins
+    at T0+3h, inside that carried span. Watermarking on the count
+    statistics (the last real transition) rather than on all of them is
+    what lets the fill reach back far enough to read it.
+    """
+    hass = recorder_utc
+    compiler = compiler_module.Compiler(hass)
+    ours = cfg()
+    # Ours: on at T0, off at T0+1h - its last real transition, then it
+    # just carries `off`, never removed.
+    await play(hass, freezer, [(T0, "on"), (T0 + timedelta(hours=1), "off")])
+    # The replacement's history, recorded before ours is compiled past it.
+    await play(
+        hass,
+        freezer,
+        [(T0 + timedelta(hours=3), "on"), (T0 + timedelta(hours=5), "off")],
+        entity_id=TEMP,
+    )
+    freezer.move_to(T0 + timedelta(hours=7))
+    await compiler.async_compile(
+        ours, T0.timestamp(), (T0 + timedelta(hours=6)).timestamp()
+    )
+    await async_wait_recording_done(hass)
+
+    renamed_at = T0 + timedelta(hours=6, minutes=20)
+    freezer.move_to(renamed_at)
+    hours = await compiler.async_fill(ours, TEMP, renamed_at.timestamp())
+    await async_wait_recording_done(hass)
+
+    assert hours == 3
+    # hours 0-5: on, off, off (carried), on, on, off - the replacement's
+    # on/on/off reaching all the way back to T0+3h, not just its last hour.
+    assert await read_sums(hass, DURATION_ON, T0, T0 + timedelta(hours=6)) == [
+        1.0,
+        1.0,
+        1.0,
+        2.0,
+        3.0,
+        3.0,
+    ]
+    assert await read_sums(hass, DURATION_OFF, T0, T0 + timedelta(hours=6)) == [
+        0.0,
+        1.0,
+        2.0,
+        2.0,
+        2.0,
+        3.0,
+    ]
+
+
+async def test_fill_returns_zero_when_the_rename_lands_within_the_last_compiled_hour(
+    recorder_utc, freezer
+):
+    hass = recorder_utc
+    compiler = compiler_module.Compiler(hass)
+    ours = cfg()
+    await play(hass, freezer, [(T0, "on"), (T0 + timedelta(hours=1), "off")])
+    freezer.move_to(T0 + timedelta(hours=2))
+    await compiler.async_compile(ours, T0.timestamp())
+    await async_wait_recording_done(hass)
+    # The replacement's own history, elsewhere - not what this test probes.
+    await play(hass, freezer, [(T0 + timedelta(hours=2), "on")], entity_id=TEMP)
+    # Same hour as the last count row (T0+1h): the window is empty.
+    renamed_at = T0 + timedelta(hours=1, minutes=30)
+    freezer.move_to(renamed_at)
+
+    hours = await compiler.async_fill(ours, TEMP, renamed_at.timestamp())
+
+    assert hours == 0

@@ -569,6 +569,10 @@ class Compiler:
         read_from = source_entity_id
         if await self.async_earliest_recorded_ts(source_entity_id) is None:
             read_from = cfg.entity_id
+        # Read live rather than reusing a fence-adjacent view, for the same
+        # reason `async_compile_incremental` re-reads before its own call:
+        # a statistic deleted moments earlier must not be judged against a
+        # stale metadata snapshot.
         existing = await self._async_stored(cfg.entity_id)
         counts = {
             statistic_id
