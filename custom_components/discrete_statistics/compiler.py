@@ -18,18 +18,19 @@ from homeassistant.components.recorder.models import StatisticMeanType
 from homeassistant.components.recorder.statistics import (
     async_add_external_statistics,
     get_metadata,
+    import_statistics,
 )
 from homeassistant.components.recorder.tasks import (
     ImportStatisticsTask,
     RecorderTask,
     SynchronizeTask,
 )
-from homeassistant.components.recorder.util import retryable_database_job, session_scope
+from homeassistant.components.recorder.util import session_scope
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util import dt as dt_util
 from sqlalchemy import insert
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from .bucketer import bucket, first_whole_hour, hour_start
 from .canonicalise import canonicalise
@@ -59,7 +60,8 @@ CHUNK_HOURS = 24 * 7
 # Rows per INSERT in the bulk path. SQLAlchemy sends a list of dicts to
 # `cursor.executemany`, which binds one row at a time and so has no
 # parameter limit to breach - but a driver that rewrites the batch into a
-# single multi-row VALUES (psycopg's executemany does) would, and SQLite's
+# single multi-row VALUES (SQLAlchemy's psycopg2 dialect does, under its
+# default `executemany_mode`, at 1 000 rows a page) would, and SQLite's
 # 32 766 bound variables is the tightest of those: thirteen columns a row
 # puts the ceiling at ~2 500. Under it, and large enough that a busy
 # entity's week is one statement.
@@ -247,12 +249,16 @@ def _row_values(metadata_id: int, row: Mapping[str, Any], now: float) -> dict[st
     }
 
 
-@retryable_database_job("discrete_statistics bulk insert")
 def _bulk_insert(
     instance: Recorder,
     payloads: Mapping[str, tuple[dict[str, Any], list[dict[str, Any]]]],
-) -> bool:
+) -> None:
     """Insert rows no row stands at, in one statement a batch. Recorder thread.
+
+    Every batch shares one session and commits with it, so a failure in
+    any of them discards them all - which is what lets the caller fall
+    back for the whole task rather than for part of it. Nothing is caught
+    here: the caller decides.
 
     The metadata ids are resolved here rather than carried, because only
     the recorder thread may ask: `statistics_meta_manager` keeps a cache
@@ -285,7 +291,6 @@ def _bulk_insert(
             values.extend(_row_values(meta[0], row, now) for row in rows)
         for batch in _batches(values, BULK_ROWS):
             session.execute(insert(Statistics), batch)
-    return True
 
 
 @dataclass(slots=True)
@@ -303,6 +308,11 @@ class BulkInsertTask(RecorderTask):
     `payloads` is {statistic_id: (metadata, rows)}. The metadata is
     carried only for the fallback below; the rows are `StatisticData` -
     a `start` and a `sum`.
+
+    A batch the fallback cannot write either is lost: the hourly run
+    never revisits it, because the watermark advances with the chunks
+    that did succeed. `recompute` with a `start:` before the hole is
+    what rebuilds it.
     """
 
     payloads: dict[str, tuple[dict[str, Any], list[dict[str, Any]]]]
@@ -310,26 +320,30 @@ class BulkInsertTask(RecorderTask):
     def run(self, instance: Recorder) -> None:
         """Handle the task."""
         try:
-            if not _bulk_insert(instance, self.payloads):
-                # A retryable database error, after the recorder's own
-                # wait. Queued again exactly as ImportStatisticsTask does.
-                instance.queue_task(BulkInsertTask(self.payloads))
-            return
-        except IntegrityError:
-            # A row stands where our read said none did. We believe this
-            # impossible - the read and this write are one compile, under
-            # the compile lock, and no other writer of a
-            # `discrete_statistics:` statistic exists - but losing the
-            # rows over it would break monotonicity for every hour after,
-            # so hand the whole task to the recorder's upsert instead. It
-            # is the slow path; it is also the correct one.
+            _bulk_insert(instance, self.payloads)
+        except (IntegrityError, OperationalError) as err:
+            # An IntegrityError means a row stands where our read said
+            # none did; an OperationalError is the database refusing the
+            # statement. Either way losing the batch would leave every
+            # later sum on a base that was never written, so the recorder's
+            # own upsert runs instead - inline, because the compile's fence
+            # is already queued behind this task and anything queued here
+            # would commit after `async_compile` returned. Anything else
+            # escapes to the recorder's own guard around the task.
             _LOGGER.warning(
-                "Bulk insert of %s statistics collided with a standing row; "
+                "Bulk insert of %s statistics failed with %s; "
                 "falling back to the recorder's own import",
                 len(self.payloads),
+                type(err).__name__,
             )
-        for metadata, rows in self.payloads.values():
-            instance.queue_task(ImportStatisticsTask(metadata, rows, Statistics))
+            for metadata, rows in self.payloads.values():
+                if not import_statistics(instance, metadata, rows, Statistics):
+                    # Retryable, after the recorder's own wait. Queued
+                    # again exactly as ImportStatisticsTask does - behind
+                    # the fence, as the recorder's own import already is.
+                    instance.queue_task(
+                        ImportStatisticsTask(metadata, rows, Statistics)
+                    )
 
 
 class Compiler:

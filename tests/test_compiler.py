@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from homeassistant.components.recorder import get_instance
+from homeassistant.components.recorder.db_schema import Statistics, StatisticsMeta
 from homeassistant.components.recorder.models import StatisticMeanType
 from homeassistant.components.recorder.statistics import (
     async_add_external_statistics,
@@ -14,11 +15,14 @@ from homeassistant.components.recorder.statistics import (
     statistics_during_period,
 )
 from homeassistant.components.recorder.tasks import SynchronizeTask
+from homeassistant.components.recorder.util import session_scope
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.components.recorder.common import (
     async_wait_recording_done,
 )
 from sqlalchemy import event as sqlalchemy_event
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from custom_components.discrete_statistics import compiler as compiler_module
 from custom_components.discrete_statistics.compiler import TRAILING_HOURS, Compiler
@@ -1908,6 +1912,12 @@ async def test_a_quiet_statistic_with_an_unchanged_name_is_not_imported(
     # duration has a row to write, and that row is new, so it goes by the
     # bulk path and not by an import.
     assert seen == []
+    # And that row was written all the same.
+    assert await read_rows(hass, DURATION_OFF, start, start + timedelta(hours=4)) == [
+        (start.timestamp() + HOUR, 1.0),
+        (start.timestamp() + 2 * HOUR, 2.0),
+        (start.timestamp() + 3 * HOUR, 3.0),
+    ]
 
 
 def _queue_spy(monkeypatch, hass, *, swallow_fence=False):
@@ -2541,10 +2551,56 @@ async def test_new_rows_are_inserted_and_only_differing_rows_are_imported(
     ]
 
 
+# Every column a row carries but the ones that legitimately differ
+# between two builds: the row id, and `created`/`created_ts`, which are
+# the time the row was written.
+_ROW_COLUMNS = (
+    "start_ts",
+    "start",
+    "sum",
+    "mean",
+    "mean_weight",
+    "min",
+    "max",
+    "state",
+    "last_reset",
+    "last_reset_ts",
+)
+
+
+async def _raw_rows(hass, statistic_id, start, end):
+    """Every column of every row, straight from the table.
+
+    `statistics_during_period` returns the fields it was asked for, so a
+    stray non-None `mean` or `state` from the bulk path would never show.
+    """
+
+    def read():
+        with session_scope(hass=hass, read_only=True) as session:
+            metadata_id = session.execute(
+                select(StatisticsMeta.id).where(
+                    StatisticsMeta.statistic_id == statistic_id
+                )
+            ).scalar()
+            return [
+                tuple(row)
+                for row in session.execute(
+                    select(*(getattr(Statistics, name) for name in _ROW_COLUMNS))
+                    .where(Statistics.metadata_id == metadata_id)
+                    .where(Statistics.start_ts >= start.timestamp())
+                    .where(Statistics.start_ts < end.timestamp())
+                    .order_by(Statistics.start_ts)
+                ).all()
+            ]
+
+    await get_instance(hass).async_block_till_done()
+    return await get_instance(hass).async_add_executor_job(read)
+
+
 async def _snapshot(hass, start, end):
     """Every row of every statistic the entity has, by statistic."""
     return {
-        statistic_id: await read_rows(hass, statistic_id, start, end)
+        statistic_id: await _raw_rows(hass, statistic_id, start, end)
         for statistic_id in sorted(await existing(hass))
     }
 
@@ -2600,9 +2656,12 @@ async def test_a_rebuild_writes_the_same_rows_with_or_without_the_bulk_path(
     assert await existing(hass) == []
 
     monkeypatch.setattr(compiler_module, "BULK_INSERT", True)
+    _, bulk, _ = _paths(monkeypatch, hass)
     await compiler.async_compile(cfg(), start.timestamp())
     await async_wait_recording_done(hass)
 
+    # Worth nothing unless the second build really took the bulk path.
+    assert any(rows for _, rows in bulk)
     assert await _snapshot(hass, start, end) == imported
 
 
@@ -2673,9 +2732,59 @@ async def test_the_fence_covers_the_bulk_task(recorder, freezer, monkeypatch):
     ]
 
 
-async def test_a_bulk_task_without_metadata_warns_and_writes_nothing(
-    recorder, caplog
+async def _rows_without_waiting(hass, statistic_id, start, end):
+    """`read_rows` without the queue drain, so a late write cannot hide."""
+    result = await get_instance(hass).async_add_executor_job(
+        statistics_during_period,
+        hass,
+        start,
+        end,
+        {statistic_id},
+        "hour",
+        None,
+        {"sum"},
+    )
+    return [(row["start"], row["sum"]) for row in result.get(statistic_id, [])]
+
+
+async def test_a_failed_bulk_insert_falls_back_inside_the_fence(
+    recorder, freezer, monkeypatch, caplog
 ):
+    """The fallback runs on the recorder thread, not on the queue behind it.
+
+    `_async_fence` is queued after the chunk, so a fallback that queued a
+    task of its own would commit after `async_compile` returned - and the
+    coordinator refreshing on `compiled_signal` would read rows that are
+    not there yet.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    await _seed_two_states(hass, freezer, start)
+    freezer.move_to(start + timedelta(hours=4))
+
+    def collide(instance, payloads):
+        raise IntegrityError("INSERT INTO statistics", {}, Exception("UNIQUE"))
+
+    monkeypatch.setattr(compiler_module, "_bulk_insert", collide)
+    queued = _queue_spy(monkeypatch, hass)
+    await Compiler(hass).async_compile(cfg(), start.timestamp())
+
+    assert "falling back to the recorder's own import" in caplog.text
+    # Nothing carrying rows was queued behind the fence.
+    behind = queued[queued.index("SynchronizeTask") + 1 :]
+    assert "ImportStatisticsTask" not in behind
+    assert "BulkInsertTask" not in behind
+    # And the rows are readable with no wait beyond the compile's own fence.
+    assert await _rows_without_waiting(
+        hass, DURATION_OFF, start, start + timedelta(hours=4)
+    ) == [
+        (start.timestamp() + HOUR, 1.0),
+        (start.timestamp() + 2 * HOUR, 2.0),
+        (start.timestamp() + 3 * HOUR, 3.0),
+    ]
+
+
+async def test_a_bulk_task_without_metadata_warns_and_writes_nothing(recorder, caplog):
     """The statistic was deleted while the compile ran.
 
     The import that would have created it is ahead of this task in the
