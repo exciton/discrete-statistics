@@ -29,6 +29,7 @@ from homeassistant.components.recorder.util import session_scope
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util import dt as dt_util
+from homeassistant.util import slugify
 from sqlalchemy import insert
 from sqlalchemy.exc import IntegrityError, OperationalError
 
@@ -38,8 +39,8 @@ from .config import EntityConfig
 from .const import DOMAIN, HOUR, METRIC_DURATION
 from .naming import async_warm_state_translations, display_name, state_translator
 from .payload import build_payloads, partition_rows, readable_state
-from .rows import bases, series_end, standing
-from .statistic_ids import belongs_to, parse
+from .rows import bases, metadata_ids, series_end, standing
+from .statistic_ids import belongs_to, parse, rehome
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -346,6 +347,60 @@ class BulkInsertTask(RecorderTask):
                     )
 
 
+class Renamed(NamedTuple):
+    """What a rename moved, and what it could not."""
+
+    moved: list[str]
+    collided: list[str]
+
+
+@dataclass(slots=True)
+class RenameTask(RecorderTask):
+    """Move an entity's statistics to another entity ID.
+
+    `update_statistic_id` is recorder-thread only, which is why this is a
+    task and not an executor job. The future resolves after the session
+    has committed, because the caller's next step - updating the config
+    entry, whose reload compiles under the new ID - reads this metadata:
+    a compile that opened before the rename committed would find no
+    watermark under the new name and rebuild the retained history as a
+    second series.
+
+    A statistic whose new ID already exists is left where it is. Two
+    series are never merged; the caller reports it.
+    """
+
+    old_entity_id: str
+    new_entity_id: str
+    future: asyncio.Future[Renamed]
+
+    def run(self, instance: Recorder) -> None:
+        """Handle the task."""
+        moved: list[str] = []
+        collided: list[str] = []
+        manager = instance.statistics_meta_manager
+        try:
+            with session_scope(session=instance.get_session()) as session:
+                ours = metadata_ids(
+                    session, (), [slugify(self.old_entity_id, separator="_")]
+                )
+                for statistic_id in sorted(ours):
+                    new_id = rehome(statistic_id, self.new_entity_id)
+                    if new_id is None:
+                        continue
+                    if manager.get(session, new_id):
+                        collided.append(statistic_id)
+                        continue
+                    manager.update_statistic_id(session, DOMAIN, statistic_id, new_id)
+                    moved.append(statistic_id)
+        except Exception as err:  # noqa: BLE001 - the awaiting caller must not hang
+            instance.hass.loop.call_soon_threadsafe(self.future.set_exception, err)
+            return
+        instance.hass.loop.call_soon_threadsafe(
+            self.future.set_result, Renamed(moved, collided)
+        )
+
+
 class Compiler:
     """Compile one entity's history into statistics."""
 
@@ -375,6 +430,17 @@ class Compiler:
         wants: the compile itself compares the whole of the metadata.
         """
         return _names(await self._async_stored(entity_id))
+
+    async def async_rename(self, old_entity_id: str, new_entity_id: str) -> Renamed:
+        """Move every statistic of `old_entity_id` to `new_entity_id`.
+
+        Returns once the rename is committed. See `RenameTask`.
+        """
+        future: asyncio.Future[Renamed] = self._hass.loop.create_future()
+        get_instance(self._hass).queue_task(
+            RenameTask(old_entity_id, new_entity_id, future)
+        )
+        return await future
 
     async def async_compile_incremental(self, cfg: EntityConfig) -> int:
         """Compile from the watermark, recomputing the trailing window.

@@ -47,6 +47,9 @@ DURATION_UNKNOWN = "discrete_statistics:binary_sensor_grid_status_unknown_durati
 DURATION_MISSING = "discrete_statistics:binary_sensor_grid_status_missing_duration"
 COUNT_MISSING = "discrete_statistics:binary_sensor_grid_status_missing_count"
 TEMP = "binary_sensor.grid_status_2"
+NEW = "binary_sensor.grid_status_new"
+NEW_OFF = "discrete_statistics:binary_sensor_grid_status_new_off_duration"
+NEW_ON = "discrete_statistics:binary_sensor_grid_status_new_on_duration"
 
 
 def cfg():
@@ -2966,3 +2969,78 @@ async def test_earliest_recorded_ts_never_consults_the_state_machine(recorder_ut
     # The state machine alone still answers `async_earliest_state_ts`.
     with patch.object(compiler, "async_earliest_recorded_ts", return_value=None):
         assert await compiler.async_earliest_state_ts(ENTITY) is not None
+
+
+async def _seed(hass, statistic_id, start, sums):
+    async_add_external_statistics(
+        hass,
+        metadata_for(METRIC_DURATION, statistic_id, "Grid Status: On (h)"),
+        [{"start": start + timedelta(hours=i), "sum": s} for i, s in enumerate(sums)],
+    )
+    await async_wait_recording_done(hass)
+
+
+async def test_rename_moves_every_statistic_of_the_entity(recorder_utc):
+    hass = recorder_utc
+    await _seed(hass, DURATION_ON, T0, [0.5, 1.0])
+    await _seed(hass, DURATION_OFF, T0, [0.5, 1.0])
+    await _seed(
+        hass, "discrete_statistics:binary_sensor_grid_status_2_on_duration", T0, [1.0]
+    )
+
+    result = await compiler_module.Compiler(hass).async_rename(ENTITY, NEW)
+
+    assert sorted(result.moved) == sorted([DURATION_ON, DURATION_OFF])
+    assert result.collided == []
+    assert await existing(hass) == []
+    assert await existing(hass, NEW) == sorted([NEW_ON, NEW_OFF])
+    # A longer slug sharing the prefix is another entity's and stays.
+    assert await existing(hass, TEMP) == [
+        "discrete_statistics:binary_sensor_grid_status_2_on_duration"
+    ]
+    # The rows came with the metadata.
+    assert await read_sums(
+        hass, NEW_ON, T0, T0 + timedelta(hours=2), entity_id=NEW
+    ) == [0.5, 1.0]
+
+
+async def test_rename_leaves_a_colliding_statistic_in_place(recorder_utc, caplog):
+    hass = recorder_utc
+    await _seed(hass, DURATION_ON, T0, [0.5])
+    await _seed(hass, DURATION_OFF, T0, [0.5])
+    await _seed(hass, NEW_ON, T0, [9.0])
+
+    result = await compiler_module.Compiler(hass).async_rename(ENTITY, NEW)
+
+    assert result.moved == [DURATION_OFF]
+    assert result.collided == [DURATION_ON]
+    assert await existing(hass) == [DURATION_ON]
+    assert await existing(hass, NEW) == sorted([NEW_ON, NEW_OFF])
+    assert await read_sums(
+        hass, NEW_ON, T0, T0 + timedelta(hours=1), entity_id=NEW
+    ) == [9.0]
+    # Checked before core is asked, so core's own error is never logged.
+    assert "Cannot rename statistic_id" not in caplog.text
+
+
+async def test_rename_returns_only_after_the_commit(recorder_utc, monkeypatch):
+    """What the caller does next reads the metadata, so it must be there."""
+    hass = recorder_utc
+    await _seed(hass, DURATION_ON, T0, [0.5])
+    order: list[str] = []
+    real_run = compiler_module.RenameTask.run
+
+    def run(self, instance):
+        real_run(self, instance)
+        order.append("committed")
+
+    monkeypatch.setattr(compiler_module.RenameTask, "run", run)
+    await compiler_module.Compiler(hass).async_rename(ENTITY, NEW)
+    order.append("returned")
+    assert order == ["committed", "returned"]
+    assert await existing(hass, NEW) == [NEW_ON]
+
+
+async def test_rename_of_an_entity_with_no_statistics_is_a_no_op(recorder_utc):
+    result = await compiler_module.Compiler(recorder_utc).async_rename(ENTITY, NEW)
+    assert result == compiler_module.Renamed([], [])
