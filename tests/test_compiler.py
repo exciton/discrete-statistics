@@ -1905,8 +1905,9 @@ async def test_a_quiet_statistic_with_an_unchanged_name_is_not_imported(
     await async_wait_recording_done(hass)
 
     # "on" is over, and "off" is entered nowhere in the window: only its
-    # duration has a row to write.
-    assert seen == [DURATION_OFF]
+    # duration has a row to write, and that row is new, so it goes by the
+    # bulk path and not by an import.
+    assert seen == []
 
 
 def _queue_spy(monkeypatch, hass, *, swallow_fence=False):
@@ -2440,3 +2441,302 @@ async def test_a_statistic_whose_only_row_is_the_previous_hour_vouches_for_it(
     assert await read_sums(
         hass, DURATION_ON, start + timedelta(hours=1), start + timedelta(hours=3)
     ) == [1.0, 2.0]
+
+
+def _paths(monkeypatch, hass):
+    """What each write path was handed, and the order they were queued in.
+
+    Two lists of `(statistic_id, [hour, ...])` - the imports and the bulk
+    task's payloads - plus one list of labels in queue order, which is
+    what proves a statistic's metadata reaches the recorder before its
+    rows do.
+    """
+    imports: list[tuple[str, list[float]]] = []
+    bulk: list[tuple[str, list[float]]] = []
+    order: list[str] = []
+    real_import = compiler_module.async_add_external_statistics
+
+    def record(hass_, metadata, rows):
+        statistic_id = metadata["statistic_id"]
+        order.append(f"import {statistic_id}")
+        imports.append((statistic_id, [row["start"].timestamp() for row in rows]))
+        return real_import(hass_, metadata, rows)
+
+    monkeypatch.setattr(compiler_module, "async_add_external_statistics", record)
+
+    instance = get_instance(hass)
+    real_queue = instance.queue_task
+
+    def queue_task(task):
+        if isinstance(task, compiler_module.BulkInsertTask):
+            for statistic_id, (_, rows) in task.payloads.items():
+                order.append(f"bulk {statistic_id}")
+                bulk.append((statistic_id, [row["start"].timestamp() for row in rows]))
+        return real_queue(task)
+
+    monkeypatch.setattr(instance, "queue_task", queue_task)
+    return imports, bulk, order
+
+
+async def test_new_rows_are_inserted_and_only_differing_rows_are_imported(
+    recorder, freezer, monkeypatch
+):
+    """The three cases an hour can be in, and the path each takes.
+
+    No row stands: the row is new and nothing else could have written it,
+    so it is inserted in bulk. A row stands with a different sum: it is an
+    upsert and goes through the recorder's own import, which is the only
+    thing that knows how to do one. A row stands with the same sum:
+    neither, as `lean-writes` established.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    freezer.move_to(start + timedelta(minutes=30))
+    hass.states.async_set(ENTITY, "off")
+    await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+    # Hour 0 stands with the sum the compile will reach; hour 1 stands
+    # with one the history does not support.
+    async_add_external_statistics(
+        hass,
+        metadata_for(METRIC_DURATION, DURATION_ON, "Grid Status: on (h)"),
+        [
+            {"start": start, "sum": 0.5},
+            {"start": start + timedelta(hours=1), "sum": 0.9},
+        ],
+    )
+    await async_wait_recording_done(hass)
+
+    freezer.move_to(start + timedelta(hours=3))
+    imports, bulk, _ = _paths(monkeypatch, hass)
+    await Compiler(hass).async_compile(cfg(), start.timestamp())
+    await async_wait_recording_done(hass)
+
+    hour = start.timestamp()
+    # Only the differing standing row is imported with rows beside it.
+    assert (DURATION_ON, [hour + HOUR]) in imports
+    assert [rows for sid, rows in imports if sid == DURATION_ON] == [[hour + HOUR]]
+    # Every other row of the window is new.
+    assert sorted(bulk) == [
+        (COUNT_OFF, [hour]),
+        (DURATION_OFF, [hour, hour + HOUR, hour + 2 * HOUR]),
+    ]
+    # And the database holds what both paths were asked for: hour 0's
+    # standing row untouched, hour 1's corrected, the new rows inserted.
+    assert await read_rows(hass, DURATION_ON, start, start + timedelta(hours=3)) == [
+        (hour, 0.5),
+        (hour + HOUR, 0.5),
+    ]
+    assert await read_rows(hass, DURATION_OFF, start, start + timedelta(hours=3)) == [
+        (hour, 0.5),
+        (hour + HOUR, 1.5),
+        (hour + 2 * HOUR, 2.5),
+    ]
+    assert await read_rows(hass, COUNT_OFF, start, start + timedelta(hours=3)) == [
+        (hour, 1.0)
+    ]
+
+
+async def _snapshot(hass, start, end):
+    """Every row of every statistic the entity has, by statistic."""
+    return {
+        statistic_id: await read_rows(hass, statistic_id, start, end)
+        for statistic_id in sorted(await existing(hass))
+    }
+
+
+async def _seed_a_varied_history(hass, freezer, start):
+    """Several hours, several states, one of them appearing only late on."""
+    freezer.move_to(start)
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    for minutes, state in (
+        (30, "off"),
+        (95, "on"),
+        (150, "off"),
+        (185, "on"),
+        (260, "off"),
+        # A state - and so a statistic - that appears only in a later chunk.
+        (300, "missing"),
+        (330, "off"),
+    ):
+        freezer.move_to(start + timedelta(minutes=minutes))
+        hass.states.async_set(ENTITY, state)
+        await hass.async_block_till_done()
+    await get_instance(hass).async_block_till_done()
+
+
+async def test_a_rebuild_writes_the_same_rows_with_or_without_the_bulk_path(
+    recorder, freezer, monkeypatch
+):
+    """The equivalence the whole spike rests on.
+
+    A build from empty statistics, compiled once through the recorder's
+    import and once through the bulk insert, must leave the database
+    holding exactly the same rows - across a chunk seam, and including a
+    statistic created in the second chunk.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(compiler_module, "CHUNK_HOURS", 2)
+    await _seed_a_varied_history(hass, freezer, start)
+    end = start + timedelta(hours=7)
+    freezer.move_to(end)
+    compiler = Compiler(hass)
+
+    monkeypatch.setattr(compiler_module, "BULK_INSERT", False)
+    await compiler.async_compile(cfg(), start.timestamp())
+    await async_wait_recording_done(hass)
+    imported = await _snapshot(hass, start, end)
+    assert len(imported) >= 6
+    assert any(rows for rows in imported.values())
+
+    await _delete(hass, list(imported))
+    await async_wait_recording_done(hass)
+    assert await existing(hass) == []
+
+    monkeypatch.setattr(compiler_module, "BULK_INSERT", True)
+    await compiler.async_compile(cfg(), start.timestamp())
+    await async_wait_recording_done(hass)
+
+    assert await _snapshot(hass, start, end) == imported
+
+
+async def test_a_statistics_metadata_is_queued_before_its_bulk_rows(
+    recorder, freezer, monkeypatch
+):
+    """The bulk task resolves metadata ids itself, so the row must exist.
+
+    Both go on the recorder's queue and it is served in order, so the
+    import that creates a new `statistics_meta` row has to be queued
+    first. It is: the chunk imports inside its loop over the payloads and
+    queues the one bulk task after it.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    await _seed_two_states(hass, freezer, start)
+
+    freezer.move_to(start + timedelta(hours=4))
+    _, _, order = _paths(monkeypatch, hass)
+    await Compiler(hass).async_compile(cfg(), start.timestamp())
+    await async_wait_recording_done(hass)
+
+    for statistic_id in (DURATION_ON, DURATION_OFF, COUNT_OFF):
+        assert order.index(f"import {statistic_id}") < order.index(
+            f"bulk {statistic_id}"
+        )
+    # Which is worth nothing unless the rows arrived.
+    assert await read_rows(hass, DURATION_OFF, start, start + timedelta(hours=4)) == [
+        (start.timestamp() + HOUR, 1.0),
+        (start.timestamp() + 2 * HOUR, 2.0),
+        (start.timestamp() + 3 * HOUR, 3.0),
+    ]
+
+
+async def test_the_fence_covers_the_bulk_task(recorder, freezer, monkeypatch):
+    """A compile milliseconds behind reads the bulk rows in its base.
+
+    The bulk task is queued ahead of `SynchronizeTask`, so it has
+    committed by the time `async_compile` returns. Without that the next
+    compile's base would read zero and its sums would restart there.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    await _seed_two_states(hass, freezer, start)
+
+    freezer.move_to(start + timedelta(hours=4))
+    compiler = Compiler(hass)
+    queued = _queue_spy(monkeypatch, hass)
+    await compiler.async_compile(
+        cfg(), start.timestamp(), (start + timedelta(hours=2)).timestamp()
+    )
+    # The queue is served in order, so this is the whole guarantee.
+    assert queued.index("BulkInsertTask") < queued.index("SynchronizeTask")
+    # No wait: the fence is the only thing that has happened.
+    await compiler.async_compile(
+        cfg(),
+        (start + timedelta(hours=2)).timestamp(),
+        (start + timedelta(hours=4)).timestamp(),
+    )
+
+    # Hour 0 is "on". Without the fence covering the bulk task the second
+    # compile's base would read zero and hours 2 and 3 would restart there.
+    assert await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=4)) == [
+        pytest.approx(0.0),
+        pytest.approx(1.0),
+        pytest.approx(2.0),
+        pytest.approx(3.0),
+    ]
+
+
+async def test_a_bulk_task_without_metadata_warns_and_writes_nothing(
+    recorder, caplog
+):
+    """The statistic was deleted while the compile ran.
+
+    The import that would have created it is ahead of this task in the
+    same queue and retries itself, so no metadata here means gone rather
+    than late - and nothing else records that a statistic was deleted, so
+    recreating it would resurrect it.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    task = compiler_module.BulkInsertTask(
+        {
+            DURATION_OFF: (
+                metadata_for(METRIC_DURATION, DURATION_OFF, "Grid Status: off (h)"),
+                [{"start": start, "sum": 1.0}],
+            )
+        }
+    )
+    get_instance(hass).queue_task(task)
+    await async_wait_recording_done(hass)
+
+    assert f"No metadata for {DURATION_OFF}" in caplog.text
+    assert await existing(hass) == []
+
+
+async def test_a_bulk_row_that_collides_falls_back_to_the_import(
+    recorder, freezer, caplog
+):
+    """A row we called new turning out to stand must not be lost.
+
+    We believe it cannot happen - the standing read and this write are one
+    compile under one lock, and nothing else writes a
+    `discrete_statistics:` statistic - but dropping the batch would leave
+    every later sum standing on a base that was never written.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    await _seed_two_states(hass, freezer, start)
+    freezer.move_to(start + timedelta(hours=4))
+    await Compiler(hass).async_compile(cfg(), start.timestamp())
+    await async_wait_recording_done(hass)
+
+    # Every one of these hours already has a row.
+    get_instance(hass).queue_task(
+        compiler_module.BulkInsertTask(
+            {
+                DURATION_OFF: (
+                    metadata_for(METRIC_DURATION, DURATION_OFF, "Grid Status: off (h)"),
+                    [
+                        {"start": start + timedelta(hours=1), "sum": 9.0},
+                        {"start": start + timedelta(hours=2), "sum": 9.5},
+                    ],
+                )
+            }
+        )
+    )
+    await async_wait_recording_done(hass)
+
+    assert "falling back to the recorder's own import" in caplog.text
+    # The upsert ran: the rows carry the sums the task was handed.
+    assert await read_rows(hass, DURATION_OFF, start, start + timedelta(hours=4)) == [
+        (start.timestamp() + HOUR, 9.0),
+        (start.timestamp() + 2 * HOUR, 9.5),
+        (start.timestamp() + 3 * HOUR, 3.0),
+    ]
