@@ -312,6 +312,16 @@ class Compiler:
 
         Returns what the next chunk starts from and the hours actually
         compiled.
+
+        A payload with no rows and the name the recorder already holds is
+        not imported at all: a task, a commit and a metadata round trip
+        for a statistic with nothing to say. A renamed one is still
+        imported with no rows, which is how a relabel reaches a state the
+        window did not see. `mean_type` and the units are not compared -
+        they change only with this integration's version, and the first
+        compile that writes a row for a statistic carries them; a
+        statistic that never writes again keeps rows whose metadata the
+        recorder does not read.
         """
         # An hour further back on the opening chunk.
         # `include_start_time_state` hands back exactly ONE row before the
@@ -358,15 +368,18 @@ class Compiler:
 
         next_sums = dict(sums)
         next_existing = dict(state.existing)
-        for statistic_id, (metadata, statistic_rows) in payloads.items():
-            async_add_external_statistics(self._hass, metadata, statistic_rows)
-            # No row means every hour's value was zero: the sum is where it was.
-            next_sums[statistic_id] = (
-                statistic_rows[-1]["sum"]
-                if statistic_rows
-                else sums.get(statistic_id, 0.0)
-            )
-            next_existing[statistic_id] = metadata["name"]
+        for statistic_id, payload in payloads.items():
+            if payload.rows or payload.metadata["name"] != state.existing.get(
+                statistic_id
+            ):
+                async_add_external_statistics(
+                    self._hass, payload.metadata, payload.rows
+                )
+            # The sum the window reached, which a written row need not
+            # carry: an hour whose row already stands with that sum writes
+            # nothing, and the next chunk still starts from it.
+            next_sums[statistic_id] = payload.ending_sum
+            next_existing[statistic_id] = payload.metadata["name"]
 
         return (
             _ChunkState(

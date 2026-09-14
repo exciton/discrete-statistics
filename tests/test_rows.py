@@ -224,7 +224,7 @@ async def test_bases_are_one_statement_whatever_the_statistic_count(
     assert len(found) == len(ids)
 
 
-async def test_standing_lists_the_hours_holding_a_row_inside_the_window(recorder):
+async def test_standing_answers_the_hours_and_the_sums_inside_the_window(recorder):
     hass = recorder
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     await seed(hass, "discrete_statistics:a_on_duration", start, [1.0, None, 2.0, 3.0])
@@ -239,10 +239,11 @@ async def test_standing_lists_the_hours_holding_a_row_inside_the_window(recorder
         (start + timedelta(hours=1)).timestamp(),
         (start + timedelta(hours=4)).timestamp(),
     )
+    # The sum too: a row is worth rewriting only where it differs.
     assert hours == {
         "discrete_statistics:a_on_duration": {
-            (start + timedelta(hours=2)).timestamp(),
-            (start + timedelta(hours=3)).timestamp(),
+            (start + timedelta(hours=2)).timestamp(): 2.0,
+            (start + timedelta(hours=3)).timestamp(): 3.0,
         }
     }
 

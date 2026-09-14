@@ -98,7 +98,7 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
        ├─ rows              reads the recorder: the newest row before each
        │        │           of many edges, per-engine SQL, the sums at a
        │        │           set of edges, a range opened on the row before
-       │        │           it, the compile's bases, the rows standing in
+       │        │           it, the compile's bases, the sums standing in
        │        │           a window, where a series starts and where it ends
        ├─ reading           pure: a window in pieces - whole hours, part hours,
        │        │           the tail -> one sensor's value
@@ -120,7 +120,7 @@ Keep it that way: if a change needs recorder access in a lower module, the
 design is drifting. Three recorder boundaries: `compiler` is the only
 module that writes; `rows` reads — `session_scope(read_only=True)`, the
 newest row before each of a set of edges, the sums at a set of edges, the
-rows of a range and the one before it, the rows standing in a window, the
+rows of a range and the one before it, the sums standing in a window, the
 earliest and the newest row of a series — for `websocket`, the compiler
 and the coordinator alike. Every one of those reads is a single statement,
 `rows.bases` included: the compile's base read asks `rows_before` for two
@@ -346,8 +346,15 @@ hour sum to 1.0. A hole has none. Count rows are sparse by nature. The
 third clause is what keeps the recorder's upsert idempotent: nothing
 deletes, so a recompile that finds a state absent from an hour it was
 once written into rewrites that row with the carried sum
-(`rows.standing`, read once per chunk), or its old sum would stand
-ahead of every later one. There is no `mean`: the recorder's reduction
+(`rows.standing`, read once per chunk, sums and all), or its old sum
+would stand ahead of every later one. A standing row is rewritten only
+where its sum *differs* from the one computed now — one that would be
+rewritten with itself is skipped, and a recompute over history that has
+not changed writes nothing at all, which is ~93% of its wall clock
+(`docs/superpowers/notes/2026-09-13-lean-writes-profile.md`). By the
+same argument a payload with no rows and an unchanged name is not
+imported: nothing would change, and the recorder's queue is shared with
+every other integration. There is no `mean`: the recorder's reduction
 skips absent rows, so over sparse rows it would average the hours the
 state occurred, never the period.
 
@@ -480,7 +487,9 @@ only because `compose_name` strips colons from the state half. A display
 name may hold any number of them; a state may hold none. The state half cannot be
 rebuilt from the ID — the ID holds only the token — so a rename would
 otherwise never reach a state the entity has not been in for months, and
-neither would a change to the units.
+neither would a change to the units. The relabel is the one reason a
+rowless payload is imported at all — its name differing from the one the
+recorder holds is what lets the import be skipped otherwise.
 
 **A state older than the purge horizon is still known.** Purge deletes every
 row past `purge_keep_days` with no per-entity reprieve (`queries.py:281`), so
@@ -634,7 +643,10 @@ Verified against 2026.8.3.
   applies to `rows.standing`: a compile that runs within milliseconds of the
   previous one's drain can miss a row still committing and leave it
   unrewritten; tests that compile twice back to back wait with
-  `async_wait_recording_done` between.
+  `async_wait_recording_done` between. Skipping the metadata-only imports
+  widens that gap rather than narrowing it: the task carrying the rows is
+  now the last one popped, so the queue empties while it is still
+  committing, where a trailing metadata-only task used to cover it.
 - Recorder engines differ on how a seek is planned, so `rows.rows_before`
   renders itself per engine, chosen from `session.get_bind().dialect.name`
   — the same string the recorder parses, and no caller threads it in.

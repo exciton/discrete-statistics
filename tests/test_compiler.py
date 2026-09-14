@@ -1826,6 +1826,112 @@ def _bounds(params):
                 yield edge
 
 
+async def test_recompiling_unchanged_history_writes_no_rows(
+    recorder, freezer, all_statements
+):
+    """Every row already stands with the sum this compile computes.
+
+    A recompute is almost always over history that has not changed, and
+    the recorder spends two statements on every row handed to it - so the
+    rows it is handed are the whole cost.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    await _seed_two_states(hass, freezer, start)
+
+    freezer.move_to(start + timedelta(hours=4))
+    compiler = Compiler(hass)
+    await compiler.async_compile(cfg(), start.timestamp())
+    await async_wait_recording_done(hass)
+
+    all_statements.clear()
+    await compiler.async_compile(cfg(), start.timestamp())
+    await async_wait_recording_done(hass)
+
+    written = [
+        sql
+        for sql, _ in all_statements
+        if sql.lstrip().upper().startswith(("INSERT", "UPDATE"))
+        and re.search(r"\bstatistics\b", sql)
+    ]
+    assert written == []
+    # The second compile still agrees with the first.
+    assert await read_rows(hass, DURATION_OFF, start, start + timedelta(hours=4)) == [
+        (start.timestamp() + HOUR, 1.0),
+        (start.timestamp() + 2 * HOUR, 2.0),
+        (start.timestamp() + 3 * HOUR, 3.0),
+    ]
+
+
+def _imports(monkeypatch):
+    """The statistic ids handed to `async_add_external_statistics`."""
+    seen: list[str] = []
+    real = compiler_module.async_add_external_statistics
+
+    def record(hass, metadata, rows):
+        seen.append(metadata["statistic_id"])
+        return real(hass, metadata, rows)
+
+    monkeypatch.setattr(compiler_module, "async_add_external_statistics", record)
+    return seen
+
+
+async def test_a_quiet_statistic_with_an_unchanged_name_is_not_imported(
+    recorder, freezer, monkeypatch
+):
+    """Metadata the recorder already holds, and no rows: nothing to say.
+
+    An import is a task, a commit and a metadata round trip on a queue
+    every integration shares.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    await _seed_two_states(hass, freezer, start)
+
+    freezer.move_to(start + timedelta(hours=4))
+    compiler = Compiler(hass)
+    await compiler.async_compile(
+        cfg(), start.timestamp(), (start + timedelta(hours=2)).timestamp()
+    )
+    await async_wait_recording_done(hass)
+
+    seen = _imports(monkeypatch)
+    await compiler.async_compile(
+        cfg(),
+        (start + timedelta(hours=2)).timestamp(),
+        (start + timedelta(hours=4)).timestamp(),
+    )
+    await async_wait_recording_done(hass)
+
+    # "on" is over, and "off" is entered nowhere in the window: only its
+    # duration has a row to write.
+    assert seen == [DURATION_OFF]
+
+
+async def test_a_renamed_statistic_is_imported_even_with_no_rows(
+    recorder, freezer, monkeypatch
+):
+    """The relabel is the one reason a rowless payload is still imported."""
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    await _seed_two_states(hass, freezer, start)
+
+    freezer.move_to(start + timedelta(hours=4))
+    compiler = Compiler(hass)
+    await compiler.async_compile(cfg(), start.timestamp())
+    await async_wait_recording_done(hass)
+
+    seen = _imports(monkeypatch)
+    renamed = EntityConfig(
+        entity_id=ENTITY, name="The Grid", default="record_known", states={}
+    )
+    await compiler.async_compile(renamed, start.timestamp())
+    await async_wait_recording_done(hass)
+
+    assert set(seen) == {DURATION_ON, COUNT_ON, DURATION_OFF, COUNT_OFF}
+    assert await stored_name(hass, DURATION_ON) == "The Grid: on (h)"
+
+
 async def test_a_chunk_that_raises_still_drains_the_ones_before_it(
     recorder, freezer, monkeypatch
 ):
@@ -1893,6 +1999,9 @@ async def test_the_state_machine_outranks_our_own_statistics(recorder, freezer):
     freezer.move_to(start + timedelta(hours=2))
     compiler = Compiler(hass)
     await compiler.async_compile(cfg(), start.timestamp())
+    # The compile's own drain returns before the popped import task has
+    # committed, and the compile below reads that watermark.
+    await async_wait_recording_done(hass)
 
     # Committed after hour 1 was compiled, then purged with everything else.
     freezer.move_to(start + timedelta(hours=1, minutes=45))
