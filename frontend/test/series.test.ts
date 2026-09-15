@@ -3,6 +3,7 @@ import {
   buildSeries,
   earliestStart,
   percentAxisMax,
+  roundUpMax,
   unitLabel,
   valueOf,
 } from "../src/series";
@@ -162,6 +163,19 @@ describe("buildSeries", () => {
   it("wraps the palette", () => {
     const { series } = buildSeries("climate.zone", stats, data, "h", ["#abcdef"]);
     expect(series[1].color).toBe("#abcdef7F");
+  });
+
+  it("stacks every series under the key it is given", () => {
+    const { series } = buildSeries("entities", [stats[0], stats[1]], data, "h", ["#111111"], "bar-stack");
+    expect(series.map((s) => s.stack)).toEqual(["entities", "entities"]);
+  });
+});
+
+describe("roundUpMax", () => {
+  it("rounds up at the order of magnitude without a cap", () => {
+    expect(roundUpMax({ min: 0, max: 37 })).toBe(40);
+    expect(roundUpMax({ min: 0, max: 180 })).toBe(200);
+    expect(roundUpMax({ min: 0, max: 0 })).toBe(1);
   });
 });
 
