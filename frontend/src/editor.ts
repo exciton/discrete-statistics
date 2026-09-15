@@ -1,7 +1,14 @@
 import { LitElement, css, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { listStatisticIds } from "./hass-api";
-import { stateList, stateListConfig, type StateList } from "./state-list";
+import { isMultiEntity, toMultiEntity, toSingleEntity } from "./config";
+import {
+  seriesList,
+  seriesListConfig,
+  stateList,
+  stateListConfig,
+  type StateList,
+} from "./state-list";
 import { entitiesWithStatistics, statisticsForEntity } from "./statistic-ids";
 import type {
   CardConfig,
@@ -37,16 +44,37 @@ const PERIOD_LABEL: Record<Period, string> = {
 // is limited to the entities the integration has statistics for when that
 // list is known; with no list — the lookup failed — it offers every entity
 // rather than none.
-export function configSchema(entities?: string[], followsPicker = false) {
+export function configSchema(
+  entities?: string[],
+  followsPicker = false,
+  multi = false
+) {
   const dropdown = (options: { value: string; label: string }[]) => ({
     select: { mode: "dropdown", options },
   });
   return [
     {
-      name: "entity",
+      name: "chart_mode",
       required: true,
-      selector: { entity: entities ? { include_entities: entities } : {} },
+      selector: {
+        select: {
+          mode: "list",
+          options: [
+            { value: "states", label: "States of one entity" },
+            { value: "entities", label: "One state from several" },
+          ],
+        },
+      },
     },
+    ...(multi
+      ? []
+      : [
+          {
+            name: "entity",
+            required: true,
+            selector: { entity: entities ? { include_entities: entities } : {} },
+          },
+        ]),
     { name: "title", selector: { text: {} } },
     {
       name: "",
@@ -130,6 +158,7 @@ export function configSchema(entities?: string[], followsPicker = false) {
 
 export const computeLabel = (schema: { name: string }) =>
   ({
+    chart_mode: "Chart",
     entity: "Entity",
     title: "Title",
     chart_type: "Chart type",
@@ -144,6 +173,8 @@ export const computeLabel = (schema: { name: string }) =>
 
 export const computeHelper = (schema: { name: string }) =>
   ({
+    chart_mode:
+      "Whether the chart's series are one entity's states, or one state from each of several entities.",
     collection_key: "Names the date picker when a dashboard has more than one.",
   })[schema.name];
 
@@ -187,37 +218,57 @@ export class DiscreteStatisticsCardEditor extends LitElement {
     if (!this._config || this._entities === undefined) {
       return nothing;
     }
+    const multi = isMultiEntity(this._config);
     // A config missing these keys shows the card's defaults rather than
     // blank fields.
     const data = {
       ...this._config,
+      chart_mode: multi ? "entities" : "states",
       chart_type: this._config.chart_type ?? "bar-stack",
       period: this._config.period ?? "auto",
       metric: this._config.metric ?? "duration",
       unit: this._config.unit ?? "auto",
     };
-    // Every state the entity has statistics for under the chosen metric.
-    const states = stateList(
-      statisticsForEntity(data.entity ?? "", data.metric, this._metadata),
-      this._config
+    // A row per series in entities mode; a row per state the entity has
+    // statistics for under the chosen metric in states mode.
+    const list = multi
+      ? seriesList(this._config.states ?? [], data.metric, this._metadata)
+      : stateList(
+          statisticsForEntity(this._config.entity!, data.metric, this._metadata),
+          this._config
+        );
+    const stateOptions = Object.fromEntries(
+      list.rows
+        .map((row) => row.entity)
+        .filter((entity): entity is string => !!entity)
+        .map((entity) => [
+          entity,
+          statisticsForEntity(entity, data.metric, this._metadata).map((s) => ({
+            value: s.token || s.label,
+            label: s.label,
+          })),
+        ])
     );
     return html`<ha-form
         .hass=${this.hass}
         .data=${data}
         .schema=${configSchema(
           this._entities ?? undefined,
-          !!this._config.energy_date_selection
+          !!this._config.energy_date_selection,
+          multi
         )}
         .computeLabel=${computeLabel}
         .computeHelper=${computeHelper}
         @value-changed=${this._valueChanged}
       ></ha-form>
-      ${states.rows.length
+      ${multi || list.rows.length
         ? html`<div class="states">
-            <div class="heading">States</div>
+            <div class="heading">${multi ? "Series" : "States"}</div>
             <discrete-statistics-state-list
               .hass=${this.hass}
-              .value=${states}
+              .value=${list}
+              .entities=${this._entities ?? undefined}
+              .stateOptions=${stateOptions}
               @value-changed=${this._statesChanged}
             ></discrete-statistics-state-list>
           </div>`
@@ -227,12 +278,25 @@ export class DiscreteStatisticsCardEditor extends LitElement {
   private _statesChanged(ev: CustomEvent<{ value: StateList }>): void {
     ev.stopPropagation();
     const { states: _states, ignore_states: _ignored, ...rest } = this._config!;
-    this._announce({ ...rest, ...stateListConfig(ev.detail.value) });
+    const config = isMultiEntity(this._config!)
+      ? seriesListConfig(ev.detail.value)
+      : stateListConfig(ev.detail.value);
+    this._announce({ ...rest, ...config });
   }
 
   private _valueChanged(ev: CustomEvent): void {
     ev.stopPropagation();
-    this._announce(ev.detail.value);
+    const { chart_mode: mode, ...config } = ev.detail.value;
+    const wanted = mode === "entities";
+    if (wanted === isMultiEntity(this._config!)) {
+      this._announce(config);
+      return;
+    }
+    this._announce(
+      wanted
+        ? toMultiEntity(config, config.metric ?? "duration", this._metadata)
+        : toSingleEntity(config)
+    );
   }
 
   private _announce(config: CardConfig): void {
