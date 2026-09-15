@@ -29,17 +29,18 @@ from homeassistant.components.recorder.util import session_scope
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util import dt as dt_util
+from homeassistant.util import slugify
 from sqlalchemy import insert
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from .bucketer import bucket, first_whole_hour, hour_start
 from .canonicalise import canonicalise
 from .config import EntityConfig
-from .const import DOMAIN, HOUR, METRIC_DURATION
+from .const import DOMAIN, HOUR, METRIC_COUNT, METRIC_DURATION
 from .naming import async_warm_state_translations, display_name, state_translator
 from .payload import build_payloads, partition_rows, readable_state
-from .rows import bases, series_end, standing
-from .statistic_ids import belongs_to, parse
+from .rows import bases, metadata_ids, series_end, standing
+from .statistic_ids import belongs_to, parse, rehome
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -346,6 +347,67 @@ class BulkInsertTask(RecorderTask):
                     )
 
 
+class Fill(NamedTuple):
+    """What a fill compiled, and the entity ID whose history it read."""
+
+    hours: int
+    read_from: str
+
+
+class Renamed(NamedTuple):
+    """What a rename moved, and what it could not."""
+
+    moved: list[str]
+    collided: list[str]
+
+
+@dataclass(slots=True)
+class RenameTask(RecorderTask):
+    """Move an entity's statistics to another entity ID.
+
+    `update_statistic_id` is recorder-thread only, which is why this is a
+    task and not an executor job. The future resolves after the session
+    has committed, because the caller's next step - updating the config
+    entry, whose reload compiles under the new ID - reads this metadata:
+    a compile that opened before the rename committed would find no
+    watermark under the new name and rebuild the retained history as a
+    second series.
+
+    A statistic whose new ID already exists is left where it is. Two
+    series are never merged; the caller reports it.
+    """
+
+    old_entity_id: str
+    new_entity_id: str
+    future: asyncio.Future[Renamed]
+
+    def run(self, instance: Recorder) -> None:
+        """Handle the task."""
+        moved: list[str] = []
+        collided: list[str] = []
+        manager = instance.statistics_meta_manager
+        try:
+            with session_scope(session=instance.get_session()) as session:
+                ours = metadata_ids(
+                    session, (), [slugify(self.old_entity_id, separator="_")]
+                )
+                for statistic_id in sorted(ours):
+                    new_id = rehome(statistic_id, self.new_entity_id)
+                    if new_id is None:
+                        continue
+                    if manager.get(session, new_id):
+                        collided.append(statistic_id)
+                        continue
+                    manager.update_statistic_id(session, DOMAIN, statistic_id, new_id)
+                    moved.append(statistic_id)
+        except Exception as err:  # noqa: BLE001 - the awaiting caller must not hang
+            instance.hass.loop.call_soon_threadsafe(self.future.set_exception, err)
+            return
+        instance.hass.loop.call_soon_threadsafe(
+            self.future.set_result, Renamed(moved, collided)
+        )
+
+
 class Compiler:
     """Compile one entity's history into statistics."""
 
@@ -376,6 +438,17 @@ class Compiler:
         """
         return _names(await self._async_stored(entity_id))
 
+    async def async_rename(self, old_entity_id: str, new_entity_id: str) -> Renamed:
+        """Move every statistic of `old_entity_id` to `new_entity_id`.
+
+        Returns once the rename is committed. See `RenameTask`.
+        """
+        future: asyncio.Future[Renamed] = self._hass.loop.create_future()
+        get_instance(self._hass).queue_task(
+            RenameTask(old_entity_id, new_entity_id, future)
+        )
+        return await future
+
     async def async_compile_incremental(self, cfg: EntityConfig) -> int:
         """Compile from the watermark, recomputing the trailing window.
 
@@ -399,13 +472,29 @@ class Compiler:
         return await self.async_compile(cfg, start)
 
     async def async_compile(
-        self, cfg: EntityConfig, start: float | None, end: float | None = None
+        self,
+        cfg: EntityConfig,
+        start: float | None,
+        end: float | None = None,
+        *,
+        read_from: str | None = None,
     ) -> int:
-        """Compile [start, end) for one entity. Returns hours compiled."""
-        earliest = await self.async_earliest_state_ts(cfg.entity_id)
+        """Compile [start, end) for one entity. Returns hours compiled.
+
+        `read_from` names the entity whose recorded history is read - a
+        replacement device's temporary ID, whose states the fill writes
+        under `cfg.entity_id`. Only the recorder reads move with it: the
+        statistics, and the state machine carry, are always the entity
+        configured.
+        """
+        source = read_from or cfg.entity_id
+        earliest = await self.async_earliest_state_ts(source)
         if earliest is None:
             return 0
         window_start = hour_start(earliest if start is None else start)
+        if read_from is None and cfg.filled_until is not None:
+            # A fill's own compile is exempt: it is what sets this floor.
+            window_start = max(window_start, cfg.filled_until)
         # Only completed hours are emitted.
         window_end = hour_start(
             end if end is not None else dt_util.utcnow().timestamp()
@@ -444,6 +533,7 @@ class Compiler:
                     chunk_end,
                     state,
                     first_chunk=chunk_start == window_start,
+                    read_from=source,
                 )
                 compiled += hours
                 wrote = wrote or imported
@@ -468,6 +558,52 @@ class Compiler:
             )
 
         return compiled
+
+    async def async_fill(
+        self, cfg: EntityConfig, source_entity_id: str, before: float
+    ) -> Fill:
+        """Compile a replacement entity's early history into our series.
+
+        From the hour after our last real transition - the newest row
+        across the entity's count statistics, since the watermark marches
+        on over an entity gone unavailable - to the last whole hour before
+        the rename, reading the states under `source_entity_id`. The hour
+        of the rename straddles both IDs and is left to the ordinary
+        compile.
+
+        Fenced first: the recorder's own rename listener runs ahead of
+        ours and moves the states history onto our name when nothing of
+        ours stands in its way, and only after its task has run can the
+        recorder say which ID the history is under.
+        """
+        await self._async_fence()
+        read_from = source_entity_id
+        if await self.async_earliest_recorded_ts(source_entity_id) is None:
+            read_from = cfg.entity_id
+        # Read live rather than reusing a fence-adjacent view, for the same
+        # reason `async_compile_incremental` re-reads before its own call:
+        # a statistic deleted moments earlier must not be judged against a
+        # stale metadata snapshot.
+        existing = await self._async_stored(cfg.entity_id)
+        counts = {
+            statistic_id
+            for statistic_id in existing
+            if (parts := parse(statistic_id)) is not None and parts[2] == METRIC_COUNT
+        }
+        watermark = await self._async_watermark(counts)
+        if watermark is None:
+            start = await self.async_earliest_recorded_ts(read_from)
+            if start is None:
+                return Fill(0, read_from)
+        else:
+            # The watermark hour holds that transition and the rest of our
+            # own device's behaviour up to it, so the fill opens after it.
+            start = watermark + HOUR
+        end = hour_start(before)
+        if end <= start:
+            return Fill(0, read_from)
+        hours = await self.async_compile(cfg, start, end, read_from=read_from)
+        return Fill(hours, read_from)
 
     async def _async_fence(self) -> None:
         """Wait until everything this compile queued has been committed.
@@ -524,7 +660,7 @@ class Compiler:
             existing=existing,
             carried=_carried_from_statistics(previous_hour, _names(existing)),
         )
-        rows = await self._async_history(cfg, start - HOUR, end)
+        rows = await self._async_history(cfg, cfg.entity_id, start - HOUR, end)
         opened = self._open_window(cfg, rows, start, end, state)
         return None if opened is None else Timeline(*opened)
 
@@ -536,9 +672,9 @@ class Compiler:
         return existing, await self._async_watermark(existing)
 
     async def _async_history(
-        self, cfg: EntityConfig, query_start: float, window_end: float
+        self, cfg: EntityConfig, entity_id: str, query_start: float, window_end: float
     ) -> list:
-        """Return the recorder rows for [query_start, window_end).
+        """Return the recorder rows of `entity_id` for [query_start, window_end).
 
         Plus `cfg.min_duration` beyond the end, so a short spell that ends
         after the window can still be measured.
@@ -555,13 +691,13 @@ class Compiler:
             self._hass,
             _as_datetime(query_start - START_MARGIN),
             _as_datetime(window_end + cfg.min_duration),
-            cfg.entity_id,
+            entity_id,
             True,  # no_attributes
             False,  # descending
             None,  # limit
             True,  # include_start_time_state
         )
-        return history.get(cfg.entity_id, [])
+        return history.get(entity_id, [])
 
     async def _async_compile_chunk(
         self,
@@ -571,6 +707,7 @@ class Compiler:
         state: _ChunkState,
         *,
         first_chunk: bool,
+        read_from: str,
     ) -> tuple[_ChunkState, int, bool]:
         """Compile one chunk.
 
@@ -601,7 +738,10 @@ class Compiler:
         # sees both and carries the good one forward. Later chunks need none
         # of this: they are handed the state the previous chunk ended in.
         rows = await self._async_history(
-            cfg, chunk_start - HOUR if first_chunk else chunk_start, chunk_end
+            cfg,
+            read_from,
+            chunk_start - HOUR if first_chunk else chunk_start,
+            chunk_end,
         )
         opened = self._open_window(cfg, rows, chunk_start, chunk_end, state)
         if opened is None:
@@ -852,6 +992,28 @@ class Compiler:
                 )
         return sums, values
 
+    async def async_earliest_recorded_ts(self, entity_id: str) -> float | None:
+        """The oldest retained recorder row's timestamp, or None.
+
+        The recorder alone: `None` here means the entity has no history at
+        all, which is what a fill asks before deciding which entity ID the
+        history is under.
+        """
+        history = await get_instance(self._hass).async_add_executor_job(
+            state_changes_during_period,
+            self._hass,
+            EPOCH,
+            None,
+            entity_id,
+            True,
+            False,
+            1,
+            False,
+        )
+        if rows := history.get(entity_id):
+            return rows[0].last_changed_timestamp
+        return None
+
     async def async_earliest_state_ts(self, entity_id: str) -> float | None:
         """Return the timestamp to open an entity's history at, or None.
 
@@ -868,19 +1030,8 @@ class Compiler:
         window opens on a whole hour - a part-known hour cannot both be
         recorded and total wall-clock time.
         """
-        history = await get_instance(self._hass).async_add_executor_job(
-            state_changes_during_period,
-            self._hass,
-            EPOCH,
-            None,
-            entity_id,
-            True,
-            False,
-            1,
-            False,
-        )
-        if rows := history.get(entity_id):
-            return rows[0].last_changed_timestamp
+        if (recorded := await self.async_earliest_recorded_ts(entity_id)) is not None:
+            return recorded
 
         state = self._hass.states.get(entity_id)
         if state is None:

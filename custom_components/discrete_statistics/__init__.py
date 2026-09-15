@@ -30,7 +30,7 @@ from homeassistant.helpers.typing import ConfigType
 from homeassistant.loader import async_get_integration
 
 from . import frontend as card_frontend
-from . import websocket
+from . import registry, websocket
 from .compiler import Compiler
 
 # CONFIG_SCHEMA is the HA hook: HA looks it up by name on this module to
@@ -39,6 +39,7 @@ from .compiler import Compiler
 from .config import CONFIG_SCHEMA, EntityConfig, entity_config_from_entry, is_configured
 from .const import BACKLOG_THRESHOLD, DOMAIN
 from .naming import describe
+from .registry import missing_issue_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -204,6 +205,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         DOMAIN, SERVICE_RECOMPUTE, _async_recompute, schema=RECOMPUTE_SCHEMA
     )
 
+    # Last: the listener reads hass.data[DOMAIN] on every registry event.
+    registry.async_setup(hass)
+
     return True
 
 
@@ -289,10 +293,24 @@ async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
     if title != entry.title:
         hass.config_entries.async_update_entry(entry, title=title)
 
-    # Everything but the name changes how past states were attributed, so
-    # any of it moving means the whole history must be recompiled. A name
-    # change reaches the display on the next ordinary run with no rewrite.
-    if old_cfg is not None and replace(cfg, name=old_cfg.name) == old_cfg:
+    # Everything but the name and the entity ID changes how past states were
+    # attributed, so any of it moving means the whole history must be
+    # recompiled. A name change reaches the display on the next ordinary run
+    # with no rewrite. An entity-ID change comes only from a rename we
+    # followed, which reloads the entry itself: the reload's compile picks up
+    # the moved series, and a full recompute here would read the whole
+    # history for nothing. Nor does a fill's own floor: it changes nothing
+    # already compiled, only where the next compile may open.
+    if (
+        old_cfg is not None
+        and replace(
+            cfg,
+            name=old_cfg.name,
+            entity_id=old_cfg.entity_id,
+            filled_until=old_cfg.filled_until,
+        )
+        == old_cfg
+    ):
         return
 
     entry.async_create_background_task(
@@ -343,6 +361,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _async_compile_and_notify(hass, entry, cfg, full=False),
             name=f"{DOMAIN} compile {cfg.entity_id}",
         )
+
+    registry.async_review_missing(hass)
     return True
 
 
@@ -352,18 +372,20 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unloaded:
         hass.data[DOMAIN]["entry_configs"].pop(entry.entry_id, None)
         async_delete_issue(hass, DOMAIN, _clash_issue_id(entry))
+        async_delete_issue(hass, DOMAIN, missing_issue_id(entry))
     return unloaded
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Log what removal kept. Nothing here deletes statistics.
 
-    Also clears any yaml_clash issue this entry left behind:
+    Also clears any repair issue this entry left behind:
     async_unload_entry never runs for an entry stuck in SETUP_ERROR, so
     removal is the only remaining point that can retire the issue. A no-op
     when there is nothing to delete, so this is safe on the ordinary path.
     """
     async_delete_issue(hass, DOMAIN, _clash_issue_id(entry))
+    async_delete_issue(hass, DOMAIN, missing_issue_id(entry))
     _LOGGER.info(
         "Removed %s from %s. Its statistics are kept; delete them in "
         "Settings > System > Tools > Statistics if you no longer want them",

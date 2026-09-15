@@ -6,6 +6,7 @@ from homeassistant.const import CONF_ENTITY_ID, CONF_NAME
 
 from custom_components.discrete_statistics.config import (
     CONF_DEFAULT,
+    CONF_FILLED_UNTIL,
     CONF_MIN_DURATION,
     CONF_STATES,
     CONFIG_SCHEMA,
@@ -225,6 +226,13 @@ def test_entity_config_from_entry_has_no_state_map():
     # to the default for every state.
     cfg = entity_config_from_entry({CONF_ENTITY_ID: "binary_sensor.a"}, {})
     assert cfg.states == {}
+
+
+def test_entity_config_from_entry_reads_the_fill_floor():
+    cfg = entity_config_from_entry(
+        {CONF_ENTITY_ID: "binary_sensor.a", CONF_FILLED_UNTIL: 123.0}, {}
+    )
+    assert cfg.filled_until == 123.0
 
 
 def test_an_empty_state_is_treated_as_unknown():

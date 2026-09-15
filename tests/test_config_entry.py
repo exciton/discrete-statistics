@@ -270,6 +270,33 @@ async def test_update_listener_does_not_fire_after_unload(recorder):
     assert hass.data[DOMAIN]["all_configs"]() == []
 
 
+async def test_an_entity_id_change_does_not_recompute(recorder):
+    """A rename we followed reloads the entry; a recompute here is waste."""
+    hass = recorder
+    hass.set_state(CoreState.running)
+    assert await async_setup_component(hass, DOMAIN, {})
+    entry = make_entry()
+    entry.add_to_hass(hass)
+    with patch(
+        "custom_components.discrete_statistics.Compiler.async_compile_incremental",
+        return_value=0,
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    with patch("custom_components.discrete_statistics.Compiler.async_compile") as full:
+        hass.config_entries.async_update_entry(
+            entry, data={CONF_ENTITY_ID: "binary_sensor.grid_status_new"}
+        )
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert not full.called
+    assert (
+        hass.data[DOMAIN]["entry_configs"][entry.entry_id].entity_id
+        == "binary_sensor.grid_status_new"
+    )
+
+
 async def test_entry_backfills_history_end_to_end(recorder, freezer):
     """An entry created over existing history compiles all of it.
 

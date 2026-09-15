@@ -29,6 +29,7 @@ CONF_DEFAULT = "default"
 CONF_STATES = "states"
 CONF_BLANK = "blank"
 CONF_MIN_DURATION = "min_duration"
+CONF_FILLED_UNTIL = "filled_until"
 
 DEFAULTS = (
     DEFAULT_RECORD,
@@ -58,6 +59,9 @@ class EntityConfig:
     # ignored - carried across - as though the entity had never left the
     # state before it. Zero when nothing is `ignore_short`.
     min_duration: float = 0.0
+    # The end of a fill's window: no later compile may open before it, or
+    # the trailing window would flatten it from our own entity's history.
+    filled_until: float | None = None
 
     def resolve(self, raw_state: str) -> str | None:
         """Return the canonical state for a raw state, or None to ignore it.
@@ -295,7 +299,8 @@ def entity_config_from_entry(
     testable without Home Assistant. `entity_id` lives in data because it is
     identity: it builds every statistic ID and is never editable. An empty
     name arrives from the text field as "" and is normalised to None, which
-    payload renders as the entity ID.
+    payload renders as the entity ID. `filled_until` lives in data too: it is
+    written by a fill, never by the options dialog.
     """
     return EntityConfig(
         entity_id=data[CONF_ENTITY_ID],
@@ -304,4 +309,5 @@ def entity_config_from_entry(
         states=options.get(CONF_STATES) or {},
         blank=options.get(CONF_BLANK) or STATE_UNKNOWN,
         min_duration=options.get(CONF_MIN_DURATION) or 0.0,
+        filled_until=data.get(CONF_FILLED_UNTIL),
     )

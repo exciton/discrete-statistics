@@ -108,3 +108,22 @@ def belongs_to(statistic_id: str, entity_id: str) -> bool:
     IDs.
     """
     return family(statistic_id) == slugify(entity_id, separator="_")
+
+
+def rehome(statistic_id: str, entity_id: str) -> str | None:
+    """The same statistic built for another entity, or None if not ours.
+
+    The state token and the metric are kept as parsed - the token is
+    lossy, so the state itself cannot be recovered to rebuild from - and
+    only the entity slug is swapped.
+    """
+    parts = parse(statistic_id)
+    if parts is None:
+        return None
+    _, token, metric = parts
+    moved = f"{DOMAIN}:{slugify(entity_id, separator='_')}_{token}_{metric}"
+    if not VALID_STATISTIC_ID.match(moved):
+        raise InvalidStatisticIdError(
+            f"Cannot move {statistic_id!r} to entity_id={entity_id!r} (got {moved!r})"
+        )
+    return moved

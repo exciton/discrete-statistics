@@ -12,6 +12,7 @@ from custom_components.discrete_statistics.statistic_ids import (
     family,
     is_blank,
     parse,
+    rehome,
     state_token,
 )
 
@@ -180,3 +181,49 @@ def test_a_state_that_normalises_to_unknown_is_a_name_not_a_blank():
     assert build("sensor.x", "__unknown__", METRIC_DURATION) == build(
         "sensor.x", "unknown", METRIC_DURATION
     )
+
+
+def test_rehome_swaps_only_the_entity_slug():
+    assert (
+        rehome(
+            "discrete_statistics:binary_sensor_grid_status_on_duration",
+            "binary_sensor.grid_status_new",
+        )
+        == "discrete_statistics:binary_sensor_grid_status_new_on_duration"
+    )
+    assert (
+        rehome(
+            "discrete_statistics:binary_sensor_grid_status_on_count",
+            "binary_sensor.mains",
+        )
+        == "discrete_statistics:binary_sensor_mains_on_count"
+    )
+
+
+def test_rehome_keeps_a_state_token_that_looks_like_a_slug():
+    # `heatcool` is one token; the slug is everything before it.
+    statistic_id = build("climate.zone", "heat_cool", METRIC_DURATION)
+    assert rehome(statistic_id, "climate.zone_heat") == build(
+        "climate.zone_heat", "heat_cool", METRIC_DURATION
+    )
+
+
+@pytest.mark.parametrize(
+    "statistic_id",
+    ["recorder:binary_sensor_grid_status", "discrete_statistics:x_on"],
+)
+def test_rehome_refuses_ids_that_are_not_ours(statistic_id):
+    assert rehome(statistic_id, "binary_sensor.grid_status_new") is None
+
+
+def test_rehome_round_trips_every_shape():
+    for entity_id, state in [
+        ("binary_sensor.grid_status", "on"),
+        ("climate.zone", "heat_cool"),
+        ("sensor.fault_code", "E-01"),
+    ]:
+        for metric in (METRIC_DURATION, METRIC_COUNT):
+            original = build(entity_id, state, metric)
+            moved = rehome(original, "sensor.elsewhere")
+            assert moved == build("sensor.elsewhere", state, metric)
+            assert rehome(moved, entity_id) == original

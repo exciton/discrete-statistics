@@ -3,12 +3,15 @@
 import functools as ft
 import json
 import re
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pytest
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.db_schema import Statistics, StatisticsMeta
 from homeassistant.components.recorder.models import StatisticMeanType
+from homeassistant.components.recorder.purge import purge_old_data
 from homeassistant.components.recorder.statistics import (
     async_add_external_statistics,
     get_metadata,
@@ -34,7 +37,7 @@ from custom_components.discrete_statistics.const import (
 )
 from custom_components.discrete_statistics.payload import metadata_for
 from custom_components.discrete_statistics.statistic_ids import parse
-from tests.conftest import existing, read_sums
+from tests.conftest import T0, existing, play, read_sums
 
 ENTITY = "binary_sensor.grid_status"
 DURATION_OFF = "discrete_statistics:binary_sensor_grid_status_off_duration"
@@ -44,6 +47,10 @@ COUNT_ON = "discrete_statistics:binary_sensor_grid_status_on_count"
 DURATION_UNKNOWN = "discrete_statistics:binary_sensor_grid_status_unknown_duration"
 DURATION_MISSING = "discrete_statistics:binary_sensor_grid_status_missing_duration"
 COUNT_MISSING = "discrete_statistics:binary_sensor_grid_status_missing_count"
+TEMP = "binary_sensor.grid_status_2"
+NEW = "binary_sensor.grid_status_new"
+NEW_OFF = "discrete_statistics:binary_sensor_grid_status_new_off_duration"
+NEW_ON = "discrete_statistics:binary_sensor_grid_status_new_on_duration"
 
 
 def cfg():
@@ -2849,3 +2856,452 @@ async def test_a_bulk_row_that_collides_falls_back_to_the_import(
         (start.timestamp() + 2 * HOUR, 9.5),
         (start.timestamp() + 3 * HOUR, 3.0),
     ]
+
+
+async def test_a_compile_can_read_another_entitys_history(recorder_utc, freezer):
+    """`read_from` moves only the history reads; the IDs stay ours."""
+    hass = recorder_utc
+    await play(
+        hass,
+        freezer,
+        [(T0, "on"), (T0 + timedelta(hours=2), "off")],
+        entity_id=TEMP,
+    )
+    freezer.move_to(T0 + timedelta(hours=4))
+    hours = await compiler_module.Compiler(hass).async_compile(
+        cfg(), T0.timestamp(), (T0 + timedelta(hours=4)).timestamp(), read_from=TEMP
+    )
+    await async_wait_recording_done(hass)
+
+    assert hours == 4
+    # `on` is carried into the window rather than entered, so it gets no
+    # count row of its own - but `build_payloads` still plans and imports
+    # COUNT_ON's metadata, as it does for every state that appears at all,
+    # whether or not it was ever counted.
+    assert await existing(hass) == sorted(
+        [DURATION_ON, DURATION_OFF, COUNT_ON, COUNT_OFF]
+    )
+    assert await existing(hass, TEMP) == []
+    assert await read_sums(hass, DURATION_ON, T0, T0 + timedelta(hours=4)) == [
+        1.0,
+        2.0,
+        2.0,
+        2.0,
+    ]
+
+
+async def test_read_from_reaches_the_evidence_and_the_opening_floor(
+    recorder_utc, freezer
+):
+    """`read_from` moves the evidence and the opening floor with it.
+
+    The source has no recorded history until two hours in - the earlier
+    row is purged, which is what moves the floor to T0+2h - and no live
+    state either can vouch earlier than that, so the window must move to
+    the source's first whole hour instead of opening at T0.
+    """
+    hass = recorder_utc
+    freezer.move_to(T0 - timedelta(days=2))
+    hass.states.async_set(TEMP, "on")
+    await hass.async_block_till_done()
+    await async_wait_recording_done(hass)
+    # Purging the row this wrote is what moves the floor to T0+2h: the
+    # source's earliest retained evidence is then the `off` row below.
+    await get_instance(hass).async_add_executor_job(
+        purge_old_data, get_instance(hass), T0 - timedelta(days=1), False
+    )
+    await async_wait_recording_done(hass)
+    await play(hass, freezer, [(T0 + timedelta(hours=2), "off")], entity_id=TEMP)
+
+    freezer.move_to(T0 + timedelta(hours=4))
+    hours = await compiler_module.Compiler(hass).async_compile(
+        cfg(), T0.timestamp(), (T0 + timedelta(hours=4)).timestamp(), read_from=TEMP
+    )
+    await async_wait_recording_done(hass)
+
+    # Two hours, not four: nothing vouched for T0 and T0+1h.
+    assert hours == 2
+    assert await read_sums(hass, DURATION_OFF, T0, T0 + timedelta(hours=4)) == [
+        1.0,
+        2.0,
+    ]
+
+
+async def test_the_state_machine_carry_is_asked_for_our_entity_not_the_read_one(
+    recorder_utc, freezer
+):
+    """Our own live state opens the window, never the read identity's.
+
+    TEMP's only row lands exactly on T0, where `first_whole_hour(T0) ==
+    T0` leaves the opening floor out of it, so the carry decision is
+    genuinely reached. Asking TEMP's live state would find `off` with
+    `last_changed == T0`, which `_open_window` then dedupes against the
+    row itself - losing the count.
+    """
+    hass = recorder_utc
+    freezer.move_to(T0 - timedelta(hours=1))
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await async_wait_recording_done(hass)
+    await play(hass, freezer, [(T0, "off")], entity_id=TEMP)
+
+    freezer.move_to(T0 + timedelta(hours=2))
+    hours = await compiler_module.Compiler(hass).async_compile(
+        cfg(), T0.timestamp(), (T0 + timedelta(hours=2)).timestamp(), read_from=TEMP
+    )
+    await async_wait_recording_done(hass)
+
+    assert hours == 2
+    assert await read_sums(hass, COUNT_OFF, T0, T0 + timedelta(hours=2)) == [1.0, 1.0]
+
+
+async def test_earliest_recorded_ts_never_consults_the_state_machine(recorder_utc):
+    hass = recorder_utc
+    compiler = compiler_module.Compiler(hass)
+    hass.states.async_set(ENTITY, "on")
+    await hass.async_block_till_done()
+    await async_wait_recording_done(hass)
+    assert await compiler.async_earliest_recorded_ts(ENTITY) is not None
+    assert await compiler.async_earliest_recorded_ts(TEMP) is None
+    # The state machine alone still answers `async_earliest_state_ts`.
+    with patch.object(compiler, "async_earliest_recorded_ts", return_value=None):
+        assert await compiler.async_earliest_state_ts(ENTITY) is not None
+
+
+async def _seed(hass, statistic_id, start, sums):
+    async_add_external_statistics(
+        hass,
+        metadata_for(METRIC_DURATION, statistic_id, "Grid Status: On (h)"),
+        [{"start": start + timedelta(hours=i), "sum": s} for i, s in enumerate(sums)],
+    )
+    await async_wait_recording_done(hass)
+
+
+async def test_rename_moves_every_statistic_of_the_entity(recorder_utc):
+    hass = recorder_utc
+    await _seed(hass, DURATION_ON, T0, [0.5, 1.0])
+    await _seed(hass, DURATION_OFF, T0, [0.5, 1.0])
+    await _seed(
+        hass, "discrete_statistics:binary_sensor_grid_status_2_on_duration", T0, [1.0]
+    )
+
+    result = await compiler_module.Compiler(hass).async_rename(ENTITY, NEW)
+
+    assert sorted(result.moved) == sorted([DURATION_ON, DURATION_OFF])
+    assert result.collided == []
+    assert await existing(hass) == []
+    assert await existing(hass, NEW) == sorted([NEW_ON, NEW_OFF])
+    # A longer slug sharing the prefix is another entity's and stays.
+    assert await existing(hass, TEMP) == [
+        "discrete_statistics:binary_sensor_grid_status_2_on_duration"
+    ]
+    # The rows came with the metadata.
+    assert await read_sums(
+        hass, NEW_ON, T0, T0 + timedelta(hours=2), entity_id=NEW
+    ) == [0.5, 1.0]
+
+
+async def test_rename_leaves_a_colliding_statistic_in_place(recorder_utc, caplog):
+    hass = recorder_utc
+    await _seed(hass, DURATION_ON, T0, [0.5])
+    await _seed(hass, DURATION_OFF, T0, [0.5])
+    await _seed(hass, NEW_ON, T0, [9.0])
+
+    result = await compiler_module.Compiler(hass).async_rename(ENTITY, NEW)
+
+    assert result.moved == [DURATION_OFF]
+    assert result.collided == [DURATION_ON]
+    assert await existing(hass) == [DURATION_ON]
+    assert await existing(hass, NEW) == sorted([NEW_ON, NEW_OFF])
+    assert await read_sums(
+        hass, NEW_ON, T0, T0 + timedelta(hours=1), entity_id=NEW
+    ) == [9.0]
+    # Checked before core is asked, so core's own error is never logged.
+    assert "Cannot rename statistic_id" not in caplog.text
+
+
+async def test_rename_returns_only_after_the_commit(recorder_utc, monkeypatch):
+    """What the caller does next reads the metadata, so it must be there."""
+    hass = recorder_utc
+    await _seed(hass, DURATION_ON, T0, [0.5])
+    order: list[str] = []
+    real_run = compiler_module.RenameTask.run
+
+    def run(self, instance):
+        real_run(self, instance)
+        order.append("committed")
+
+    monkeypatch.setattr(compiler_module.RenameTask, "run", run)
+    await compiler_module.Compiler(hass).async_rename(ENTITY, NEW)
+    order.append("returned")
+    assert order == ["committed", "returned"]
+    assert await existing(hass, NEW) == [NEW_ON]
+
+
+async def test_rename_of_an_entity_with_no_statistics_is_a_no_op(recorder_utc):
+    result = await compiler_module.Compiler(recorder_utc).async_rename(ENTITY, NEW)
+    assert result == compiler_module.Renamed([], [])
+
+
+async def test_fill_compiles_the_source_history_into_our_series(recorder_utc, freezer):
+    """From the last count row to the hour before the rename, under our IDs."""
+    hass = recorder_utc
+    compiler = compiler_module.Compiler(hass)
+    ours = cfg()
+    # Ours: on at T0, off at T0+1h (the last transition), then the old
+    # device dies - removed at T0+2h, so hour2 carries `off` forward.
+    await play(hass, freezer, [(T0, "on"), (T0 + timedelta(hours=1), "off")])
+    freezer.move_to(T0 + timedelta(hours=2))
+    hass.states.async_remove(ENTITY)
+    await hass.async_block_till_done()
+    await async_wait_recording_done(hass)
+    freezer.move_to(T0 + timedelta(hours=3))
+    await compiler.async_compile(ours, T0.timestamp())
+    await async_wait_recording_done(hass)
+    # The replacement under its temporary ID: on from T0+3h, off at T0+5h.
+    await play(
+        hass,
+        freezer,
+        [(T0 + timedelta(hours=3), "on"), (T0 + timedelta(hours=5), "off")],
+        entity_id=TEMP,
+    )
+    renamed_at = T0 + timedelta(hours=6, minutes=20)
+    freezer.move_to(renamed_at)
+
+    filled = await compiler.async_fill(ours, TEMP, renamed_at.timestamp())
+    await async_wait_recording_done(hass)
+
+    # T0+3h .. T0+6h: three hours of the replacement's states, and nothing
+    # under its own ID.
+    assert filled == compiler_module.Fill(3, TEMP)
+    assert await existing(hass, TEMP) == []
+    # hours 0-5: on, off, off (dead, carried), on, on, off
+    assert await read_sums(hass, DURATION_ON, T0, T0 + timedelta(hours=6)) == [
+        1.0,
+        1.0,
+        1.0,
+        2.0,
+        3.0,
+        3.0,
+    ]
+    assert await read_sums(hass, DURATION_OFF, T0, T0 + timedelta(hours=6)) == [
+        0.0,
+        1.0,
+        2.0,
+        2.0,
+        2.0,
+        3.0,
+    ]
+
+
+async def test_fill_reads_under_our_own_id_when_the_history_moved(
+    recorder_utc, freezer
+):
+    """No states_meta row of ours means the recorder's rename succeeded."""
+    hass = recorder_utc
+    compiler = compiler_module.Compiler(hass)
+    ours = cfg()
+    # A duration statistic with no state history and no count statistic
+    # behind it, seeded at a base sum of 1.0 hour before the window.
+    await _seed(hass, DURATION_ON, T0 - timedelta(hours=2), [0.5, 1.0])
+    # The replacement's history is already under our ID, as the recorder
+    # leaves it after a rename that met no collision.
+    await play(hass, freezer, [(T0, "on"), (T0 + timedelta(hours=1), "off")])
+    renamed_at = T0 + timedelta(hours=2, minutes=5)
+    freezer.move_to(renamed_at)
+
+    filled = await compiler.async_fill(ours, TEMP, renamed_at.timestamp())
+    await async_wait_recording_done(hass)
+
+    assert filled == compiler_module.Fill(2, ENTITY)
+    # hour0: on, adding an hour on top of the seeded 1.0; hour1: off, carried.
+    assert await read_sums(hass, DURATION_ON, T0, T0 + timedelta(hours=2)) == [2.0, 2.0]
+
+
+async def test_fill_with_nothing_to_read_compiles_nothing(recorder_utc, freezer):
+    hass = recorder_utc
+    freezer.move_to(T0)
+    ours = cfg()
+    assert await compiler_module.Compiler(hass).async_fill(
+        ours, TEMP, T0.timestamp()
+    ) == compiler_module.Fill(0, ENTITY)
+
+
+async def test_fill_uses_the_count_watermark_not_the_duration_one(
+    recorder_utc, freezer
+):
+    """A dead entity's carried duration rows must not shadow the last transition.
+
+    The old device stops transitioning at T0+1h but is compiled on through
+    T0+6h, carrying `off` the whole way - so its duration rows reach
+    further than its last real change. The replacement's history begins
+    at T0+3h, inside that carried span. Watermarking on the count
+    statistics (the last real transition) rather than on all of them is
+    what lets the fill reach back far enough to read it.
+    """
+    hass = recorder_utc
+    compiler = compiler_module.Compiler(hass)
+    ours = cfg()
+    # Ours: on at T0, off at T0+1h - its last real transition, then it
+    # just carries `off`, never removed.
+    await play(hass, freezer, [(T0, "on"), (T0 + timedelta(hours=1), "off")])
+    # The replacement's history, recorded before ours is compiled past it.
+    await play(
+        hass,
+        freezer,
+        [(T0 + timedelta(hours=3), "on"), (T0 + timedelta(hours=5), "off")],
+        entity_id=TEMP,
+    )
+    freezer.move_to(T0 + timedelta(hours=7))
+    await compiler.async_compile(
+        ours, T0.timestamp(), (T0 + timedelta(hours=6)).timestamp()
+    )
+    await async_wait_recording_done(hass)
+
+    renamed_at = T0 + timedelta(hours=6, minutes=20)
+    freezer.move_to(renamed_at)
+    filled = await compiler.async_fill(ours, TEMP, renamed_at.timestamp())
+    await async_wait_recording_done(hass)
+
+    assert filled.hours == 3
+    # hours 0-5: on, off, off (carried), on, on, off - the replacement's
+    # on/on/off reaching all the way back to T0+3h, not just its last hour.
+    assert await read_sums(hass, DURATION_ON, T0, T0 + timedelta(hours=6)) == [
+        1.0,
+        1.0,
+        1.0,
+        2.0,
+        3.0,
+        3.0,
+    ]
+    assert await read_sums(hass, DURATION_OFF, T0, T0 + timedelta(hours=6)) == [
+        0.0,
+        1.0,
+        2.0,
+        2.0,
+        2.0,
+        3.0,
+    ]
+
+
+async def test_fill_returns_zero_when_the_rename_lands_within_the_last_compiled_hour(
+    recorder_utc, freezer
+):
+    """No compile at all, not one that happens to compile nothing.
+
+    `async_compile` would itself return 0 on an empty, hour-aligned window
+    - both `start` and `end` already are - so asserting on `hours` alone
+    cannot tell a real guard from none at all. Asserting the call never
+    happens is what pins the guard.
+    """
+    hass = recorder_utc
+    compiler = compiler_module.Compiler(hass)
+    ours = cfg()
+    await play(hass, freezer, [(T0, "on"), (T0 + timedelta(hours=1), "off")])
+    freezer.move_to(T0 + timedelta(hours=2))
+    await compiler.async_compile(ours, T0.timestamp())
+    await async_wait_recording_done(hass)
+    # The replacement's own history, elsewhere - not what this test probes.
+    await play(hass, freezer, [(T0 + timedelta(hours=2), "on")], entity_id=TEMP)
+    # Same hour as the last count row (T0+1h): the window is empty.
+    renamed_at = T0 + timedelta(hours=1, minutes=30)
+    freezer.move_to(renamed_at)
+
+    with patch.object(
+        compiler, "async_compile", wraps=compiler.async_compile
+    ) as async_compile:
+        filled = await compiler.async_fill(ours, TEMP, renamed_at.timestamp())
+
+    assert filled.hours == 0
+    async_compile.assert_not_called()
+
+
+async def test_fill_starts_after_our_last_real_transition_when_the_old_device_overlapped(
+    recorder_utc, freezer
+):
+    """The seam hour belongs to our device, not to the replacement.
+
+    Our last count row sits in the hour of our last transition, and that
+    hour holds our own device's behaviour up to it - so the fill opens at
+    the hour after it and leaves that one as we compiled it.
+    """
+    hass = recorder_utc
+    compiler = compiler_module.Compiler(hass)
+    ours = cfg()
+    # Ours: on at T0, off at T0+1h, on at T0+4h - the old device still
+    # flapping while the replacement was being set up.
+    await play(
+        hass,
+        freezer,
+        [
+            (T0, "on"),
+            (T0 + timedelta(hours=1), "off"),
+            (T0 + timedelta(hours=4), "on"),
+        ],
+    )
+    # The replacement, overlapping: off at T0+3h, on at T0+6h.
+    await play(
+        hass,
+        freezer,
+        [(T0 + timedelta(hours=3), "off"), (T0 + timedelta(hours=6), "on")],
+        entity_id=TEMP,
+    )
+    freezer.move_to(T0 + timedelta(hours=7))
+    await compiler.async_compile(ours, T0.timestamp())
+    await async_wait_recording_done(hass)
+    before = await read_sums(hass, DURATION_ON, T0, T0 + timedelta(hours=5))
+
+    renamed_at = T0 + timedelta(hours=7, minutes=20)
+    freezer.move_to(renamed_at)
+    filled = await compiler.async_fill(ours, TEMP, renamed_at.timestamp())
+    await async_wait_recording_done(hass)
+
+    # The count watermark is the `on` at T0+4h, so the fill opens at
+    # T0+5h and hours 0-4 are untouched - hour 4 included, where our own
+    # device turned back on while the replacement read `off`.
+    assert filled.hours == 2
+    assert await read_sums(hass, DURATION_ON, T0, T0 + timedelta(hours=5)) == before
+    # hours 0-6: on, off, off, off, on (ours), off (replacement), on (replacement)
+    assert await read_sums(hass, DURATION_ON, T0, T0 + timedelta(hours=7)) == [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        2.0,
+        2.0,
+        3.0,
+    ]
+    assert await read_sums(hass, DURATION_OFF, T0, T0 + timedelta(hours=7)) == [
+        0.0,
+        1.0,
+        2.0,
+        3.0,
+        3.0,
+        4.0,
+        4.0,
+    ]
+
+
+async def test_a_compile_never_opens_before_the_fill_floor(recorder_utc, freezer):
+    """A recompute must not flatten hours a fill already wrote."""
+    hass = recorder_utc
+    compiler = compiler_module.Compiler(hass)
+    ours = cfg()
+    await play(
+        hass,
+        freezer,
+        [
+            (T0, "on"),
+            (T0 + timedelta(hours=1), "off"),
+            (T0 + timedelta(hours=2), "on"),
+            (T0 + timedelta(hours=3), "off"),
+            (T0 + timedelta(hours=4), "on"),
+        ],
+    )
+    freezer.move_to(T0 + timedelta(hours=5))
+
+    floored = replace(ours, filled_until=(T0 + timedelta(hours=3)).timestamp())
+    # Hours 3-4 only: hours 0-2 are before the floor.
+    assert await compiler.async_compile(floored, T0.timestamp()) == 2
+    # A fill is exempt: it is what sets the floor in the first place.
+    assert await compiler.async_compile(floored, T0.timestamp(), read_from=ENTITY) == 5
