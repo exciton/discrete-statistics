@@ -198,7 +198,7 @@ export class DiscreteStatisticsCardEditor extends LitElement {
     };
     // Every state the entity has statistics for under the chosen metric.
     const states = stateList(
-      statisticsForEntity(data.entity, data.metric, this._metadata),
+      statisticsForEntity(data.entity ?? "", data.metric, this._metadata),
       this._config
     );
     return html`<ha-form
