@@ -6,6 +6,7 @@ from unittest.mock import patch
 from homeassistant.components.recorder.statistics import async_add_external_statistics
 from homeassistant.const import CONF_ENTITY_ID, CONF_NAME
 from homeassistant.core import CoreState
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import (
@@ -35,8 +36,9 @@ NEW_ON = "discrete_statistics:binary_sensor_grid_status_new_on_duration"
 NEW_OFF = "discrete_statistics:binary_sensor_grid_status_new_off_duration"
 T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
-# Comfortably more than TRAILING_HOURS, so a compile that raced the
-# metadata rename would visibly rebuild a second series.
+# Nine hours, comfortably more than TRAILING_HOURS (3), so a compile that
+# raced the metadata rename would visibly rebuild a second series rather
+# than one indistinguishable trailing window.
 HISTORY = [
     (T0, "on"),
     (T0 + timedelta(hours=3), "off"),
@@ -91,6 +93,7 @@ async def test_a_renamed_entity_keeps_its_statistics(recorder_utc, freezer):
     freezer.move_to(T0 + timedelta(hours=10))
     entry = await setup_entry(hass)
     before = await read_sums(hass, ON, T0, T0 + timedelta(hours=10))
+    # On for T0..T0+3h and again for T0+5h..T0+8h: six hours.
     assert before[-1] == 6.0
 
     er.async_get(hass).async_update_entity(ENTITY, new_entity_id=NEW)
@@ -170,6 +173,7 @@ async def test_a_real_entity_survives_its_remove_and_re_add(recorder_utc, freeze
 
 
 async def test_a_yaml_entity_is_not_followed(recorder_utc, freezer, caplog):
+    """A YAML entity is left alone: the config names it, and we do not edit that."""
     hass = recorder_utc
     await registered(hass, ENTITY, "grid")
     await play(hass, freezer, HISTORY)
@@ -192,6 +196,7 @@ async def test_a_yaml_entity_is_not_followed(recorder_utc, freezer, caplog):
 
 
 async def test_an_unrelated_rename_touches_nothing(recorder_utc, freezer):
+    """Another entity's rename reaches no compiler and no entry of ours."""
     hass = recorder_utc
     await registered(hass, ENTITY, "grid")
     await registered(hass, "binary_sensor.other", "other")
@@ -217,6 +222,7 @@ async def test_an_unrelated_rename_touches_nothing(recorder_utc, freezer):
 async def test_the_entry_is_updated_only_after_the_rename_committed(
     recorder_utc, freezer, monkeypatch
 ):
+    """The order is load-bearing: the reload's compile reads the moved metadata."""
     hass = recorder_utc
     await registered(hass, ENTITY, "grid")
     await play(hass, freezer, HISTORY)
@@ -246,6 +252,7 @@ async def test_the_entry_is_updated_only_after_the_rename_committed(
 
 
 async def test_a_collision_is_reported_and_the_rest_still_move(recorder_utc, freezer):
+    """A statistic whose new ID is taken stays put; the notification names it."""
     hass = recorder_utc
     await registered(hass, ENTITY, "grid")
     await play(hass, freezer, HISTORY)
@@ -267,3 +274,24 @@ async def test_a_collision_is_reported_and_the_rest_still_move(recorder_utc, fre
     assert "1 statistic(s) already existed" in note["message"]
     assert ON in note["message"]
     assert entry.data[CONF_ENTITY_ID] == NEW
+
+
+async def test_a_failed_reload_is_reported_with_the_move(recorder_utc, freezer):
+    """async_reload returns False rather than raising, so it is read, not caught."""
+    hass = recorder_utc
+    await registered(hass, ENTITY, "grid")
+    await play(hass, freezer, HISTORY)
+    freezer.move_to(T0 + timedelta(hours=10))
+    await setup_entry(hass)
+
+    with patch(
+        "custom_components.discrete_statistics.async_setup_entry",
+        side_effect=ConfigEntryNotReady("no"),
+    ):
+        er.async_get(hass).async_update_entity(ENTITY, new_entity_id=NEW)
+        await settled(hass)
+
+    [note] = [n for n in notifications(hass).values() if "Moved" in n["message"]]
+    assert "did not reload" in note["message"]
+    assert NEW in note["message"]
+    assert await existing(hass, ENTITY) == []

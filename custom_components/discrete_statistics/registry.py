@@ -21,6 +21,10 @@ from .naming import describe
 
 _LOGGER = logging.getLogger(__name__)
 
+# The registry actions this module acts on. The filter runs on every
+# registry event, so it drops the rest before a handler is woken.
+FOLLOWED_ACTIONS = ("update",)
+
 
 def _owned(hass: HomeAssistant, entity_id: str) -> bool:
     return any(cfg.entity_id == entity_id for cfg in hass.data[DOMAIN]["all_configs"]())
@@ -51,6 +55,15 @@ async def async_follow(
     is what points the coordinator at the new entity and compiles under
     it; `_async_entry_updated` leaves an entity-ID change alone for that
     reason.
+
+    Two rough edges, both reported rather than repaired. A failure between
+    the rename and the entry update - realistically only an entry removed
+    mid-follow - leaves the statistics moved under a config that still
+    names the old ID, so "Could not move" is approximate there; the
+    statistics are under the new name and the entry is not. And a second
+    rename arriving while this one runs is dropped, because
+    `entry_configs` still names the old ID until the update lands and
+    `_entry_for` therefore finds nothing for the intermediate name.
     """
     data = hass.data[DOMAIN]
     entry = _entry_for(hass, old_entity_id)
@@ -81,7 +94,9 @@ async def async_follow(
                 unique_id=new_entity_id,
                 data={**entry.data, CONF_ENTITY_ID: new_entity_id},
             )
-            await hass.config_entries.async_reload(entry.entry_id)
+            # Returns False rather than raising when the setup fails, so
+            # the outcome has to be read, not caught.
+            reloaded = await hass.config_entries.async_reload(entry.entry_id)
     except Exception as err:  # reported, not raised into the bus
         _LOGGER.exception(
             "Following the rename of %s to %s failed", old_entity_id, new_entity_id
@@ -105,6 +120,11 @@ async def async_follow(
             f"{', '.join(renamed.collided)}. Delete the ones under the new name "
             "and run recompute to merge."
         )
+    if not reloaded:
+        message += (
+            f" The entry did not reload and is not recording {new_entity_id}: "
+            "check the logs and reload it from Settings > Devices & Services."
+        )
     _LOGGER.info("%s", message)
     _notify(hass, message, f"{DOMAIN}_rename_{entry.entry_id}")
 
@@ -115,6 +135,10 @@ def async_setup(hass: HomeAssistant) -> None:
 
     @callback
     def registry_filter(event_data: er.EventEntityRegistryUpdatedData) -> bool:
+        if event_data["action"] not in FOLLOWED_ACTIONS:
+            return False
+        # Either end: the old ID for a rename we follow, the new one for a
+        # rename onto an entity we record.
         return _owned(hass, event_data["entity_id"]) or _owned(
             hass, event_data.get("old_entity_id", "")
         )
