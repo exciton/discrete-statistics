@@ -1,4 +1,4 @@
-import type { Metric, StateSetting, StatisticsMetaData } from "./types";
+import type { CardConfig, Metric, StateSetting, StatisticsMetaData } from "./types";
 
 const DOMAIN = "discrete_statistics";
 const METRICS: readonly Metric[] = ["duration", "count"];
@@ -8,6 +8,7 @@ export interface StateStatistic {
   token: string;
   // The stored name, or the configured one in its place.
   label: string;
+  entityLabel?: string;
   metric: Metric;
   // As configured, unresolved; absent for a palette colour.
   color?: string;
@@ -83,6 +84,18 @@ export function stateLabel(
   return tail || token;
 }
 
+export function entityLabel(
+  meta: StatisticsMetaData | undefined,
+  entityId: string
+): string {
+  const name = meta?.name;
+  if (!name) {
+    return entityId;
+  }
+  const sep = name.lastIndexOf(": ");
+  return sep > 0 ? name.slice(0, sep) : entityId;
+}
+
 // What the editor offers: only an entity with statistics can draw
 // anything. Order is the caller's.
 export function entitiesWithStatistics(
@@ -116,6 +129,7 @@ export function statisticsForEntity(
       statisticId: meta.statistic_id,
       token: parsed.token,
       label: stateLabel(meta, parsed.token),
+      entityLabel: entityLabel(meta, entityId),
       metric,
     });
   }
@@ -147,4 +161,53 @@ export function statisticsForEntity(
     .filter((s) => !seen.has(s.token))
     .sort((a, b) => a.label.localeCompare(b.label));
   return [...listed, ...rest];
+}
+
+export function statisticsForRows(
+  rows: StateSetting[],
+  metric: Metric,
+  metadata: StatisticsMetaData[]
+): StateStatistic[] {
+  const found: { setting: Exclude<StateSetting, string>; stat: StateStatistic }[] = [];
+  for (const setting of rows) {
+    if (typeof setting === "string" || !setting.entity) {
+      continue;
+    }
+    const stat = statisticsForEntity(setting.entity, metric, metadata).find(
+      (candidate) => settingMatches(setting, candidate)
+    );
+    if (stat) {
+      found.push({ setting, stat });
+    }
+  }
+  const counts = new Map<string, number>();
+  for (const { setting } of found) {
+    counts.set(setting.entity!, (counts.get(setting.entity!) ?? 0) + 1);
+  }
+  return found.map(({ setting, stat }) => {
+    const entity = stat.entityLabel ?? setting.entity!;
+    const name =
+      setting.name ??
+      (counts.get(setting.entity!)! > 1 ? `${entity}: ${stat.label}` : entity);
+    return {
+      ...stat,
+      label: name,
+      ...(setting.color ? { color: setting.color } : {}),
+    };
+  });
+}
+
+export type SeriesConfig = Pick<CardConfig, "entity" | "states" | "ignore_states">;
+
+export function resolveSeries(
+  config: SeriesConfig,
+  metric: Metric,
+  metadata: StatisticsMetaData[]
+): StateStatistic[] {
+  return config.entity
+    ? statisticsForEntity(config.entity, metric, metadata, {
+        states: config.states,
+        ignore_states: config.ignore_states,
+      })
+    : statisticsForRows(config.states ?? [], metric, metadata);
 }

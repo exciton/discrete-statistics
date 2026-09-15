@@ -6,16 +6,17 @@ export type ResolvedPeriod = Exclude<Period, "auto">;
 // ports between the two cards.
 export type ChartType = "line" | "line-stack" | "bar" | "bar-stack";
 
-// An entry of `states:`: the state alone, or with the name it is drawn
-// under and the colour it draws in — a theme colour name as the stock
+// An entry of `states:`: the state alone, or with the entity it belongs to
+// — required when the card names no entity of its own — the name it is
+// drawn under and the colour it draws in — a theme colour name as the stock
 // card takes (`red`, `light-blue`) or a hex value.
 export type StateSetting =
   | string
-  | { state: string; name?: string; color?: string };
+  | { state: string; entity?: string; name?: string; color?: string };
 
 export interface CardConfig {
   type: string;
-  entity: string;
+  entity?: string;
   metric?: Metric;
   unit?: Unit;
   period?: Period;
