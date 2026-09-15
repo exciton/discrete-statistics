@@ -9,6 +9,7 @@ from custom_components.discrete_statistics.config import EntityConfig
 from custom_components.discrete_statistics.const import HOUR
 from custom_components.discrete_statistics.payload import (
     build_payloads,
+    partition_rows,
     readable_state,
     rename,
 )
@@ -361,3 +362,21 @@ def test_readable_state_is_verified_against_the_token():
     # Right shape, wrong state - the name does not belong to this ID.
     assert readable_state("Grid: off (h)", "heatcool") == "heatcool"
     assert readable_state("", "heatcool") == "heatcool"
+
+
+def test_partition_rows_splits_on_the_standing_map():
+    """New where nothing stands, a rewrite where something does."""
+    rows = [
+        {"start": datetime(2026, 1, 1, h, tzinfo=timezone.utc), "sum": float(h)}
+        for h in range(4)
+    ]
+    hour = datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp()
+    new, rewrites = partition_rows(rows, {hour + HOUR: 1.0, hour + 3 * HOUR: 2.0})
+
+    assert [row["sum"] for row in new] == [0.0, 2.0]
+    assert [row["sum"] for row in rewrites] == [1.0, 3.0]
+
+
+def test_partition_rows_with_nothing_standing_calls_every_row_new():
+    rows = [{"start": datetime(2026, 1, 1, tzinfo=timezone.utc), "sum": 1.0}]
+    assert partition_rows(rows, {}) == (rows, [])

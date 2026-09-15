@@ -5,28 +5,39 @@ from __future__ import annotations
 import asyncio
 import functools as ft
 import logging
-from collections.abc import Collection, Mapping
+import time
+from collections.abc import Collection, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, NamedTuple
 
-from homeassistant.components.recorder import get_instance
+from homeassistant.components.recorder import Recorder, get_instance
+from homeassistant.components.recorder.db_schema import Statistics
 from homeassistant.components.recorder.history import state_changes_during_period
 from homeassistant.components.recorder.models import StatisticMeanType
 from homeassistant.components.recorder.statistics import (
     async_add_external_statistics,
     get_metadata,
+    import_statistics,
 )
-from homeassistant.components.recorder.tasks import SynchronizeTask
+from homeassistant.components.recorder.tasks import (
+    ImportStatisticsTask,
+    RecorderTask,
+    SynchronizeTask,
+)
+from homeassistant.components.recorder.util import session_scope
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util import dt as dt_util
+from sqlalchemy import insert
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from .bucketer import bucket, first_whole_hour, hour_start
 from .canonicalise import canonicalise
 from .config import EntityConfig
 from .const import DOMAIN, HOUR, METRIC_DURATION
 from .naming import async_warm_state_translations, display_name, state_translator
-from .payload import build_payloads, readable_state
+from .payload import build_payloads, partition_rows, readable_state
 from .rows import bases, series_end, standing
 from .statistic_ids import belongs_to, parse
 
@@ -45,6 +56,21 @@ TRAILING_HOURS = 3
 
 # Compile in windows of this size to bound memory during a long backfill.
 CHUNK_HOURS = 24 * 7
+
+# Rows per INSERT in the bulk path. SQLAlchemy sends a list of dicts to
+# `cursor.executemany`, which binds one row at a time and so has no
+# parameter limit to breach - but a driver that rewrites the batch into a
+# single multi-row VALUES (SQLAlchemy's psycopg2 dialect does, under its
+# default `executemany_mode`, at 1 000 rows a page) would, and SQLite's
+# 32 766 bound variables is the tightest of those: thirteen columns a row
+# puts the ceiling at ~2 500. Under it, and large enough that a busy
+# entity's week is one statement.
+BULK_ROWS = 2000
+
+# The off switch. With it False every row goes back through
+# `async_add_external_statistics`, which is what the equivalence test
+# compiles against and what the bench measures "before" with.
+BULK_INSERT = True
 
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
@@ -188,6 +214,138 @@ def _carried_from_statistics(
     return readable_state(names.get(statistic_id, ""), token)
 
 
+def _batches(
+    values: Sequence[dict[str, Any]], size: int
+) -> Iterator[Sequence[dict[str, Any]]]:
+    """`values` in slices of at most `size`."""
+    for start in range(0, len(values), size):
+        yield values[start : start + size]
+
+
+def _row_values(metadata_id: int, row: Mapping[str, Any], now: float) -> dict[str, Any]:
+    """One statistics row as `Statistics.from_stats` would build it.
+
+    Every column of the table but the identity key, spelled out: a core
+    INSERT compiles against the keys of the first dict, so a row that left
+    one out would leave it out of the statement for the whole batch.
+    """
+    return {
+        "metadata_id": metadata_id,
+        # The legacy datetime columns. `from_stats` writes None into both
+        # and the recorder reads only the `_ts` pair.
+        "created": None,
+        "created_ts": now,
+        "start": None,
+        "start_ts": row["start"].timestamp(),
+        # A duration or a count statistic carries a sum and nothing else.
+        "mean": None,
+        "mean_weight": None,
+        "min": None,
+        "max": None,
+        "last_reset": None,
+        "last_reset_ts": None,
+        "state": None,
+        "sum": row["sum"],
+    }
+
+
+def _bulk_insert(
+    instance: Recorder,
+    payloads: Mapping[str, tuple[dict[str, Any], list[dict[str, Any]]]],
+) -> None:
+    """Insert rows no row stands at, in one statement a batch. Recorder thread.
+
+    Every batch shares one session and commits with it, so a failure in
+    any of them discards them all - which is what lets the caller fall
+    back for the whole task rather than for part of it. Nothing is caught
+    here: the caller decides.
+
+    The metadata ids are resolved here rather than carried, because only
+    the recorder thread may ask: `statistics_meta_manager` keeps a cache
+    it alone owns, and a statistic whose metadata was created by the
+    import task queued just ahead of this one exists by the time this
+    runs and not before.
+
+    A statistic with no metadata is skipped, not created. The import that
+    would have created it is ahead of this task in the same queue and
+    retries itself, so arriving here without one means the metadata is
+    gone rather than late - the user deleted the statistic while the
+    compile ran - and recreating it would resurrect something nothing
+    else records the deletion of. The next compile reads `existing`
+    fresh and writes the rows again if the statistic is still there.
+    """
+    now = time.time()
+    with session_scope(session=instance.get_session()) as session:
+        found = instance.statistics_meta_manager.get_many(
+            session, statistic_ids=set(payloads)
+        )
+        values: list[dict[str, Any]] = []
+        for statistic_id, (_, rows) in payloads.items():
+            if (meta := found.get(statistic_id)) is None:
+                _LOGGER.warning(
+                    "No metadata for %s; %s new rows not written",
+                    statistic_id,
+                    len(rows),
+                )
+                continue
+            values.extend(_row_values(meta[0], row, now) for row in rows)
+        for batch in _batches(values, BULK_ROWS):
+            session.execute(insert(Statistics), batch)
+
+
+@dataclass(slots=True)
+class BulkInsertTask(RecorderTask):
+    """Insert the rows one chunk proved were not there yet.
+
+    The recorder's own import path runs a SELECT-exists and then an
+    INSERT or an UPDATE per row, and commits per statistic - about 2.8 ms
+    a row here, which is most of a long recompute. A row the compiler
+    calls new needs none of that: `rows.standing` read every row our
+    statistics hold across the chunk moments earlier, inside the same
+    compile and under the same lock, and nothing but this integration
+    writes them.
+
+    `payloads` is {statistic_id: (metadata, rows)}. The metadata is
+    carried only for the fallback below; the rows are `StatisticData` -
+    a `start` and a `sum`.
+
+    A batch the fallback cannot write either is lost: the hourly run
+    never revisits it, because the watermark advances with the chunks
+    that did succeed. `recompute` with a `start:` before the hole is
+    what rebuilds it.
+    """
+
+    payloads: dict[str, tuple[dict[str, Any], list[dict[str, Any]]]]
+
+    def run(self, instance: Recorder) -> None:
+        """Handle the task."""
+        try:
+            _bulk_insert(instance, self.payloads)
+        except (IntegrityError, OperationalError) as err:
+            # An IntegrityError means a row stands where our read said
+            # none did; an OperationalError is the database refusing the
+            # statement. Either way losing the batch would leave every
+            # later sum on a base that was never written, so the recorder's
+            # own upsert runs instead - inline, because the compile's fence
+            # is already queued behind this task and anything queued here
+            # would commit after `async_compile` returned. Anything else
+            # escapes to the recorder's own guard around the task.
+            _LOGGER.warning(
+                "Bulk insert of %s statistics failed with %s; "
+                "falling back to the recorder's own import",
+                len(self.payloads),
+                type(err).__name__,
+            )
+            for metadata, rows in self.payloads.values():
+                if not import_statistics(instance, metadata, rows, Statistics):
+                    # Retryable, after the recorder's own wait. Queued
+                    # again exactly as ImportStatisticsTask does - behind
+                    # the fence, as the recorder's own import already is.
+                    instance.queue_task(
+                        ImportStatisticsTask(metadata, rows, Statistics)
+                    )
+
+
 class Compiler:
     """Compile one entity's history into statistics."""
 
@@ -315,7 +473,8 @@ class Compiler:
         """Wait until everything this compile queued has been committed.
 
         Our own task at the back of the recorder's queue, and the queue is
-        served in order, so it runs after the last import task has - and
+        served in order, so it runs after the last import and bulk insert
+        task has - and
         `commit_before` commits the session first.
         `Recorder.async_block_till_done` is not enough: it queues this same
         task only while the queue is non-empty, and the queue empties when
@@ -424,6 +583,16 @@ class Compiler:
         difference - a rename, a unit, a mean type - is imported with no
         rows beside it, which is how every one of them reaches a statistic
         the window never saw.
+
+        The rows themselves take two paths. A row at an hour `standing`
+        found a row at is an upsert and goes through the recorder's own
+        import, with the metadata; a row at an hour it found nothing at is
+        new, and one `BulkInsertTask` for the whole chunk inserts every
+        one of them in a statement a batch. The split is the standing read
+        itself - the same evidence `build_payloads` wrote each row on -
+        and it is sound because that read and this write are one compile,
+        under the compile lock, and nothing outside this integration
+        writes a `discrete_statistics:` statistic.
         """
         # An hour further back on the opening chunk.
         # `include_start_time_state` hands back exactly ONE row before the
@@ -471,18 +640,34 @@ class Compiler:
         next_sums = dict(sums)
         next_existing = dict(state.existing)
         imported = False
+        fresh: dict[str, tuple[dict[str, Any], list[dict[str, Any]]]] = {}
         for statistic_id, payload in payloads.items():
             meta = _stored(payload.metadata)
-            if payload.rows or meta != state.existing.get(statistic_id):
-                imported = True
-                async_add_external_statistics(
-                    self._hass, payload.metadata, payload.rows
+            if BULK_INSERT:
+                new_rows, rewrites = partition_rows(
+                    payload.rows, stands.get(statistic_id, {})
                 )
+            else:
+                new_rows, rewrites = [], payload.rows
+            # The import still carries every rewrite and all the metadata,
+            # so the upsert and the relabel are untouched. It runs first
+            # for a statistic the recorder has never seen: the bulk task
+            # below resolves metadata ids and that row must exist by then.
+            if rewrites or meta != state.existing.get(statistic_id):
+                imported = True
+                async_add_external_statistics(self._hass, payload.metadata, rewrites)
+            if new_rows:
+                fresh[statistic_id] = (payload.metadata, new_rows)
             # The sum the window reached, which a written row need not
             # carry: an hour whose row already stands with that sum writes
             # nothing, and the next chunk still starts from it.
             next_sums[statistic_id] = payload.ending_sum
             next_existing[statistic_id] = meta
+
+        if fresh:
+            imported = True
+            # One task for the whole chunk, behind every import it queued.
+            get_instance(self._hass).queue_task(BulkInsertTask(fresh))
 
         return (
             _ChunkState(

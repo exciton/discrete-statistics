@@ -214,3 +214,26 @@ def build_payloads(
         )
 
     return payloads
+
+
+def partition_rows(
+    rows: list[dict[str, Any]], standing: Mapping[float, float]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split a payload's rows into the new ones and the rewrites.
+
+    A row is new when no row stands at its hour, which is the same
+    evidence `build_payloads` wrote it on: where nothing stands it writes
+    for a non-zero value, and where something stands it writes only a
+    differing sum. So the split is exactly the standing map, read again -
+    not a second opinion about it.
+
+    The two halves take different paths out of the compiler: a rewrite is
+    an upsert and must go through the recorder's own import, a new row is
+    an insert and nothing else can have put one there.
+    """
+    new: list[dict[str, Any]] = []
+    rewrites: list[dict[str, Any]] = []
+    for row in rows:
+        target = rewrites if row["start"].timestamp() in standing else new
+        target.append(row)
+    return new, rewrites

@@ -118,7 +118,9 @@ Everything except `compiler`, `rows`, `websocket`, `config_flow`, `naming`,
 `hass` instance.
 Keep it that way: if a change needs recorder access in a lower module, the
 design is drifting. Three recorder boundaries: `compiler` is the only
-module that writes; `rows` reads — `session_scope(read_only=True)`, the
+module that writes — by two paths, `async_add_external_statistics` for
+every rewrite and all metadata, and its own `BulkInsertTask` for rows
+`rows.standing` proved were not there; `rows` reads — `session_scope(read_only=True)`, the
 newest row before each of a set of edges, the sums at a set of edges, the
 rows of a range and the one before it, the sums standing in a window, the
 earliest and the newest row of a series — for `websocket`, the compiler
@@ -609,6 +611,42 @@ Verified against 2026.8.3.
 - `async_add_external_statistics` is a `@callback` — call it, do not await it.
   It only *enqueues*; `Compiler.async_compile` waits on `_async_fence`
   before returning so a subsequent compile reads a base including those writes.
+- `import_statistics` costs a SELECT-exists and then an INSERT or an UPDATE
+  per row, and a commit per task — ~2.8 ms a row, which was ~93% of a
+  rebuild. A row no row stands at needs none of that, so `BulkInsertTask`
+  inserts those with one `session.execute(insert(Statistics), rows)` a
+  batch, 8.8× faster over a 400-day build
+  (`docs/superpowers/notes/2026-09-14-bulk-insert-spike.md`). Three things
+  make it safe and all three are load-bearing. The split is `rows.standing`
+  itself, read moments earlier in the same compile under the same lock, and
+  nothing else writes a `discrete_statistics:` statistic. The task is
+  queued *after* the chunk's imports, because it resolves `metadata_id`
+  through `instance.statistics_meta_manager.get_many` — recorder thread
+  only — and a statistic new to the recorder needs the import's
+  `statistics_meta` row first; and *before* `_async_fence`, so the rows are
+  committed when the compile returns — true of the bulk path and of the
+  fallback alike, because the fallback runs *inline* on the recorder
+  thread. `run` catches `IntegrityError` and `OperationalError` from
+  `_bulk_insert` and calls `import_statistics` itself for every payload,
+  rather than queueing anything: a queued task would land behind the
+  fence and commit after `async_compile` had returned and fired
+  `compiled_signal`. Anything else escapes to the recorder's own guard
+  around the task. Only a *retryable* failure inside that import
+  fallback queues an `ImportStatisticsTask`, which does land behind the
+  fence — exactly what the recorder's own import task does today. A
+  statistic whose metadata has gone is logged and skipped, never
+  recreated (the user deleted it mid-compile, and nothing else records
+  that). A batch the fallback cannot write either is lost and not
+  self-healing: the watermark advances with the chunks that succeeded,
+  so `recompute` with a `start:` is what rebuilds it.
+- A bulk row is a dict naming *every* column of `Statistics` but the
+  identity key — a Core insert compiles against the first dict's keys, so
+  one row leaving a column out leaves it out of the statement for the whole
+  batch. `BULK_ROWS` bounds a statement at 2 000 rows: SQLAlchemy sends the
+  list to `cursor.executemany`, which binds a row at a time, but a
+  dialect that rewrites it into one multi-row VALUES — SQLAlchemy's
+  psycopg2 one does, at 1 000 rows a page — would meet SQLite's 32 766
+  bound variables at ~2 500.
 - Every other recorder query is synchronous and must run through
   `get_instance(hass).async_add_executor_job(...)`.
 - `include_start_time_state=True` does **not** return the state as of
