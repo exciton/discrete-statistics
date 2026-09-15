@@ -2,7 +2,7 @@
 // of them, and how the editor's mode selector rewrites it. The card names
 // one entity and its rows are that entity's states, or it names none and
 // every row names its own.
-import { resolveSeries } from "./statistic-ids";
+import { resolveSeries, settingMatches } from "./statistic-ids";
 import type { CardConfig, Metric, StateSetting, StatisticsMetaData } from "./types";
 
 const named = (setting: StateSetting) =>
@@ -39,12 +39,22 @@ export function toMultiEntity(
   metric: Metric,
   metadata: StatisticsMetaData[]
 ): CardConfig {
-  const { entity, states: _states, ignore_states: _ignored, ...rest } = config;
-  const first = entity ? resolveSeries(config, metric, metadata)[0] : undefined;
-  if (!entity || !first) {
+  const { entity, states, ignore_states: _ignored, ...rest } = config;
+  const drawn = entity ? resolveSeries(config, metric, metadata) : [];
+  if (!entity || !drawn.length) {
     return rest as CardConfig;
   }
-  return { ...rest, states: [{ entity, state: first.token || first.label }] } as CardConfig;
+  const rows = drawn.map((series) => {
+    const setting = (states ?? []).find((entry) => settingMatches(entry, series));
+    const carried = typeof setting === "object" ? setting : undefined;
+    return {
+      entity,
+      state: series.token,
+      ...(carried?.name ? { name: carried.name } : {}),
+      ...(carried?.color ? { color: carried.color } : {}),
+    };
+  });
+  return { ...rest, states: rows } as CardConfig;
 }
 
 export function toSingleEntity(config: CardConfig): CardConfig {

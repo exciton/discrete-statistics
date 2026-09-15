@@ -25,6 +25,7 @@ const meta = (id: string, name: string): StatisticsMetaData => ({
 const metadata = [
   meta("discrete_statistics:cover_gate_open_duration", "Gate: Open (h)"),
   meta("discrete_statistics:cover_gate_closed_duration", "Gate: Closed (h)"),
+  meta("discrete_statistics:cover_gate_opening_duration", "Gate: Opening (h)"),
 ];
 
 describe("isMultiEntity", () => {
@@ -72,11 +73,55 @@ describe("validateConfig", () => {
 });
 
 describe("mode flips", () => {
-  it("carries the entity into the first row, with the state it was drawing", () => {
+  it("carries the entity into a row per state it has statistics for", () => {
     expect(
       toMultiEntity(config({ entity: "cover.gate", title: "Gate" }), "duration", metadata)
     ).toEqual(
-      config({ title: "Gate", states: [{ entity: "cover.gate", state: "open" }] })
+      config({
+        title: "Gate",
+        states: [
+          { entity: "cover.gate", state: "open" },
+          { entity: "cover.gate", state: "closed" },
+          { entity: "cover.gate", state: "opening" },
+        ],
+      })
+    );
+  });
+
+  it("carries every drawn state in order, with the names and colours it had", () => {
+    expect(
+      toMultiEntity(
+        config({
+          entity: "cover.gate",
+          states: [{ state: "closed", color: "red" }, { state: "open", name: "Ajar" }],
+        }),
+        "duration",
+        metadata
+      )
+    ).toEqual(
+      config({
+        states: [
+          { entity: "cover.gate", state: "closed", color: "red" },
+          { entity: "cover.gate", state: "open", name: "Ajar" },
+        ],
+      })
+    );
+  });
+
+  it("carries only what ignore_states: left it drawing", () => {
+    expect(
+      toMultiEntity(
+        config({ entity: "cover.gate", ignore_states: ["opening"] }),
+        "duration",
+        metadata
+      )
+    ).toEqual(
+      config({
+        states: [
+          { entity: "cover.gate", state: "closed" },
+          { entity: "cover.gate", state: "open" },
+        ],
+      })
     );
   });
 
@@ -107,11 +152,45 @@ describe("applyChartMode", () => {
     to: CardConfig;
   }[] = [
     {
-      what: "carries a single-entity card's first state into a row",
+      what: "carries a single-entity card's states into a row each",
       from: config({ entity: "cover.gate", title: "Gate" }),
       mode: "entities",
       metadata,
-      to: config({ title: "Gate", states: [{ entity: "cover.gate", state: "open" }] }),
+      to: config({
+        title: "Gate",
+        states: [
+          { entity: "cover.gate", state: "open" },
+          { entity: "cover.gate", state: "closed" },
+          { entity: "cover.gate", state: "opening" },
+        ],
+      }),
+    },
+    {
+      what: "keeps the order and colours a states: filter gave them",
+      from: config({
+        entity: "cover.gate",
+        states: [{ state: "closed", color: "red" }, "open"],
+      }),
+      mode: "entities",
+      metadata,
+      to: config({
+        states: [
+          { entity: "cover.gate", state: "closed", color: "red" },
+          { entity: "cover.gate", state: "open" },
+        ],
+      }),
+    },
+    {
+      what: "carries only the states ignore_states: left drawn",
+      from: config({ entity: "cover.gate", ignore_states: ["opening"] }),
+      mode: "entities",
+      metadata,
+      to: config({
+        states: [
+          { entity: "cover.gate", state: "closed" },
+          { entity: "cover.gate", state: "open" },
+        ],
+      }),
     },
     {
       what: "leaves a single-entity card with no rows when nothing resolves",

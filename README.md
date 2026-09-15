@@ -583,15 +583,17 @@ overrides either.
 
 The selector at the top of the editor's form chooses between the two
 charts: it swaps the entity field for a list of rows that each name an
-entity and one of its states, carrying the entity you were looking at into
-the first row, and taking the card's entity back out of it when you switch
-back. The rest
-of the configuration for the shape you left is not kept. Below it, the
-editor lists the entity's states with a tick, a drag handle, a name and a
-colour each, and writes the two keys for you. Its "Ignore states that appear
-later" switch chooses which the unticked states become: with it on they are
-left out of `states:`; with it off they go in `ignore_states:`, which stays
-present — empty if need be — so the list stays open.
+entity and one of its states, carrying the states you were drawing into a
+row each — in the order they were drawn, with the names and colours you
+gave them — and taking the card's entity back out of the rows when you
+switch back. Going back that way keeps only the first row's entity, since
+the card you land on draws one entity; the states it then draws are that
+entity's own. Below the form, the editor lists the entity's states with a
+tick, a drag handle, a name and a colour each, and writes the two keys for
+you. Its "Ignore states that appear later" switch chooses which the
+unticked states become: with it on they are left out of `states:`; with it
+off they go in `ignore_states:`, which stays present — empty if need be —
+so the list stays open.
 
 `unit: percent` is the share of each period spent in the state, so a
 stacked bar whose states are all drawn is always full height — except the
