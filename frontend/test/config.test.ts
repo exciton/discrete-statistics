@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyChartMode,
   isMultiEntity,
+  type ChartMode,
   toMultiEntity,
   toSingleEntity,
   validateConfig,
@@ -93,5 +95,70 @@ describe("mode flips", () => {
   it("leaves no entity behind when there is none to carry", () => {
     expect(toMultiEntity(config({}), "duration", metadata)).toEqual(config({}));
     expect(toSingleEntity(config({}))).toEqual(config({}));
+  });
+});
+
+describe("applyChartMode", () => {
+  const cases: {
+    what: string;
+    from: CardConfig;
+    mode: ChartMode;
+    metadata: StatisticsMetaData[];
+    to: CardConfig;
+  }[] = [
+    {
+      what: "carries a single-entity card's first state into a row",
+      from: config({ entity: "cover.gate", title: "Gate" }),
+      mode: "entities",
+      metadata,
+      to: config({ title: "Gate", states: [{ entity: "cover.gate", state: "open" }] }),
+    },
+    {
+      what: "leaves a single-entity card with no rows when nothing resolves",
+      from: config({ entity: "cover.gate", states: ["open"] }),
+      mode: "entities",
+      metadata: [],
+      to: config({}),
+    },
+    {
+      what: "leaves a card already in the mode asked for alone",
+      from: config({ states: [{ entity: "cover.gate", state: "open" }] }),
+      mode: "entities",
+      metadata,
+      to: config({ states: [{ entity: "cover.gate", state: "open" }] }),
+    },
+    {
+      what: "takes the first row's entity back",
+      from: config({ states: [{ entity: "cover.gate", state: "open" }], title: "Gate" }),
+      mode: "states",
+      metadata,
+      to: config({ title: "Gate", entity: "cover.gate" }),
+    },
+    {
+      what: "answers a rowless multi-entity card with a card asking for an entity",
+      from: config({}),
+      mode: "states",
+      metadata,
+      to: config({}),
+    },
+    {
+      what: "drops a filter the cleared entity left behind",
+      from: config({ states: ["open", "closed"], title: "Gate" }),
+      mode: "states",
+      metadata,
+      to: config({ title: "Gate" }),
+    },
+  ];
+
+  for (const { what, from, mode, metadata: meta, to } of cases) {
+    it(what, () => {
+      expect(applyChartMode(from, mode, "duration", meta)).toEqual(to);
+    });
+  }
+
+  it("never answers with a config the card would refuse", () => {
+    for (const { from, mode, metadata: meta } of cases) {
+      expect(() => validateConfig(applyChartMode(from, mode, "duration", meta))).not.toThrow();
+    }
   });
 });

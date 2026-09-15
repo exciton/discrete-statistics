@@ -52,3 +52,17 @@ export function toSingleEntity(config: CardConfig): CardConfig {
   const entity = (states ?? []).map(named).find((id) => id);
   return (entity ? { ...rest, entity } : rest) as CardConfig;
 }
+
+export type ChartMode = "states" | "entities";
+
+export function applyChartMode(
+  config: CardConfig,
+  mode: ChartMode,
+  metric: Metric,
+  metadata: StatisticsMetaData[]
+): CardConfig {
+  if (mode === "entities") {
+    return isMultiEntity(config) ? config : toMultiEntity(config, metric, metadata);
+  }
+  return config.entity ? config : toSingleEntity(config);
+}

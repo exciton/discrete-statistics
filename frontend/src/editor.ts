@@ -1,7 +1,7 @@
 import { LitElement, css, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { listStatisticIds } from "./hass-api";
-import { isMultiEntity, toMultiEntity, toSingleEntity } from "./config";
+import { applyChartMode, isMultiEntity, type ChartMode } from "./config";
 import {
   seriesList,
   seriesListConfig,
@@ -183,6 +183,10 @@ export class DiscreteStatisticsCardEditor extends LitElement {
 
   @state() private _config?: CardConfig;
 
+  // The user's last explicit choice, which matters only while the config
+  // can express neither mode.
+  @state() private _mode?: ChartMode;
+
   // undefined until the lookup answers; null when it failed.
   @state() private _entities?: string[] | null;
 
@@ -192,6 +196,9 @@ export class DiscreteStatisticsCardEditor extends LitElement {
 
   public setConfig(config: CardConfig): void {
     this._config = config;
+    if (config.entity || config.states?.length) {
+      this._mode = undefined;
+    }
   }
 
   protected willUpdate() {
@@ -218,23 +225,22 @@ export class DiscreteStatisticsCardEditor extends LitElement {
     if (!this._config || this._entities === undefined) {
       return nothing;
     }
-    const multi = isMultiEntity(this._config);
+    const mode = this._mode ?? (isMultiEntity(this._config) ? "entities" : "states");
+    const multi = mode === "entities";
     // A config missing these keys shows the card's defaults rather than
     // blank fields.
     const data = {
       ...this._config,
-      chart_mode: multi ? "entities" : "states",
+      chart_mode: mode,
       chart_type: this._config.chart_type ?? "bar-stack",
       period: this._config.period ?? "auto",
       metric: this._config.metric ?? "duration",
       unit: this._config.unit ?? "auto",
     };
-    // A row per series in entities mode; a row per state the entity has
-    // statistics for under the chosen metric in states mode.
     const list = multi
       ? seriesList(this._config.states ?? [], data.metric, this._metadata)
       : stateList(
-          statisticsForEntity(this._config.entity!, data.metric, this._metadata),
+          statisticsForEntity(this._config.entity ?? "", data.metric, this._metadata),
           this._config
         );
     const stateOptions = Object.fromEntries(
@@ -244,7 +250,7 @@ export class DiscreteStatisticsCardEditor extends LitElement {
         .map((entity) => [
           entity,
           statisticsForEntity(entity, data.metric, this._metadata).map((s) => ({
-            value: s.token || s.label,
+            value: s.token,
             label: s.label,
           })),
         ])
@@ -287,15 +293,9 @@ export class DiscreteStatisticsCardEditor extends LitElement {
   private _valueChanged(ev: CustomEvent): void {
     ev.stopPropagation();
     const { chart_mode: mode, ...config } = ev.detail.value;
-    const wanted = mode === "entities";
-    if (wanted === isMultiEntity(this._config!)) {
-      this._announce(config);
-      return;
-    }
+    this._mode = mode;
     this._announce(
-      wanted
-        ? toMultiEntity(config, config.metric ?? "duration", this._metadata)
-        : toSingleEntity(config)
+      applyChartMode(config, mode, config.metric ?? "duration", this._metadata)
     );
   }
 

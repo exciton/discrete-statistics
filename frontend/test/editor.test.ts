@@ -92,7 +92,9 @@ describe("configSchema in multi-entity mode", () => {
   });
 
   it("asks for the shape first, above the entity", () => {
-    expect((configSchema() as Record<string, unknown>[])[0].name).toBe("chart_mode");
+    const schema = configSchema() as Record<string, unknown>[];
+    expect(schema[0].name).toBe("chart_mode");
+    expect(schema[1].name).toBe("entity");
   });
 
   it("labels and explains the mode field", () => {
