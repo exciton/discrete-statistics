@@ -134,6 +134,29 @@ export function seriesList(
   return { rows, ignoreNew: false, mode: "entities" };
 }
 
+// A row's entity decides which states it may name, so a changed one clears it.
+export function rowsAfterEntityChange(
+  rows: StateRow[],
+  index: number,
+  entity: string | undefined
+): StateRow[] {
+  const appending = index === rows.length;
+  if (!entity) {
+    if (appending) {
+      return rows;
+    }
+    const kept = [...rows];
+    kept.splice(index, 1);
+    return kept;
+  }
+  const row: StateRow = appending
+    ? { token: "", label: entity, entity, shown: true }
+    : { ...rows[index], token: "", label: entity, entity };
+  const next = [...rows];
+  next.splice(index, appending ? 0 : 1, row);
+  return next;
+}
+
 export function seriesListConfig(list: StateList): StateFilter {
   return {
     states: list.rows.map((row) => ({

@@ -3,7 +3,12 @@ import { property } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { repeat } from "lit/directives/repeat.js";
 import { paletteCss } from "./colors";
-import { automaticIndex, type StateList, type StateRow } from "./state-list";
+import {
+  automaticIndex,
+  rowsAfterEntityChange,
+  type StateList,
+  type StateRow,
+} from "./state-list";
 import type { HassLike } from "./types";
 
 // mdi:drag-horizontal-variant, the handle the stock row editors use.
@@ -62,6 +67,7 @@ export class DiscreteStatisticsStateList extends LitElement {
         <div class="rows">
           ${repeat(
             list.rows,
+            // Two rows may name the same entity and state, so only the index is unique.
             (row, index) => (multi ? index : row.token || row.label),
             (row, index) => html`
               <div class="row ${multi ? "multi" : ""}">
@@ -149,24 +155,10 @@ export class DiscreteStatisticsStateList extends LitElement {
   private _entityChanged(ev: CustomEvent<{ value?: string }>) {
     ev.stopPropagation();
     const target = ev.currentTarget as HTMLElement & { index: number };
-    const entity = ev.detail.value;
-    const rows = [...this.value!.rows];
-    if (target.index === rows.length) {
-      if (!entity) {
-        return;
-      }
-      rows.push({
-        token: this.stateOptions?.[entity]?.[0]?.value ?? "",
-        label: entity,
-        entity,
-        shown: true,
-      });
-    } else if (!entity) {
-      rows.splice(target.index, 1);
-    } else {
-      rows[target.index] = { ...rows[target.index], entity, label: entity };
+    const rows = rowsAfterEntityChange(this.value!.rows, target.index, ev.detail.value);
+    if (rows !== this.value!.rows) {
+      this._announce({ ...this.value!, rows });
     }
-    this._announce({ ...this.value!, rows });
   }
 
   private _stateChanged(ev: CustomEvent<{ value?: string }>) {

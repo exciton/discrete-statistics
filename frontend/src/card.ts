@@ -2,6 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { ensureChartBase } from "./chart-base";
 import { FALLBACK_COLORS, PALETTE_SIZE, resolveColor } from "./colors";
+import { isEmpty, isMultiEntity, validateConfig } from "./config";
 import { fetchStatistics, listStatisticIds, subscribeEnergyRange } from "./hass-api";
 import { rangeFromDays, resolvePeriod, resolveUnit, type Range } from "./period";
 import {
@@ -18,7 +19,6 @@ import {
   resolveSeries,
   type StateStatistic,
 } from "./statistic-ids";
-import { isMultiEntity, validateConfig } from "./config";
 import type { CardConfig, HassLike } from "./types";
 
 const DEFAULT_DAYS = 30;
@@ -112,8 +112,7 @@ export class DiscreteStatisticsCard extends LitElement {
     this._dataStart = undefined;
     // A card with neither an entity nor rows is a fresh one the editor has
     // not filled in yet; a thrown error here would fail the picker's preview.
-    const empty = !config.entity && !config.states?.length;
-    this._error = empty ? "Choose an entity in the card editor" : undefined;
+    this._error = isEmpty(config) ? "Choose an entity in the card editor" : undefined;
     this._subscribed = false;
     this._chartOptions = this._options();
   }
@@ -199,7 +198,7 @@ export class DiscreteStatisticsCard extends LitElement {
     const hass = this.hass;
     const config = this._config;
     const range = this._range;
-    if (!hass || !config || !range || (!config.entity && !config.states?.length)) {
+    if (!hass || !config || !range || isEmpty(config)) {
       return;
     }
     if (this._fetching) {

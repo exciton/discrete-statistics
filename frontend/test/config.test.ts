@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyChartMode,
+  isEmpty,
   isMultiEntity,
   type ChartMode,
   toMultiEntity,
@@ -32,6 +33,15 @@ describe("isMultiEntity", () => {
   it("is the absence of the card's own entity", () => {
     expect(isMultiEntity(config({ entity: "cover.gate" }))).toBe(false);
     expect(isMultiEntity(config({ states: [{ entity: "cover.gate", state: "open" }] }))).toBe(true);
+  });
+});
+
+describe("isEmpty", () => {
+  it("is a card with neither an entity nor rows", () => {
+    expect(isEmpty(config({}))).toBe(true);
+    expect(isEmpty(config({ states: [] }))).toBe(true);
+    expect(isEmpty(config({ entity: "cover.gate" }))).toBe(false);
+    expect(isEmpty(config({ states: [{ entity: "cover.gate", state: "open" }] }))).toBe(false);
   });
 });
 

@@ -1,7 +1,7 @@
 import { LitElement, css, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { listStatisticIds } from "./hass-api";
-import { applyChartMode, isMultiEntity, type ChartMode } from "./config";
+import { applyChartMode, isEmpty, isMultiEntity, type ChartMode } from "./config";
 import {
   seriesList,
   seriesListConfig,
@@ -225,7 +225,9 @@ export class DiscreteStatisticsCardEditor extends LitElement {
     if (!this._config || this._entities === undefined) {
       return nothing;
     }
-    const mode = this._mode ?? (isMultiEntity(this._config) ? "entities" : "states");
+    const mode =
+      this._mode ??
+      (!isEmpty(this._config) && isMultiEntity(this._config) ? "entities" : "states");
     const multi = mode === "entities";
     // A config missing these keys shows the card's defaults rather than
     // blank fields.
@@ -284,9 +286,10 @@ export class DiscreteStatisticsCardEditor extends LitElement {
   private _statesChanged(ev: CustomEvent<{ value: StateList }>): void {
     ev.stopPropagation();
     const { states: _states, ignore_states: _ignored, ...rest } = this._config!;
-    const config = isMultiEntity(this._config!)
-      ? seriesListConfig(ev.detail.value)
-      : stateListConfig(ev.detail.value);
+    const config =
+      ev.detail.value.mode === "entities"
+        ? seriesListConfig(ev.detail.value)
+        : stateListConfig(ev.detail.value);
     this._announce({ ...rest, ...config });
   }
 

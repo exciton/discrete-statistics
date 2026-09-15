@@ -10,6 +10,9 @@ const named = (setting: StateSetting) =>
 
 export const isMultiEntity = (config: CardConfig): boolean => !config.entity;
 
+export const isEmpty = (config: CardConfig): boolean =>
+  !config.entity && !config.states?.length;
+
 export function validateConfig(config: CardConfig): void {
   const rows = config.states ?? [];
   if (!isMultiEntity(config)) {

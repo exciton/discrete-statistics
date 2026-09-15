@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { automaticIndex, seriesList, seriesListConfig, stateList, stateListConfig } from "../src/state-list";
+import {
+  automaticIndex,
+  rowsAfterEntityChange,
+  seriesList,
+  seriesListConfig,
+  stateList,
+  stateListConfig,
+  type StateRow,
+} from "../src/state-list";
 import type { StateStatistic } from "../src/statistic-ids";
 import type { StateSetting, StatisticsMetaData } from "../src/types";
 
@@ -201,5 +209,48 @@ describe("seriesList", () => {
       seriesList([{ entity: "light.nowhere", state: "打开" }], "duration", metadata)
     );
     expect(config.states).toEqual([{ entity: "light.nowhere", state: "打开" }]);
+  });
+});
+
+describe("rowsAfterEntityChange", () => {
+  const rows: StateRow[] = [
+    { token: "open", label: "Gate", entity: "cover.gate", shown: true },
+    { token: "on", label: "Hall", entity: "binary_sensor.hall_motion", shown: true },
+  ];
+
+  it("appends a stateless row for an entity chosen past the end", () => {
+    expect(rowsAfterEntityChange(rows, 2, "light.hall")).toEqual([
+      ...rows,
+      { token: "", label: "light.hall", entity: "light.hall", shown: true },
+    ]);
+  });
+
+  it("removes the row whose entity was cleared", () => {
+    expect(rowsAfterEntityChange(rows, 0, undefined)).toEqual([rows[1]]);
+  });
+
+  it("leaves the rows alone when the picker past the end is cleared", () => {
+    expect(rowsAfterEntityChange(rows, 2, undefined)).toEqual(rows);
+  });
+
+  it("clears the state of a row whose entity changed, rather than carrying it", () => {
+    expect(rowsAfterEntityChange(rows, 0, "light.hall")).toEqual([
+      { token: "", label: "light.hall", entity: "light.hall", shown: true },
+      rows[1],
+    ]);
+  });
+
+  it("keeps the name and colour the row carried", () => {
+    const named: StateRow[] = [{ ...rows[0], name: "Gate open", color: "red" }];
+    expect(rowsAfterEntityChange(named, 0, "light.hall")).toEqual([
+      {
+        token: "",
+        label: "light.hall",
+        entity: "light.hall",
+        shown: true,
+        name: "Gate open",
+        color: "red",
+      },
+    ]);
   });
 });
