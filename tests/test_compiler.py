@@ -13,6 +13,7 @@ from homeassistant.components.recorder.statistics import (
     get_metadata,
     statistics_during_period,
 )
+from homeassistant.components.recorder.tasks import SynchronizeTask
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.components.recorder.common import (
     async_wait_recording_done,
@@ -1824,6 +1825,212 @@ def _bounds(params):
         elif isinstance(param, str) and param.startswith("[["):
             for _, edge in json.loads(param):
                 yield edge
+
+
+async def test_recompiling_unchanged_history_writes_no_rows(
+    recorder, freezer, all_statements
+):
+    """Every row already stands with the sum this compile computes.
+
+    A recompute is almost always over history that has not changed, and
+    the recorder spends two statements on every row handed to it - so the
+    rows it is handed are the whole cost.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    await _seed_two_states(hass, freezer, start)
+
+    freezer.move_to(start + timedelta(hours=4))
+    compiler = Compiler(hass)
+    await compiler.async_compile(cfg(), start.timestamp())
+    await async_wait_recording_done(hass)
+
+    all_statements.clear()
+    await compiler.async_compile(cfg(), start.timestamp())
+    await async_wait_recording_done(hass)
+
+    written = [
+        sql
+        for sql, _ in all_statements
+        if sql.lstrip().upper().startswith(("INSERT", "UPDATE"))
+        and re.search(r"\bstatistics\b", sql)
+    ]
+    assert written == []
+    # The second compile still agrees with the first.
+    assert await read_rows(hass, DURATION_OFF, start, start + timedelta(hours=4)) == [
+        (start.timestamp() + HOUR, 1.0),
+        (start.timestamp() + 2 * HOUR, 2.0),
+        (start.timestamp() + 3 * HOUR, 3.0),
+    ]
+
+
+def _imports(monkeypatch):
+    """The statistic ids handed to `async_add_external_statistics`."""
+    seen: list[str] = []
+    real = compiler_module.async_add_external_statistics
+
+    def record(hass, metadata, rows):
+        seen.append(metadata["statistic_id"])
+        return real(hass, metadata, rows)
+
+    monkeypatch.setattr(compiler_module, "async_add_external_statistics", record)
+    return seen
+
+
+async def test_a_quiet_statistic_with_an_unchanged_name_is_not_imported(
+    recorder, freezer, monkeypatch
+):
+    """Metadata the recorder already holds, and no rows: nothing to say.
+
+    An import is a task, a commit and a metadata round trip on a queue
+    every integration shares.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    await _seed_two_states(hass, freezer, start)
+
+    freezer.move_to(start + timedelta(hours=4))
+    compiler = Compiler(hass)
+    await compiler.async_compile(
+        cfg(), start.timestamp(), (start + timedelta(hours=2)).timestamp()
+    )
+    await async_wait_recording_done(hass)
+
+    seen = _imports(monkeypatch)
+    await compiler.async_compile(
+        cfg(),
+        (start + timedelta(hours=2)).timestamp(),
+        (start + timedelta(hours=4)).timestamp(),
+    )
+    await async_wait_recording_done(hass)
+
+    # "on" is over, and "off" is entered nowhere in the window: only its
+    # duration has a row to write.
+    assert seen == [DURATION_OFF]
+
+
+def _queue_spy(monkeypatch, hass, *, swallow_fence=False):
+    """Record the task types the compile queues, optionally dropping the fence."""
+    instance = get_instance(hass)
+    real = instance.queue_task
+    seen: list[str] = []
+
+    def queue_task(task):
+        seen.append(type(task).__name__)
+        if swallow_fence and isinstance(task, SynchronizeTask):
+            return
+        real(task)
+
+    monkeypatch.setattr(instance, "queue_task", queue_task)
+    return seen
+
+
+async def test_a_recorder_that_is_not_running_is_not_fenced(
+    recorder, freezer, monkeypatch
+):
+    """Nothing would serve the task, and the await is inside the compile lock.
+
+    A fence that never resolves there stalls every later hourly run and
+    every `recompute` for the life of the process.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    await _seed_two_states(hass, freezer, start)
+
+    seen = _queue_spy(monkeypatch, hass)
+    monkeypatch.setattr(get_instance(hass), "is_running", False)
+    freezer.move_to(start + timedelta(hours=4))
+    assert await Compiler(hass).async_compile(cfg(), start.timestamp())
+
+    assert "SynchronizeTask" not in seen
+    # The rows were still handed over, which is what the fence waits for.
+    assert "ImportStatisticsTask" in seen
+
+
+async def test_a_fence_that_never_commits_gives_up_and_warns(
+    recorder, freezer, monkeypatch, caplog
+):
+    """A compile that has enqueued its rows must not fail over a late fence."""
+    # Zero rather than a short wait: these tests run under a frozen clock,
+    # where no positive bound ever elapses. A deadline already reached
+    # fires on the next pass of the loop either way.
+    monkeypatch.setattr(compiler_module, "FENCE_TIMEOUT", 0)
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    await _seed_two_states(hass, freezer, start)
+
+    seen = _queue_spy(monkeypatch, hass, swallow_fence=True)
+    freezer.move_to(start + timedelta(hours=4))
+    assert await Compiler(hass).async_compile(cfg(), start.timestamp())
+
+    assert "SynchronizeTask" in seen
+    assert "Timed out waiting" in caplog.text
+
+
+async def test_a_rowless_statistic_whose_metadata_drifted_is_imported(
+    recorder, freezer, monkeypatch
+):
+    """The name is not the only field a compile sets.
+
+    A statistic the window never sees must still have its unit, its unit
+    class and its mean type brought to what this version writes - the
+    recorder rewrites the metadata row, and only an import reaches it.
+    """
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    await _seed_two_states(hass, freezer, start)
+
+    freezer.move_to(start + timedelta(hours=4))
+    compiler = Compiler(hass)
+    await compiler.async_compile(
+        cfg(), start.timestamp(), (start + timedelta(hours=2)).timestamp()
+    )
+    await async_wait_recording_done(hass)
+
+    # A mean where this version writes none, and the same name: the older
+    # scheme, on a state the next window has nothing to say about.
+    drifted = {**metadata_for(METRIC_DURATION, DURATION_ON, "Grid Status: on (h)")}
+    drifted.update(has_mean=True, mean_type=StatisticMeanType.ARITHMETIC)
+    async_add_external_statistics(hass, drifted, [])
+    await async_wait_recording_done(hass)
+
+    seen = _imports(monkeypatch)
+    await compiler.async_compile(
+        cfg(),
+        (start + timedelta(hours=2)).timestamp(),
+        (start + timedelta(hours=4)).timestamp(),
+    )
+    await async_wait_recording_done(hass)
+
+    assert DURATION_ON in seen
+    metadata = await get_instance(hass).async_add_executor_job(
+        ft.partial(get_metadata, hass, statistic_ids={DURATION_ON})
+    )
+    assert metadata[DURATION_ON][1]["mean_type"] is StatisticMeanType.NONE
+
+
+async def test_a_renamed_statistic_is_imported_even_with_no_rows(
+    recorder, freezer, monkeypatch
+):
+    """The relabel is the one reason a rowless payload is still imported."""
+    hass = recorder
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    await _seed_two_states(hass, freezer, start)
+
+    freezer.move_to(start + timedelta(hours=4))
+    compiler = Compiler(hass)
+    await compiler.async_compile(cfg(), start.timestamp())
+    await async_wait_recording_done(hass)
+
+    seen = _imports(monkeypatch)
+    renamed = EntityConfig(
+        entity_id=ENTITY, name="The Grid", default="record_known", states={}
+    )
+    await compiler.async_compile(renamed, start.timestamp())
+    await async_wait_recording_done(hass)
+
+    assert set(seen) == {DURATION_ON, COUNT_ON, DURATION_OFF, COUNT_OFF}
+    assert await stored_name(hass, DURATION_ON) == "The Grid: on (h)"
 
 
 async def test_a_chunk_that_raises_still_drains_the_ones_before_it(

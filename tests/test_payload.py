@@ -33,7 +33,7 @@ COUNT_OFF = "discrete_statistics:binary_sensor_grid_status_off_count"
 
 def test_single_hour_single_state():
     payloads = build_payloads(cfg(), {("on", T0): (HOUR, 0)}, T0, T0 + HOUR, {})
-    metadata, rows = payloads[DURATION_ON]
+    metadata, rows, _ = payloads[DURATION_ON]
     assert metadata["name"] == "binary_sensor.grid_status: on (h)"
     assert metadata["source"] == "discrete_statistics"
     assert metadata["statistic_id"] == DURATION_ON
@@ -50,7 +50,7 @@ def test_single_hour_single_state():
 
 def test_count_metadata_has_no_unit():
     payloads = build_payloads(cfg(), {("on", T0): (HOUR, 2)}, T0, T0 + HOUR, {})
-    metadata, rows = payloads[COUNT_ON]
+    metadata, rows, _ = payloads[COUNT_ON]
     assert metadata["unit_of_measurement"] is None
     assert metadata["unit_class"] is None
     assert rows[0]["sum"] == 2
@@ -62,7 +62,7 @@ def test_sums_are_cumulative_across_hours():
         ("on", T0 + HOUR): (HOUR, 1),
         ("on", T0 + 2 * HOUR): (HOUR, 1),
     }
-    _, rows = build_payloads(cfg(), buckets, T0, T0 + 3 * HOUR, {})[COUNT_ON]
+    _, rows, _ = build_payloads(cfg(), buckets, T0, T0 + 3 * HOUR, {})[COUNT_ON]
     assert [row["sum"] for row in rows] == [1, 2, 3]
 
 
@@ -70,7 +70,7 @@ def test_base_sums_continue_the_running_total():
     payloads = build_payloads(
         cfg(), {("on", T0): (HOUR, 1)}, T0, T0 + HOUR, {DURATION_ON: 500.0}
     )
-    _, rows = payloads[DURATION_ON]
+    _, rows, _ = payloads[DURATION_ON]
     assert rows[0]["sum"] == 500.0 + 1.0
 
 
@@ -81,14 +81,14 @@ def test_sums_never_decrease():
         ("on", T0 + 2 * HOUR): (HOUR, 1),
     }
     payloads = build_payloads(cfg(), buckets, T0, T0 + 3 * HOUR, {})
-    for _, rows in payloads.values():
-        sums = [row["sum"] for row in rows]
+    for payload in payloads.values():
+        sums = [row["sum"] for row in payload.rows]
         assert sums == sorted(sums)
 
 
 def test_name_defaults_to_entity_id_when_not_configured():
     payloads = build_payloads(cfg(), {("on", T0): (HOUR, 0)}, T0, T0 + HOUR, {})
-    metadata, _ = payloads[DURATION_ON]
+    metadata, _, _ = payloads[DURATION_ON]
     assert "binary_sensor.grid_status" in metadata["name"]
 
 
@@ -96,13 +96,13 @@ def test_configured_name_is_used():
     payloads = build_payloads(
         cfg(name="Grid Status"), {("on", T0): (HOUR, 0)}, T0, T0 + HOUR, {}
     )
-    metadata, _ = payloads[DURATION_ON]
+    metadata, _, _ = payloads[DURATION_ON]
     assert metadata["name"] == "Grid Status: on (h)"
 
 
 def test_start_times_are_utc_aware():
     payloads = build_payloads(cfg(), {("on", T0): (HOUR, 0)}, T0, T0 + HOUR, {})
-    _, rows = payloads[DURATION_ON]
+    _, rows, _ = payloads[DURATION_ON]
     assert rows[0]["start"].tzinfo is not None
 
 
@@ -111,7 +111,7 @@ def test_an_hour_in_one_state_writes_one_duration_row_and_no_count_row():
     buckets = {("on", T0): (3600.0, 0)}
     payloads = build_payloads(cfg(), buckets, T0, T0 + HOUR, {})
 
-    _, on = payloads[DURATION_ON]
+    _, on, _ = payloads[DURATION_ON]
     assert [(r["start"].timestamp(), r["sum"]) for r in on] == [(T0, 1.0)]
     assert payloads[COUNT_ON][1] == []
     assert set(on[0]) == {"start", "sum"}
@@ -132,7 +132,7 @@ def test_a_quiet_hour_writes_nothing_for_an_absent_state_but_the_sum_still_carri
     # On in hour 0 and hour 2, absent in hour 1: two rows, the second
     # continuing from the first.
     buckets = {("on", T0): (3600.0, 0), ("on", T0 + 2 * HOUR): (1800.0, 1)}
-    _, rows = build_payloads(cfg(), buckets, T0, T0 + 3 * HOUR, {})[DURATION_ON]
+    _, rows, _ = build_payloads(cfg(), buckets, T0, T0 + 3 * HOUR, {})[DURATION_ON]
 
     assert [(r["start"].timestamp(), r["sum"]) for r in rows] == [
         (T0, 1.0),
@@ -145,13 +145,13 @@ def test_a_standing_row_is_rewritten_even_when_the_state_is_absent():
     # Without the rewrite the old row's higher sum would stand ahead of
     # every later one.
     buckets = {("on", T0): (3600.0, 0), ("off", T0 + HOUR): (3600.0, 1)}
-    _, rows = build_payloads(
+    _, rows, _ = build_payloads(
         cfg(),
         buckets,
         T0,
         T0 + 2 * HOUR,
         {},
-        standing={DURATION_ON: {T0 + HOUR}},
+        standing={DURATION_ON: {T0 + HOUR: 99.0}},
     )[DURATION_ON]
 
     assert [(r["start"].timestamp(), r["sum"]) for r in rows] == [
@@ -172,15 +172,47 @@ def test_a_standing_row_is_rewritten_even_when_the_state_is_absent():
 )
 def test_a_standing_row_is_rewritten_only_inside_the_window(stands, expected):
     buckets = {("on", T0): (3600.0, 0)}
-    _, rows = build_payloads(
-        cfg(), buckets, T0, T0 + 2 * HOUR, {}, standing={DURATION_ON: {stands}}
+    _, rows, _ = build_payloads(
+        cfg(), buckets, T0, T0 + 2 * HOUR, {}, standing={DURATION_ON: {stands: 99.0}}
     )[DURATION_ON]
     assert [(r["start"].timestamp(), r["sum"]) for r in rows] == expected
 
 
+def test_a_standing_row_holding_the_same_sum_is_not_written_again():
+    # Both hours already hold exactly what this compile computes, so the
+    # recorder would rewrite each with itself: two statements for nothing.
+    buckets = {("on", T0): (3600.0, 0), ("on", T0 + HOUR): (1800.0, 0)}
+    _, rows, _ = build_payloads(
+        cfg(),
+        buckets,
+        T0,
+        T0 + 2 * HOUR,
+        {},
+        standing={DURATION_ON: {T0: 1.0, T0 + HOUR: 1.5}},
+    )[DURATION_ON]
+
+    assert rows == []
+
+
+def test_a_standing_row_holding_a_different_sum_is_written_again():
+    # The first hour agrees, the second does not: only the second is
+    # rewritten, and with the sum this compile reached.
+    buckets = {("on", T0): (3600.0, 0), ("on", T0 + HOUR): (1800.0, 0)}
+    _, rows, _ = build_payloads(
+        cfg(),
+        buckets,
+        T0,
+        T0 + 2 * HOUR,
+        {},
+        standing={DURATION_ON: {T0: 1.0, T0 + HOUR: 1.25}},
+    )[DURATION_ON]
+
+    assert [(r["start"].timestamp(), r["sum"]) for r in rows] == [(T0 + HOUR, 1.5)]
+
+
 def test_metadata_declares_a_sum_and_no_mean():
     payloads = build_payloads(cfg(), {("on", T0): (3600.0, 0)}, T0, T0 + HOUR, {})
-    metadata, _ = payloads[DURATION_ON]
+    metadata, _, _ = payloads[DURATION_ON]
     assert metadata["has_sum"] is True
     assert metadata["has_mean"] is False
     assert metadata["mean_type"] is StatisticMeanType.NONE
@@ -197,7 +229,7 @@ def test_a_statistic_with_nothing_to_write_still_carries_its_metadata():
         {DURATION_OFF: 4.0},
         existing={DURATION_OFF: "Old: off (h)"},
     )
-    metadata, rows = payloads[DURATION_OFF]
+    metadata, rows, _ = payloads[DURATION_OFF]
     assert rows == []
     assert metadata["name"] == "Grid: off (h)"
 
@@ -221,8 +253,8 @@ def test_states_sharing_a_token_merge_rather_than_overwrite():
     payloads = build_payloads(cfg(), buckets, T0, T0 + HOUR, {})
 
     assert [k for k in payloads if k.endswith("_duration")] == [DURATION_HEATCOOL]
-    _, duration_rows = payloads[DURATION_HEATCOOL]
-    _, count_rows = payloads[COUNT_HEATCOOL]
+    _, duration_rows, _ = payloads[DURATION_HEATCOOL]
+    _, count_rows, _ = payloads[COUNT_HEATCOOL]
     assert duration_rows[0]["sum"] == pytest.approx(1.0)
     assert count_rows[0]["sum"] == 3
 
@@ -242,7 +274,7 @@ def test_a_rename_reaches_a_state_absent_from_the_window():
         {},
         {DURATION_ON: "Old Name: on (h)"},
     )
-    metadata, rows = payloads[DURATION_ON]
+    metadata, rows, _ = payloads[DURATION_ON]
     assert metadata["name"] == "Grid Status: on (h)"
     assert rows == []
 
@@ -257,7 +289,7 @@ def test_a_rename_survives_a_colon_in_the_old_display_name():
         {},
         {DURATION_ON: "Outbuilding: Grid Status: on (h)"},
     )
-    metadata, _ = payloads[DURATION_ON]
+    metadata, _, _ = payloads[DURATION_ON]
     assert metadata["name"] == "Grid: on (h)"
 
 
@@ -265,7 +297,7 @@ def test_an_unrecognisable_name_is_left_alone_rather_than_mangled():
     payloads = build_payloads(
         cfg("Grid"), {}, T0, T0 + HOUR, {}, {DURATION_ON: "renamed by hand"}
     )
-    metadata, _ = payloads[DURATION_ON]
+    metadata, _, _ = payloads[DURATION_ON]
     assert metadata["name"] == "renamed by hand"
 
 
@@ -283,7 +315,7 @@ def test_a_statistic_known_only_from_existing_is_carried_at_its_base():
         {DURATION_OFF: 7.5},
         {DURATION_OFF: "x: off (h)"},
     )
-    _, off_rows = payloads[DURATION_OFF]
+    _, off_rows, _ = payloads[DURATION_OFF]
     assert [row["sum"] for row in off_rows] == [8.5]
 
 
@@ -298,7 +330,7 @@ def test_a_colon_in_the_state_cannot_break_a_later_rename():
     buckets = {("Error: pump", T0): (HOUR, 1)}
     payloads = build_payloads(cfg("Grid"), buckets, T0, T0 + HOUR, {})
     statistic_id = "discrete_statistics:binary_sensor_grid_status_errorpump_duration"
-    metadata, _ = payloads[statistic_id]
+    metadata, _, _ = payloads[statistic_id]
 
     assert metadata["name"] == "Grid: Error pump (h)"
     assert rename(metadata["name"], "Mains") == "Mains: Error pump (h)"
@@ -309,7 +341,7 @@ def test_a_colon_in_the_display_name_is_still_fine():
     payloads = build_payloads(
         cfg("Shed: Grid"), {("on", T0): (HOUR, 1)}, T0, T0 + HOUR, {}
     )
-    metadata, _ = payloads[DURATION_ON]
+    metadata, _, _ = payloads[DURATION_ON]
     assert metadata["name"] == "Shed: Grid: on (h)"
     assert rename(metadata["name"], "Mains") == "Mains: on (h)"
 

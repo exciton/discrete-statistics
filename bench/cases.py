@@ -72,7 +72,8 @@ class HistoryPair:
 class Cases:
     time_zone: str
     repeat: int
-    # The entities whose frame is timed; empty means every configured one.
+    # The entities `build` and `compile` walk and whose frame `measure`
+    # times; empty means every configured one.
     entities: tuple[str, ...]
     buckets: tuple[BucketCase, ...]
     sensors: tuple[SensorCase, ...]

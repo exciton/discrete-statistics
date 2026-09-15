@@ -402,11 +402,19 @@ def bases(
 
 def standing(
     hass: HomeAssistant, statistic_ids: set[str], start: float, end: float
-) -> dict[str, set[float]]:
-    """The hours in [start, end) at which each statistic already holds a row. Executor."""
+) -> dict[str, dict[float, float]]:
+    """Each statistic's standing sums in [start, end), by hour. Executor.
+
+    The sum as well as the hour, in the one query: a row is worth
+    rewriting only where the sum it holds differs from the one being
+    compiled, and the compiler cannot tell without it.
+    """
     with _ids(hass, statistic_ids) as (session, ids):
         between = _rows_between(session, set(ids), start, end)
-        return {ids[metadata_id]: set(rows) for metadata_id, rows in between.items()}
+        return {
+            ids[metadata_id]: {hour: row.sum for hour, row in rows.items()}
+            for metadata_id, rows in between.items()
+        }
 
 
 def sums_at_edges(

@@ -29,6 +29,7 @@ from homeassistant.helpers.template import Template
 from sqlalchemy import event as sqlalchemy_event
 from sqlalchemy import text as sql_text
 
+from custom_components.discrete_statistics import compiler as compiler_module
 from custom_components.discrete_statistics import periods, reading, websocket
 from custom_components.discrete_statistics import rows as ds_rows
 from custom_components.discrete_statistics.compiler import Compiler
@@ -38,6 +39,7 @@ from custom_components.discrete_statistics.coordinator import frame_of
 from custom_components.discrete_statistics.reading import Partial, Spec
 
 from . import cases as cases_module
+from . import profiling
 
 DAY = 24 * HOUR
 
@@ -63,6 +65,13 @@ class Run:
     # A SQLite database whose newest compiled hour a `build` stops at, so
     # every database built covers the same span. Absent: build to now.
     build_anchor: str | None = None
+    # BENCH_PROFILE: wrap each entity's compile in cProfile and the phase
+    # split, and write a report per entity under `results/profiles/`.
+    profile: bool = False
+    # BENCH_CHUNK_HOURS: the compiler's chunk size for this run, so how
+    # much of the cost is per chunk can be measured. The module constant
+    # is set, not the integration changed.
+    chunk_hours: int | None = None
 
 
 def load_run(path: str | Path) -> Run:
@@ -121,6 +130,49 @@ def configs(run: Run) -> list:
         entity_config_from_entry(e["data"], e["options"])
         for e in cases_module.entries(run.data_dir)
     ]
+
+
+def wanted_configs(run: Run, cases=None) -> list:
+    """The configs a writing mode runs over: the cases' `entities`, or all."""
+    every = configs(run)
+    names = set(cases.entities) if cases and cases.entities else None
+    return [cfg for cfg in every if names is None or cfg.entity_id in names]
+
+
+@contextmanager
+def profiler_for(hass, run: Run):
+    """The profiler for a writing mode, when the run asked for one.
+
+    Also where `chunk_hours` is applied: both are the same opt-in
+    investigation, both are set on the compiler module and taken off
+    again, and neither touches the integration's own source.
+    """
+    original_chunk = compiler_module.CHUNK_HOURS
+    if run.chunk_hours:
+        compiler_module.CHUNK_HOURS = run.chunk_hours
+        print(f"chunk_hours {run.chunk_hours}", flush=True)
+    profiler = None
+    if run.profile:
+        profiler = profiling.Profiler(
+            hass,
+            _results_dir(run.results_dir) / "profiles",
+            f"{run.branch}-{run.engine}-{run.variant}-chunk{compiler_module.CHUNK_HOURS}",
+        )
+    try:
+        yield profiler
+    finally:
+        if profiler is not None:
+            profiler.close()
+        compiler_module.CHUNK_HOURS = original_chunk
+
+
+@contextmanager
+def entity_profile(profiler, label: str):
+    if profiler is None:
+        yield
+        return
+    with profiler.entity(label):
+        yield
 
 
 # --------------------------------------------------------------------- meter
@@ -789,22 +841,29 @@ async def measure(hass, cases, run: Run, now: float, tz, ws_client=None) -> Benc
     return bench
 
 
-async def build(hass, run: Run) -> None:
-    """Compile every entry from its earliest retained state. Writes."""
+async def build(hass, run: Run, cases=None) -> None:
+    """Compile every entry from its earliest retained state. Writes.
+
+    `cases.entities`, when it names any, restricts the run to those - a
+    profile of two entities out of fourteen is the same measurement and a
+    fraction of the wall clock.
+    """
     end = sqlite_anchor(run.build_anchor) if run.build_anchor else None
     where = "now" if end is None else str(datetime.fromtimestamp(end, timezone.utc))
     print(f"\nbuilding {run.engine}/{run.variant} to {where}", flush=True)
     compiler = Compiler(hass)
     started = time.perf_counter()
-    for cfg in configs(run):
-        one = time.perf_counter()
-        hours = await compiler.async_compile(cfg, None, end)
-        print(
-            f"{cfg.entity_id:<50} {hours:>7} hours "
-            f"{time.perf_counter() - one:>9.1f}s "
-            f"rows {await our_rows(hass):>9}",
-            flush=True,
-        )
+    with profiler_for(hass, run) as profiler:
+        for cfg in wanted_configs(run, cases):
+            one = time.perf_counter()
+            with entity_profile(profiler, cfg.entity_id):
+                hours = await compiler.async_compile(cfg, None, end)
+            print(
+                f"{cfg.entity_id:<50} {hours:>7} hours "
+                f"{time.perf_counter() - one:>9.1f}s "
+                f"rows {await our_rows(hass):>9}",
+                flush=True,
+            )
     print(
         f"built in {time.perf_counter() - started:.1f}s; "
         f"our rows now {await our_rows(hass)}",
@@ -812,24 +871,27 @@ async def build(hass, run: Run) -> None:
     )
 
 
-async def compile_(hass, run: Run, end: float) -> Bench:
+async def compile_(hass, run: Run, end: float, cases=None) -> Bench:
     """The write path: a trailing-window compile, and one day recompiled."""
     bench = Bench(hass, run)
     compiler = Compiler(hass)
     print(f"\n{HEADER}", flush=True)
-    for cfg in configs(run):
+    with profiler_for(hass, run) as profiler:
+        for cfg in wanted_configs(run, cases):
 
-        async def one(cfg=cfg):
-            return await compiler.async_compile_incremental(cfg)
+            async def one(cfg=cfg):
+                return await compiler.async_compile_incremental(cfg)
 
-        await bench.run(f"incremental {cfg.entity_id}", one, lambda got: got)
+            with entity_profile(profiler, f"incremental-{cfg.entity_id}"):
+                await bench.run(f"incremental {cfg.entity_id}", one, lambda got: got)
 
-    for cfg in configs(run):
+        for cfg in wanted_configs(run, cases):
 
-        async def one(cfg=cfg, end=end):
-            return await compiler.async_compile(cfg, end - DAY, end)
+            async def one(cfg=cfg, end=end):
+                return await compiler.async_compile(cfg, end - DAY, end)
 
-        await bench.run(f"one day     {cfg.entity_id}", one, lambda got: got)
+            with entity_profile(profiler, f"one-day-{cfg.entity_id}"):
+                await bench.run(f"one day     {cfg.entity_id}", one, lambda got: got)
 
     return bench
 

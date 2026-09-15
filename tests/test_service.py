@@ -44,7 +44,7 @@ async def test_backfill_writes_history(recorder, freezer):
     await hass.services.async_call(
         DOMAIN, "recompute", {"entity_id": ENTITY}, blocking=True
     )
-    await hass.async_block_till_done()
+    await hass.async_block_till_done(wait_background_tasks=True)
 
     sums = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=2))
     assert sums
@@ -82,6 +82,7 @@ async def test_service_serialises_with_scheduled_runs(recorder, freezer):
             ),
             hass.data[DOMAIN]["compile_all"](),
         )
+        await hass.async_block_till_done(wait_background_tasks=True)
 
     assert peak == 1
 
@@ -104,7 +105,7 @@ async def test_recompute_logs_what_it_did(recorder, freezer, caplog):
         await hass.services.async_call(
             DOMAIN, "recompute", {"entity_id": ENTITY}, blocking=True
         )
-        await hass.async_block_till_done()
+        await hass.async_block_till_done(wait_background_tasks=True)
 
     assert "Recompute: compiled" in caplog.text
     assert ENTITY in caplog.text
@@ -131,7 +132,7 @@ async def test_recompute_logs_the_explicit_start(recorder, freezer, caplog):
             {"entity_id": ENTITY, "start": "2026-01-01T01:00:00+00:00"},
             blocking=True,
         )
-        await hass.async_block_till_done()
+        await hass.async_block_till_done(wait_background_tasks=True)
 
     assert "Recompute: compiled" in caplog.text
     assert "2026-01-01T01:00:00" in caplog.text
@@ -163,7 +164,7 @@ async def test_recompute_leaves_statistics_outside_the_range_untouched(
     await hass.services.async_call(
         DOMAIN, "recompute", {"entity_id": ENTITY}, blocking=True
     )
-    await hass.async_block_till_done()
+    await hass.async_block_till_done(wait_background_tasks=True)
     before = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=6))
     assert before
 
@@ -176,7 +177,7 @@ async def test_recompute_leaves_statistics_outside_the_range_untouched(
             {"entity_id": ENTITY, "start": (start + timedelta(hours=4)).isoformat()},
             blocking=True,
         )
-        await hass.async_block_till_done()
+        await hass.async_block_till_done(wait_background_tasks=True)
     after = await read_sums(hass, DURATION_OFF, start, start + timedelta(hours=6))
 
     assert after == before
@@ -195,3 +196,40 @@ async def test_unconfigured_entity_is_rejected(recorder):
             {"entity_id": "binary_sensor.not_configured"},
             blocking=True,
         )
+
+
+async def test_recompute_returns_at_once_and_reports_when_done(recorder):
+    """The call must not wait for the compile: a run over a long history
+    holds a service call open for minutes or hours, and the UI gives up on
+    it. The notification is the completion report.
+
+    No freezer: the bound on the call needs the loop's clock to move.
+    """
+    hass = recorder
+    assert await async_setup_component(hass, DOMAIN, CONFIG)
+    await hass.async_block_till_done()
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow(self, cfg, *args, **kwargs):
+        started.set()
+        await release.wait()
+        return 7
+
+    def notifications():
+        return hass.data.get("persistent_notification", {})
+
+    with patch("custom_components.discrete_statistics.Compiler.async_compile", slow):
+        # Bounded so a handler that blocks fails the test rather than hangs it.
+        await asyncio.wait_for(
+            hass.services.async_call(DOMAIN, "recompute", {}, blocking=True), 5
+        )
+        # The call has returned while the compile is still running.
+        await started.wait()
+        assert not notifications()
+        release.set()
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+    [notification] = notifications().values()
+    assert "Recomputed 7 hour(s)" in notification["message"]

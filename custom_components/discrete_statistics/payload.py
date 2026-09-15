@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from typing import Any, NamedTuple
 
@@ -17,7 +17,18 @@ from .statistic_ids import parse, state_token
 # label matches the unit the statistic already carries.
 _METRIC_LABEL = {METRIC_DURATION: "h", METRIC_COUNT: "#"}
 
-Payload = tuple[dict[str, Any], list[dict[str, Any]]]
+
+class Payload(NamedTuple):
+    """One statistic's metadata, the rows to write, and the sum it ends on.
+
+    The ending sum is not the last row's: a row is written only where
+    something changed, so a window that writes nothing at all still hands
+    the next chunk the sum it reached.
+    """
+
+    metadata: dict[str, Any]
+    rows: list[dict[str, Any]]
+    ending_sum: float
 
 
 class _Planned(NamedTuple):
@@ -123,16 +134,23 @@ def build_payloads(
     existing: Mapping[str, str] | None = None,
     display: str | None = None,
     translate: Callable[[str], str] | None = None,
-    standing: Mapping[str, Collection[float]] | None = None,
+    standing: Mapping[str, Mapping[float, float]] | None = None,
 ) -> dict[str, Payload]:
-    """Return {statistic_id: (metadata, rows)} with cumulative sums.
+    """Return {statistic_id: Payload} - metadata, rows, and the sum reached.
 
-    A row is written where the hour's value is non-zero, and wherever a
-    row already stands - a recompile that finds a state absent from an
+    Where no row stands, one is written for a non-zero value. Where one
+    stands, it is rewritten only when the sum it holds differs from the
+    sum computed here - a recompile that finds a state absent from an
     hour it was written into must rewrite that row with the carried sum,
-    or its old sum stands ahead of every later one. The running sum
-    advances whether or not a row is written, so a statistic with nothing
-    to write returns no rows and its sum is unchanged.
+    or its old sum stands ahead of every later one; a row the recorder
+    would rewrite with itself is two statements for nothing. Float
+    equality is the test because the same arithmetic over the same
+    inputs yields the same float, and a sum that differs at all is a sum
+    the chart would read differently.
+
+    The running sum advances whether or not a row is written, so a
+    statistic with nothing to write returns no rows and its sum is
+    unchanged.
     """
     existing = existing or {}
     # The caller resolves this: it is the entity's own name where there is
@@ -172,23 +190,27 @@ def build_payloads(
     payloads: dict[str, Payload] = {}
     for statistic_id, plan in sorted(planned.items()):
         index, scale = (0, 1.0 / HOUR) if plan.metric == METRIC_DURATION else (1, 1.0)
-        stands = standing.get(statistic_id, ()) if standing else ()
+        stands = standing.get(statistic_id, {}) if standing else {}
         running = base_sums.get(statistic_id, 0.0)
         rows: list[dict[str, Any]] = []
         for hour in hours:
             # Seconds to hours, converted once: a solid hour reads as 1.0.
             value = folded.get((plan.token, hour), (0.0, 0))[index] * scale
             running += value
-            if value or hour in stands:
+            stood = stands.get(hour)
+            # Where a row stands the value is beside the point: the sum
+            # is what it holds, and rewriting it with the same one is
+            # work the recorder does twice for no change.
+            write = bool(value) if stood is None else running != stood
+            if write:
                 rows.append(
                     {
                         "start": datetime.fromtimestamp(hour, tz=timezone.utc),
                         "sum": running,
                     }
                 )
-        payloads[statistic_id] = (
-            metadata_for(plan.metric, statistic_id, plan.name),
-            rows,
+        payloads[statistic_id] = Payload(
+            metadata_for(plan.metric, statistic_id, plan.name), rows, running
         )
 
     return payloads

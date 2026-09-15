@@ -130,6 +130,7 @@ async def test_hourly_run_and_service_see_entry_configs(recorder):
         return_value=1,
     ) as service_mock:
         await hass.services.async_call(DOMAIN, "recompute", {}, blocking=True)
+        await hass.async_block_till_done(wait_background_tasks=True)
     assert [call.args[0].entity_id for call in service_mock.call_args_list] == [ENTITY]
 
 

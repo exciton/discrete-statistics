@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import functools as ft
+import logging
 from collections.abc import Collection, Mapping
 from datetime import datetime, timezone
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.history import state_changes_during_period
+from homeassistant.components.recorder.models import StatisticMeanType
 from homeassistant.components.recorder.statistics import (
     async_add_external_statistics,
     get_metadata,
 )
+from homeassistant.components.recorder.tasks import SynchronizeTask
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util import dt as dt_util
@@ -25,6 +29,15 @@ from .naming import async_warm_state_translations, display_name, state_translato
 from .payload import build_payloads, readable_state
 from .rows import bases, series_end, standing
 from .statistic_ids import belongs_to, parse
+
+_LOGGER = logging.getLogger(__name__)
+
+# How long the fence waits for the recorder to commit what a compile
+# queued. Generous, because a backlogged recorder must never be cut short;
+# bounded, because the await sits inside the compile lock and a recorder
+# that stops serving its queue between the check and the task would
+# otherwise hold that lock for the life of the process.
+FENCE_TIMEOUT = 60
 
 # Recompute this many trailing hours on every run, so a state committed by
 # the recorder after we first read its hour is still picked up.
@@ -51,6 +64,51 @@ def _as_datetime(timestamp: float) -> datetime:
     return datetime.fromtimestamp(timestamp, tz=timezone.utc)
 
 
+class _Stored(NamedTuple):
+    """What the recorder holds for one statistic, of what a compile sets.
+
+    Every field `payload.metadata_for` writes and nothing else, so an
+    import that would change none of them can be skipped: a rename, a
+    unit, a unit class, a mean type or the sum flag all still reach a
+    statistic the window never saw, with no rows beside them.
+
+    `has_mean` is the one field the recorder neither compares nor
+    rewrites: `_update_metadata` leaves it out, and a read derives it from
+    `mean_type`. So `payload.metadata_for` must keep the two consistent,
+    or every rowless statistic would compare unequal and import on every
+    compile.
+    """
+
+    name: str
+    unit_of_measurement: str | None
+    unit_class: str | None
+    mean_type: StatisticMeanType
+    has_sum: bool
+    has_mean: bool
+
+
+def _stored(meta: Mapping[str, Any]) -> _Stored:
+    """One statistic's metadata as it compares, the recorder's or ours.
+
+    The recorder answers with `None` for a name it never had, and the two
+    flags with whatever the column holds, so both are normalised here
+    rather than at each comparison.
+    """
+    return _Stored(
+        name=meta.get("name") or "",
+        unit_of_measurement=meta.get("unit_of_measurement"),
+        unit_class=meta.get("unit_class"),
+        mean_type=StatisticMeanType(meta.get("mean_type") or StatisticMeanType.NONE),
+        has_sum=bool(meta.get("has_sum")),
+        has_mean=bool(meta.get("has_mean")),
+    )
+
+
+def _names(stored: Mapping[str, _Stored]) -> dict[str, str]:
+    """The display names alone, which is all `payload` is given."""
+    return {statistic_id: meta.name for statistic_id, meta in stored.items()}
+
+
 class _ChunkState(NamedTuple):
     """What one chunk hands the next. Threaded, never re-read.
 
@@ -61,10 +119,11 @@ class _ChunkState(NamedTuple):
     `sums` are the cumulative bases the next chunk's rows continue from.
     Re-reading them would restart a series at zero and break monotonicity.
 
-    `existing` is every statistic the entity has, including any this chunk
-    created - which the recorder cannot report yet, and which the next chunk
-    needs to relabel every statistic and to know which standing rows it
-    must rewrite.
+    `existing` is every statistic the entity has and the metadata it
+    carries, including any this chunk created - which the recorder cannot
+    report yet, and which the next chunk needs to relabel every statistic,
+    to know which standing rows it must rewrite, and to tell an import
+    that would change nothing from one that would.
 
     `carried` is the state in effect at the chunk's end, which the next
     chunk opens in. It is also simply more accurate than any query: the
@@ -72,7 +131,7 @@ class _ChunkState(NamedTuple):
     """
 
     sums: dict[str, float]
-    existing: dict[str, str]
+    existing: dict[str, _Stored]
     carried: str | None
 
 
@@ -135,8 +194,8 @@ class Compiler:
     def __init__(self, hass: HomeAssistant) -> None:
         self._hass = hass
 
-    async def async_existing(self, entity_id: str) -> dict[str, str]:
-        """Return {statistic_id: stored name} for one entity's statistics.
+    async def _async_stored(self, entity_id: str) -> dict[str, _Stored]:
+        """Return {statistic_id: the metadata the recorder holds} for an entity.
 
         The recorder's metadata is the only record of which statistics an
         entity has - `belongs_to` recovers the association from the ID - so a
@@ -146,10 +205,18 @@ class Compiler:
             ft.partial(get_metadata, self._hass, statistic_source=DOMAIN)
         )
         return {
-            statistic_id: (meta["name"] or "")
+            statistic_id: _stored(meta)
             for statistic_id, (_, meta) in metadata.items()
             if belongs_to(statistic_id, entity_id)
         }
+
+    async def async_existing(self, entity_id: str) -> dict[str, str]:
+        """Return {statistic_id: stored name} for one entity's statistics.
+
+        The names alone, which is what every caller outside a compile
+        wants: the compile itself compares the whole of the metadata.
+        """
+        return _names(await self._async_stored(entity_id))
 
     async def async_compile_incremental(self, cfg: EntityConfig) -> int:
         """Compile from the watermark, recomputing the trailing window.
@@ -158,7 +225,7 @@ class Compiler:
         been deleted - there is nothing to trail, so it compiles the whole
         of the entity's retained history instead.
         """
-        existing = await self.async_existing(cfg.entity_id)
+        existing = await self._async_stored(cfg.entity_id)
         watermark = await self._async_watermark(existing)
         if watermark is None:
             start = await self.async_earliest_state_ts(cfg.entity_id)
@@ -189,7 +256,7 @@ class Compiler:
             return 0
 
         await async_warm_state_translations(self._hass, cfg.entity_id)
-        existing = await self.async_existing(cfg.entity_id)
+        existing = await self._async_stored(cfg.entity_id)
         if window_start < (evidence := first_whole_hour(earliest)):
             window_start = await self._async_opening_floor(
                 existing, window_start, evidence
@@ -204,15 +271,16 @@ class Compiler:
         state = _ChunkState(
             sums=base_sums,
             existing=existing,
-            carried=_carried_from_statistics(previous_hour, existing),
+            carried=_carried_from_statistics(previous_hour, _names(existing)),
         )
 
         compiled = 0
+        wrote = False
         chunk_start = window_start
         try:
             while chunk_start < window_end:
                 chunk_end = min(chunk_start + CHUNK_HOURS * HOUR, window_end)
-                state, hours = await self._async_compile_chunk(
+                state, hours, imported = await self._async_compile_chunk(
                     cfg,
                     chunk_start,
                     chunk_end,
@@ -220,19 +288,21 @@ class Compiler:
                     first_chunk=chunk_start == window_start,
                 )
                 compiled += hours
+                wrote = wrote or imported
                 chunk_start = chunk_end
         finally:
-            # async_add_external_statistics only enqueues, and the standing
-            # rows and the metadata are read live. In `finally` because a chunk
-            # that raises leaves earlier chunks' writes queued: the next
-            # compile would then see half of them, leave the rest
+            # async_add_external_statistics only enqueues, and every read
+            # the next compile opens with - the base, the watermark, the
+            # standing rows, the metadata - is live. In `finally` because a
+            # chunk that raises leaves earlier chunks' writes queued: the
+            # next compile would then see half of them, leave the rest
             # unrewritten, and the window after that would restart those at
             # zero.
-            await get_instance(self._hass).async_block_till_done()
+            await self._async_fence()
 
-        if compiled:
+        if wrote:
             # The sensors re-read after a compile rather than on a clock of
-            # their own: the write is drained above, so what they read now
+            # their own: the write is fenced above, so what they read now
             # is what was just written. The range says which of their
             # cached sums a rewrite could have moved.
             async_dispatcher_send(
@@ -240,6 +310,41 @@ class Compiler:
             )
 
         return compiled
+
+    async def _async_fence(self) -> None:
+        """Wait until everything this compile queued has been committed.
+
+        Our own task at the back of the recorder's queue, and the queue is
+        served in order, so it runs after the last import task has - and
+        `commit_before` commits the session first.
+        `Recorder.async_block_till_done` is not enough: it queues this same
+        task only while the queue is non-empty, and the queue empties when
+        the last import task is *popped*, which is before it has written
+        anything. A compile that returned there could be followed within
+        milliseconds - the `recompute` service behind the hourly run, the
+        two serialised by the lock - by one whose base and watermark open
+        behind the rows just written, and whose sums would then descend.
+        """
+        recorder = get_instance(self._hass)
+        if not recorder.is_running:
+            # Nothing is serving the queue - the thread has stopped, or has
+            # not reached its loop - so the task would never run. The
+            # writes stay queued for whoever starts it.
+            return
+        future = self._hass.loop.create_future()
+        recorder.queue_task(SynchronizeTask(future))
+        try:
+            async with asyncio.timeout(FENCE_TIMEOUT):
+                await future
+        except TimeoutError:
+            # The rows are enqueued either way, so raising here would lose
+            # the compile rather than the write. The next compile may open
+            # behind them, which is what the trailing window corrects.
+            _LOGGER.warning(
+                "Timed out waiting %ss for the recorder to commit what the "
+                "compile wrote; continuing",
+                FENCE_TIMEOUT,
+            )
 
     async def async_tail(
         self, cfg: EntityConfig, start: float, end: float
@@ -253,12 +358,12 @@ class Compiler:
         """
         if end <= start:
             return None
-        existing = await self.async_existing(cfg.entity_id)
+        existing = await self._async_stored(cfg.entity_id)
         _, previous_hour = await self._async_base(existing, start)
         state = _ChunkState(
             sums={},
             existing=existing,
-            carried=_carried_from_statistics(previous_hour, existing),
+            carried=_carried_from_statistics(previous_hour, _names(existing)),
         )
         rows = await self._async_history(cfg, start - HOUR, end)
         opened = self._open_window(cfg, rows, start, end, state)
@@ -307,11 +412,18 @@ class Compiler:
         state: _ChunkState,
         *,
         first_chunk: bool,
-    ) -> tuple[_ChunkState, int]:
+    ) -> tuple[_ChunkState, int, bool]:
         """Compile one chunk.
 
-        Returns what the next chunk starts from and the hours actually
-        compiled.
+        Returns what the next chunk starts from, the hours actually
+        compiled, and whether anything was handed to the recorder.
+
+        A payload with no rows whose metadata the recorder already holds,
+        field for field, is not imported at all: a task, a commit and a
+        metadata round trip for a statistic with nothing to say. Any
+        difference - a rename, a unit, a mean type - is imported with no
+        rows beside it, which is how every one of them reaches a statistic
+        the window never saw.
         """
         # An hour further back on the opening chunk.
         # `include_start_time_state` hands back exactly ONE row before the
@@ -324,7 +436,7 @@ class Compiler:
         )
         opened = self._open_window(cfg, rows, chunk_start, chunk_end, state)
         if opened is None:
-            return state, 0
+            return state, 0, False
         window_start, carried, transitions = opened
 
         sums = state.sums
@@ -350,7 +462,7 @@ class Compiler:
             window_start,
             chunk_end,
             sums,
-            state.existing,
+            _names(state.existing),
             display=display_name(self._hass, cfg.entity_id, cfg.name),
             translate=state_translator(self._hass, cfg.entity_id),
             standing=stands,
@@ -358,15 +470,19 @@ class Compiler:
 
         next_sums = dict(sums)
         next_existing = dict(state.existing)
-        for statistic_id, (metadata, statistic_rows) in payloads.items():
-            async_add_external_statistics(self._hass, metadata, statistic_rows)
-            # No row means every hour's value was zero: the sum is where it was.
-            next_sums[statistic_id] = (
-                statistic_rows[-1]["sum"]
-                if statistic_rows
-                else sums.get(statistic_id, 0.0)
-            )
-            next_existing[statistic_id] = metadata["name"]
+        imported = False
+        for statistic_id, payload in payloads.items():
+            meta = _stored(payload.metadata)
+            if payload.rows or meta != state.existing.get(statistic_id):
+                imported = True
+                async_add_external_statistics(
+                    self._hass, payload.metadata, payload.rows
+                )
+            # The sum the window reached, which a written row need not
+            # carry: an hour whose row already stands with that sum writes
+            # nothing, and the next chunk still starts from it.
+            next_sums[statistic_id] = payload.ending_sum
+            next_existing[statistic_id] = meta
 
         return (
             _ChunkState(
@@ -376,6 +492,7 @@ class Compiler:
                 carried=transitions[-1][1] if transitions else carried,
             ),
             int((chunk_end - window_start) / HOUR),
+            imported,
         )
 
     def _carried_from_state_machine(

@@ -12,9 +12,10 @@
 # Times each case is run after a warm-up pass. The median is reported.
 repeat: 5
 
-# The entities whose frame - which statistics exist, and the newest
-# compiled hour across them - is timed. Omit, or leave empty, for every
-# entity `entries.json` configures.
+# The entities to work over: the ones `build` and `compile` walk, and the
+# ones whose frame - which statistics exist, and the newest compiled hour
+# across them - `measure` times. Omit, or leave empty, for every entity
+# `entries.json` configures.
 entities:
   - light.kitchen_lights
   - binary_sensor.grid_status

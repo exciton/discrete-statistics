@@ -98,7 +98,7 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
        ├─ rows              reads the recorder: the newest row before each
        │        │           of many edges, per-engine SQL, the sums at a
        │        │           set of edges, a range opened on the row before
-       │        │           it, the compile's bases, the rows standing in
+       │        │           it, the compile's bases, the sums standing in
        │        │           a window, where a series starts and where it ends
        ├─ reading           pure: a window in pieces - whole hours, part hours,
        │        │           the tail -> one sensor's value
@@ -120,7 +120,7 @@ Keep it that way: if a change needs recorder access in a lower module, the
 design is drifting. Three recorder boundaries: `compiler` is the only
 module that writes; `rows` reads — `session_scope(read_only=True)`, the
 newest row before each of a set of edges, the sums at a set of edges, the
-rows of a range and the one before it, the rows standing in a window, the
+rows of a range and the one before it, the sums standing in a window, the
 earliest and the newest row of a series — for `websocket`, the compiler
 and the coordinator alike. Every one of those reads is a single statement,
 `rows.bases` included: the compile's base read asks `rows_before` for two
@@ -346,8 +346,17 @@ hour sum to 1.0. A hole has none. Count rows are sparse by nature. The
 third clause is what keeps the recorder's upsert idempotent: nothing
 deletes, so a recompile that finds a state absent from an hour it was
 once written into rewrites that row with the carried sum
-(`rows.standing`, read once per chunk), or its old sum would stand
-ahead of every later one. There is no `mean`: the recorder's reduction
+(`rows.standing`, read once per chunk, sums and all), or its old sum
+would stand ahead of every later one. A standing row is rewritten only
+where its sum *differs* from the one computed now — one that would be
+rewritten with itself is skipped, so a recompute over history that has
+not changed writes nothing at all: the write path is ~93% of a compile's
+wall clock, and that is what such a recompute saves
+(`docs/superpowers/notes/2026-09-13-lean-writes-profile.md`). By the
+same argument a payload with no rows is imported only when its metadata
+differs from what the recorder holds, field for field (`compiler._Stored`);
+nothing else would change, and the recorder's queue is shared with every
+other integration. There is no `mean`: the recorder's reduction
 skips absent rows, so over sparse rows it would average the hours the
 state occurred, never the period.
 
@@ -480,7 +489,10 @@ only because `compose_name` strips colons from the state half. A display
 name may hold any number of them; a state may hold none. The state half cannot be
 rebuilt from the ID — the ID holds only the token — so a rename would
 otherwise never reach a state the entity has not been in for months, and
-neither would a change to the units.
+neither would a change to the units. Which is why the rowless import is
+skipped on the whole of the metadata and not on the name: the name, the
+units, the unit class, the mean type and the sum flag are every field a
+compile sets, and any of them differing is a reason to import.
 
 **A state older than the purge horizon is still known.** Purge deletes every
 row past `purge_keep_days` with no per-entity reprieve (`queries.py:281`), so
@@ -595,7 +607,7 @@ one an entry already owns, which is also what keeps it out of
 Verified against 2026.8.3.
 
 - `async_add_external_statistics` is a `@callback` — call it, do not await it.
-  It only *enqueues*; `Compiler.async_compile` drains via `async_block_till_done()`
+  It only *enqueues*; `Compiler.async_compile` waits on `_async_fence`
   before returning so a subsequent compile reads a base including those writes.
 - Every other recorder query is synchronous and must run through
   `get_instance(hass).async_add_executor_job(...)`.
@@ -612,29 +624,31 @@ Verified against 2026.8.3.
   sum is known, which is why the base is read from the newest bucket *before*
   the window rather than the newest one overall — a recompute opening inside a
   hole has rows on both sides, and the ones ahead are what it overwrites.
-- `Compiler.async_compile` drains the recorder in a `finally`, not on the
+- `Compiler.async_compile` fences the recorder in a `finally`, not on the
   success path. A chunk that raises leaves earlier chunks' writes queued, and
   the standing rows and the metadata are read live — so the next compile
   would see half of them, leave the rest unrewritten, and the window after
   that would restart those at zero.
-- The two `async_existing` reads in an incremental compile are not
+- The two `_async_stored` reads in an incremental compile are not
   redundant. Reusing the first one — taken before `_async_watermark`'s
   own read — makes a recently deleted statistic intermittently still
   visible, and the deletion tests flaky about one run in three.
 - An `asyncio.Lock` in `hass.data` serialises the hourly run against the
   service. It is not reentrant: never call `compile_all` from inside it.
 - `Recorder.async_block_till_done()` returns as soon as the queue is empty,
-  which is before a popped `ImportStatisticsTask` has committed. A test
+  which is before a popped `ImportStatisticsTask` has committed — and it
+  queues its `SynchronizeTask` only while the queue is *non-empty*, so once
+  the last import task has been popped it fences nothing at all. A test
   that seeds statistics with `async_add_external_statistics` and then reads
   them back must wait with `async_wait_recording_done` instead —
-  `tests/test_rows.py`'s `seed` is the pattern. `Compiler.async_compile`'s
-  own drain has the same property, so a read scheduled straight after it
-  can still see the watermark from before the commit; the coordinator's
-  live tail covers that gap and the next compile corrects it. The same gap
-  applies to `rows.standing`: a compile that runs within milliseconds of the
-  previous one's drain can miss a row still committing and leave it
-  unrewritten; tests that compile twice back to back wait with
-  `async_wait_recording_done` between.
+  `tests/test_rows.py`'s `seed` is the pattern. `Compiler.async_compile`
+  queues a `SynchronizeTask` of its own (`_async_fence`) and awaits it:
+  one no-op task at the back of a queue served in order, with
+  `commit_before` committing the session first, so every read the next
+  compile opens with — the base, the watermark, the standing rows, the
+  metadata — sees what this one wrote. Without it a `recompute` running
+  milliseconds behind the hourly run, the two serialised by the lock,
+  could open behind those rows and write sums that descend.
 - Recorder engines differ on how a seek is planned, so `rows.rows_before`
   renders itself per engine, chosen from `session.get_bind().dialect.name`
   — the same string the recorder parses, and no caller threads it in.

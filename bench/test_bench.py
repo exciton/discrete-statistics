@@ -73,7 +73,7 @@ async def test_measure(recorder, recorder_db_url, hass_ws_client):
 @pytest.mark.skipif(RUN.mode != "build", reason="bench mode")
 async def test_build(recorder):
     """Compile every entry from its earliest retained state. Writes."""
-    await harness.build(recorder, RUN)
+    await harness.build(recorder, RUN, CASES)
 
 
 @pytest.mark.skipif(RUN.mode != "compile", reason="bench mode")
@@ -82,7 +82,7 @@ async def test_compile(recorder, recorder_db_url):
     hass = recorder
     end = await harness.anchor(hass)
     assert end is not None, "no statistics of ours in this database"
-    bench = await harness.compile_(hass, RUN, end)
+    bench = await harness.compile_(hass, RUN, end, CASES)
     await harness.write_results(bench, hass, RUN, recorder_db_url)
 
 

@@ -27,6 +27,7 @@ python3 bench/compare.py A.json B.json          # two runs, side by side
 | `cases.example.yaml` | every field the cases document takes, commented |
 | `cases.py` | the cases document as typed values; pure |
 | `harness.py` | the measurement: the meter, the modes, the EXPLAIN capture |
+| `profiling.py` | `BENCH_PROFILE=1`: one compile, split into phases and profiled |
 | `test_bench.py` | the pytest driver, one test per mode |
 | `test_selftest.py` | the harness against a database it builds itself — `script/bench selftest` |
 | `conftest.py` | the fixtures, and the guard that keeps `test_bench.py` uncollected without a database |
@@ -40,3 +41,11 @@ bench elsewhere: `BENCH_CASES` (default `bench/cases.yaml`), `BENCH_DATA`
 (`bench/data` — `entries.json`, and `<variant>/home-assistant_v2.db`) and
 `BENCH_RESULTS` (`bench/results`, git-ignored). `script/bench` writes the
 rest into `$BENCH_RESULTS/run.json` for the container to read.
+
+The two writing modes take two more, for asking where a compile's time
+goes: `BENCH_PROFILE=1` writes a report per entity into
+`$BENCH_RESULTS/profiles/` — the phase split, then the event loop's
+cProfile — and `BENCH_CHUNK_HOURS` sets `compiler.CHUNK_HOURS` for the
+run, so how much of the cost is per chunk can be measured without
+touching the integration. Both modes also honour `entities:` in the cases
+document, which restricts them to the entities named there.
