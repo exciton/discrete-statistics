@@ -1,5 +1,6 @@
 import { LitElement, css, html } from "lit";
 import { property } from "lit/decorators.js";
+import { keyed } from "lit/directives/keyed.js";
 import { repeat } from "lit/directives/repeat.js";
 import { paletteCss } from "./colors";
 import { automaticIndex, type StateList, type StateRow } from "./state-list";
@@ -21,6 +22,13 @@ const colorSelector = (automatic: string) => ({
     extra_options: [{ value: AUTO, label: "Automatic", display_color: automatic }],
   },
 });
+// The entity field the editor's own form draws, limited the same way.
+const entitySelector = (entities?: string[]) => ({
+  entity: entities ? { include_entities: entities } : {},
+});
+const stateSelector = (options: { value: string; label: string }[]) => ({
+  select: { mode: "dropdown", options },
+});
 
 // One row per state: drag handle, drawn tick, name — the stored one as the
 // placeholder, so a row reads the same until it is renamed — and colour.
@@ -33,24 +41,59 @@ export class DiscreteStatisticsStateList extends LitElement {
 
   @property({ attribute: false }) public value?: StateList;
 
+  // In entities mode only: the entities a row may name, and the states each
+  // of them has statistics for, keyed by entity ID.
+  @property({ attribute: false }) public entities?: string[];
+
+  @property({ attribute: false }) public stateOptions?: Record<
+    string,
+    { value: string; label: string }[]
+  >;
+
   protected render() {
-    const list = this.value ?? { rows: [], ignoreNew: false };
+    const list: StateList = this.value ?? {
+      rows: [],
+      ignoreNew: false,
+      mode: "states",
+    };
+    const multi = list.mode === "entities";
     return html`
       <ha-sortable handle-selector=".handle" @item-moved=${this._rowMoved}>
         <div class="rows">
           ${repeat(
             list.rows,
-            (row) => row.token || row.label,
+            (row, index) => (multi ? index : row.token || row.label),
             (row, index) => html`
-              <div class="row">
+              <div class="row ${multi ? "multi" : ""}">
                 <div class="handle">
                   <ha-svg-icon .path=${DRAG_ICON}></ha-svg-icon>
                 </div>
-                <ha-checkbox
-                  .checked=${row.shown}
-                  .index=${index}
-                  @change=${this._shownChanged}
-                ></ha-checkbox>
+                ${multi
+                  ? html`
+                      <ha-selector
+                        class="entity"
+                        .hass=${this.hass}
+                        .selector=${entitySelector(this.entities)}
+                        .value=${row.entity}
+                        .index=${index}
+                        @value-changed=${this._entityChanged}
+                      ></ha-selector>
+                      <ha-selector
+                        class="state"
+                        .hass=${this.hass}
+                        .selector=${stateSelector(this._optionsFor(row))}
+                        .value=${row.token}
+                        .index=${index}
+                        @value-changed=${this._stateChanged}
+                      ></ha-selector>
+                    `
+                  : html`
+                      <ha-checkbox
+                        .checked=${row.shown}
+                        .index=${index}
+                        @change=${this._shownChanged}
+                      ></ha-checkbox>
+                    `}
                 <ha-input
                   class="name"
                   .placeholder=${row.label}
@@ -70,14 +113,66 @@ export class DiscreteStatisticsStateList extends LitElement {
           )}
         </div>
       </ha-sortable>
-      <ha-selector
-        .hass=${this.hass}
-        .selector=${IGNORE_NEW_SELECTOR}
-        .label=${"Ignore states that appear later"}
-        .value=${list.ignoreNew}
-        @value-changed=${this._ignoreNewChanged}
-      ></ha-selector>
+      ${multi
+        ? // A picker per row count: the entity it took would otherwise stay
+          // in it once the row is drawn above.
+          keyed(
+            list.rows.length,
+            html`<ha-selector
+              class="add"
+              .hass=${this.hass}
+              .selector=${entitySelector(this.entities)}
+              .index=${list.rows.length}
+              @value-changed=${this._entityChanged}
+            ></ha-selector>`
+          )
+        : html`<ha-selector
+            .hass=${this.hass}
+            .selector=${IGNORE_NEW_SELECTOR}
+            .label=${"Ignore states that appear later"}
+            .value=${list.ignoreNew}
+            @value-changed=${this._ignoreNewChanged}
+          ></ha-selector>`}
     `;
+  }
+
+  // An unlisted state is offered as itself, so a row the statistics do not
+  // know reads as what it is rather than blank.
+  private _optionsFor(row: StateRow): { value: string; label: string }[] {
+    const options = this.stateOptions?.[row.entity ?? ""] ?? [];
+    if (!row.token || options.some((option) => option.value === row.token)) {
+      return options;
+    }
+    return [...options, { value: row.token, label: row.token }];
+  }
+
+  private _entityChanged(ev: CustomEvent<{ value?: string }>) {
+    ev.stopPropagation();
+    const target = ev.currentTarget as HTMLElement & { index: number };
+    const entity = ev.detail.value;
+    const rows = [...this.value!.rows];
+    if (target.index === rows.length) {
+      if (!entity) {
+        return;
+      }
+      rows.push({
+        token: this.stateOptions?.[entity]?.[0]?.value ?? "",
+        label: entity,
+        entity,
+        shown: true,
+      });
+    } else if (!entity) {
+      rows.splice(target.index, 1);
+    } else {
+      rows[target.index] = { ...rows[target.index], entity, label: entity };
+    }
+    this._announce({ ...this.value!, rows });
+  }
+
+  private _stateChanged(ev: CustomEvent<{ value?: string }>) {
+    ev.stopPropagation();
+    const target = ev.currentTarget as HTMLElement & { index: number };
+    this._updateRow(target.index, { token: ev.detail.value ?? "" });
   }
 
   private _rowMoved(ev: CustomEvent<{ oldIndex: number; newIndex: number }>) {
@@ -158,6 +253,22 @@ export class DiscreteStatisticsStateList extends LitElement {
     }
     ha-selector {
       width: 180px;
+    }
+    .row.multi {
+      flex-wrap: wrap;
+    }
+    ha-selector.entity {
+      flex: 1;
+      min-width: 0;
+      width: auto;
+    }
+    ha-selector.add {
+      display: block;
+      width: auto;
+      margin-top: 8px;
+    }
+    ha-selector.state {
+      width: 140px;
     }
   `;
 }
