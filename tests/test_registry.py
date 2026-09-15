@@ -373,9 +373,7 @@ async def test_a_replacement_renamed_onto_our_entity_is_filled_in(
         [(T0 + timedelta(hours=12), "on"), (T0 + timedelta(hours=14), "off")],
         entity_id=TEMP,
     )
-    # Crossing the hourly run's :03 mark here, not after the rename: the
-    # scheduled run would otherwise land behind the fill and overwrite it
-    # with the dead device's own carried-forward state.
+    # The scheduled run must land before the fill, not behind it.
     freezer.move_to(T0 + timedelta(hours=15, minutes=20))
     await settled(hass)
 
@@ -455,6 +453,83 @@ async def test_a_replacement_renamed_onto_our_entity_is_filled_in(
     assert off[12:15] == [6.0, 6.0, 7.0]
     assert on[15] == pytest.approx(8.0 + 2 / 3)
     assert off[15] == pytest.approx(7.0 + 1 / 3)
+
+
+async def test_a_fill_that_read_our_own_history_records_no_floor(recorder_utc, freezer):
+    """The recorder moved the history onto our ID, so those hours are rebuildable."""
+    hass = recorder_utc
+    await registered(hass, TEMP, "grid-2")
+    # The replacement's history, already under our ID: the recorder's own
+    # rename listener met nothing of ours in the states table.
+    await play(hass, freezer, HISTORY)
+    freezer.move_to(T0 + timedelta(hours=10))
+    entry = await setup_entry(hass)
+    # The old device is gone: only its recorded history is left.
+    hass.states.async_remove(ENTITY)
+    await settled(hass)
+
+    er.async_get(hass).async_update_entity(TEMP, new_entity_id=ENTITY)
+    await settled(hass)
+
+    [note] = [n for n in notifications(hass).values() if "Filled" in n["message"]]
+    assert TEMP in note["message"]
+    assert CONF_FILLED_UNTIL not in entry.data
+
+
+async def test_a_failed_fill_is_reported_and_records_no_floor(recorder_utc, freezer):
+    """Nothing was written, so nothing may be fenced off from a later compile."""
+    hass = recorder_utc
+    await registered(hass, TEMP, "grid-2")
+    await play(hass, freezer, HISTORY)
+    freezer.move_to(T0 + timedelta(hours=10))
+    entry = await setup_entry(hass)
+    hass.states.async_remove(ENTITY)
+    await settled(hass)
+
+    with patch.object(
+        compiler_module.Compiler, "async_fill", side_effect=RuntimeError("boom")
+    ):
+        er.async_get(hass).async_update_entity(TEMP, new_entity_id=ENTITY)
+        await settled(hass)
+
+    [note] = [
+        n for n in notifications(hass).values() if "Could not fill" in n["message"]
+    ]
+    assert "boom" in note["message"]
+    assert CONF_FILLED_UNTIL not in entry.data
+
+
+async def test_a_rename_onto_a_yaml_entity_is_logged(recorder_utc, freezer, caplog):
+    """A YAML entity has no entry to record the fill floor in, so it is not filled."""
+    hass = recorder_utc
+    await registered(hass, TEMP, "grid-2")
+    await play(hass, freezer, HISTORY)
+    freezer.move_to(T0 + timedelta(hours=10))
+    hass.set_state(CoreState.running)
+    assert await async_setup_component(hass, DOMAIN, {DOMAIN: [{"entity_id": ENTITY}]})
+    await hass.data[DOMAIN]["compile_all"]()
+    hass.states.async_remove(ENTITY)
+    await settled(hass)
+
+    with patch.object(compiler_module.Compiler, "async_fill") as fill:
+        er.async_get(hass).async_update_entity(TEMP, new_entity_id=ENTITY)
+        await settled(hass)
+
+    assert not fill.called
+    assert "configuration.yaml" in caplog.text
+    assert TEMP in caplog.text
+
+
+async def test_a_missing_entity_is_reviewed_when_its_entry_is_set_up(
+    recorder_utc, freezer
+):
+    """An entry created after startup names an entity that is already gone."""
+    hass = recorder_utc
+    freezer.move_to(T0)
+
+    entry = await setup_entry(hass, entity_id="binary_sensor.gone")
+
+    assert issue(hass, entry) is not None
 
 
 async def test_the_issue_waits_for_home_assistant_to_start(recorder_utc, freezer):

@@ -198,8 +198,9 @@ the history as a second series. A rename *onto* an entity we record is
 the device swap: the recorder refuses to move the replacement's state
 history onto a name that already has some, so `Compiler.async_fill`
 reads it under the temporary ID (`read_from`) and writes under ours,
-from the newest count row — the last real transition, since the
-watermark marches on over an entity gone unavailable — to the hour
+from the hour after the newest count row — the last real transition,
+since the watermark marches on over an entity gone unavailable, and that
+hour still holds our own device's behaviour up to it — to the hour
 before the rename. Only the recorder reads move with `read_from`; the
 state machine carry always asks for the entity configured, because the
 old ID is gone from the state machine by the time the event reaches us.

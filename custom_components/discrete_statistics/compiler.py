@@ -347,6 +347,13 @@ class BulkInsertTask(RecorderTask):
                     )
 
 
+class Fill(NamedTuple):
+    """What a fill compiled, and the entity ID whose history it read."""
+
+    hours: int
+    read_from: str
+
+
 class Renamed(NamedTuple):
     """What a rename moved, and what it could not."""
 
@@ -554,14 +561,15 @@ class Compiler:
 
     async def async_fill(
         self, cfg: EntityConfig, source_entity_id: str, before: float
-    ) -> int:
+    ) -> Fill:
         """Compile a replacement entity's early history into our series.
 
-        From the last real transition of ours - the newest row across the
-        entity's count statistics, since the watermark marches on over an
-        entity gone unavailable - to the last whole hour before the
-        rename, reading the states under `source_entity_id`. The hour of
-        the rename straddles both IDs and is left to the ordinary compile.
+        From the hour after our last real transition - the newest row
+        across the entity's count statistics, since the watermark marches
+        on over an entity gone unavailable - to the last whole hour before
+        the rename, reading the states under `source_entity_id`. The hour
+        of the rename straddles both IDs and is left to the ordinary
+        compile.
 
         Fenced first: the recorder's own rename listener runs ahead of
         ours and moves the states history onto our name when nothing of
@@ -582,15 +590,20 @@ class Compiler:
             for statistic_id in existing
             if (parts := parse(statistic_id)) is not None and parts[2] == METRIC_COUNT
         }
-        start = await self._async_watermark(counts)
-        if start is None:
+        watermark = await self._async_watermark(counts)
+        if watermark is None:
             start = await self.async_earliest_recorded_ts(read_from)
             if start is None:
-                return 0
+                return Fill(0, read_from)
+        else:
+            # The watermark hour holds that transition and the rest of our
+            # own device's behaviour up to it, so the fill opens after it.
+            start = watermark + HOUR
         end = hour_start(before)
         if end <= start:
-            return 0
-        return await self.async_compile(cfg, start, end, read_from=read_from)
+            return Fill(0, read_from)
+        hours = await self.async_compile(cfg, start, end, read_from=read_from)
+        return Fill(hours, read_from)
 
     async def _async_fence(self) -> None:
         """Wait until everything this compile queued has been committed.

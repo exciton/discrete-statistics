@@ -35,8 +35,8 @@ from .naming import describe
 
 _LOGGER = logging.getLogger(__name__)
 
-# The registry actions this module acts on. The filter runs on every
-# registry event, so it drops the rest before a handler is woken.
+# The filter runs on every registry event, so the rest are dropped before
+# a handler is woken.
 FOLLOWED_ACTIONS = ("create", "update", "remove")
 
 
@@ -70,14 +70,9 @@ async def async_follow(
     it; `_async_entry_updated` leaves an entity-ID change alone for that
     reason.
 
-    Two rough edges, both reported rather than repaired. A failure between
-    the rename and the entry update - realistically only an entry removed
-    mid-follow - leaves the statistics moved under a config that still
-    names the old ID, so "Could not move" is approximate there; the
-    statistics are under the new name and the entry is not. And a second
-    rename arriving while this one runs is dropped, because
-    `entry_configs` still names the old ID until the update lands and
-    `_entry_for` therefore finds nothing for the intermediate name.
+    A failure between the two leaves the statistics moved under a config
+    that still names the old ID, and a second rename arriving mid-follow
+    is dropped: both are reported, neither repaired.
     """
     data = hass.data[DOMAIN]
     entry = _entry_for(hass, old_entity_id)
@@ -152,8 +147,10 @@ async def async_fill(
     cfg = data["entry_configs"][entry.entry_id]
     try:
         async with data["lock"]:
-            hours = await compiler.async_fill(cfg, source_entity_id, before)
-            if hours:
+            filled = await compiler.async_fill(cfg, source_entity_id, before)
+            # Only hours read under the source ID need the floor: hours
+            # read under our own are rebuildable from our own history.
+            if filled.hours and filled.read_from != cfg.entity_id:
                 hass.config_entries.async_update_entry(
                     entry,
                     data={**entry.data, CONF_FILLED_UNTIL: hour_start(before)},
@@ -167,10 +164,10 @@ async def async_fill(
             f"{DOMAIN}_fill_{entry.entry_id}",
         )
         return
-    if not hours:
+    if not filled.hours:
         return
     message = (
-        f"Filled {hours} hour(s) of statistics for "
+        f"Filled {filled.hours} hour(s) of statistics for "
         f"{describe(hass, cfg.entity_id, cfg.name)} from the history of "
         f"{source_entity_id}, which was renamed onto it."
     )
@@ -184,7 +181,7 @@ def missing_issue_id(entry: ConfigEntry) -> str:
 
 @callback
 def async_review_missing(hass: HomeAssistant) -> None:
-    """Raise the repair for an entry whose entity has neither a registry entry nor a state; clear it otherwise."""
+    """Raise the repair for an entry whose entity has neither registry entry nor state."""
     # Never while starting: the entity's own integration may not have loaded.
     if hass.state is not CoreState.running:
         return
@@ -237,6 +234,14 @@ def async_setup(hass: HomeAssistant) -> None:
                 await async_follow(hass, old, new)
             elif (entry := _entry_for(hass, new)) is not None:
                 await async_fill(hass, entry, old, event.time_fired_timestamp)
+            elif _owned(hass, new):
+                _LOGGER.warning(
+                    "%s was renamed onto %s, which is configured in "
+                    "configuration.yaml; its history was not filled in, because "
+                    "a YAML entity has no config entry to record the fill in",
+                    old,
+                    new,
+                )
         async_review_missing(hass)
 
     @callback

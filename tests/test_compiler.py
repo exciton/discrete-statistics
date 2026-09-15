@@ -2932,15 +2932,11 @@ async def test_the_state_machine_carry_is_asked_for_our_entity_not_the_read_one(
 ):
     """Our own live state opens the window, never the read identity's.
 
-    ENTITY has been `on` since before the window opens; TEMP's only
-    recorded row lands exactly on T0, a transition `canonicalise` cannot
-    fold into a carry, and `first_whole_hour(T0) == T0` so the opening
-    floor never intervenes - the carry decision is genuinely reached.
-    The window must open carried in ENTITY's own `on` and count the `off`
-    row as an entry. Asking TEMP's live state instead would find `off`
-    with `last_changed == T0`, which the guard accepts and which
-    `_open_window` then dedupes against the row itself - losing the count
-    entirely.
+    TEMP's only row lands exactly on T0, where `first_whole_hour(T0) ==
+    T0` leaves the opening floor out of it, so the carry decision is
+    genuinely reached. Asking TEMP's live state would find `off` with
+    `last_changed == T0`, which `_open_window` then dedupes against the
+    row itself - losing the count.
     """
     hass = recorder_utc
     freezer.move_to(T0 - timedelta(hours=1))
@@ -3072,12 +3068,12 @@ async def test_fill_compiles_the_source_history_into_our_series(recorder_utc, fr
     renamed_at = T0 + timedelta(hours=6, minutes=20)
     freezer.move_to(renamed_at)
 
-    hours = await compiler.async_fill(ours, TEMP, renamed_at.timestamp())
+    filled = await compiler.async_fill(ours, TEMP, renamed_at.timestamp())
     await async_wait_recording_done(hass)
 
     # T0+3h .. T0+6h: three hours of the replacement's states, and nothing
     # under its own ID.
-    assert hours == 3
+    assert filled == compiler_module.Fill(3, TEMP)
     assert await existing(hass, TEMP) == []
     # hours 0-5: on, off, off (dead, carried), on, on, off
     assert await read_sums(hass, DURATION_ON, T0, T0 + timedelta(hours=6)) == [
@@ -3114,10 +3110,10 @@ async def test_fill_reads_under_our_own_id_when_the_history_moved(
     renamed_at = T0 + timedelta(hours=2, minutes=5)
     freezer.move_to(renamed_at)
 
-    hours = await compiler.async_fill(ours, TEMP, renamed_at.timestamp())
+    filled = await compiler.async_fill(ours, TEMP, renamed_at.timestamp())
     await async_wait_recording_done(hass)
 
-    assert hours == 2
+    assert filled == compiler_module.Fill(2, ENTITY)
     # hour0: on, adding an hour on top of the seeded 1.0; hour1: off, carried.
     assert await read_sums(hass, DURATION_ON, T0, T0 + timedelta(hours=2)) == [2.0, 2.0]
 
@@ -3126,9 +3122,9 @@ async def test_fill_with_nothing_to_read_compiles_nothing(recorder_utc, freezer)
     hass = recorder_utc
     freezer.move_to(T0)
     ours = cfg()
-    assert (
-        await compiler_module.Compiler(hass).async_fill(ours, TEMP, T0.timestamp()) == 0
-    )
+    assert await compiler_module.Compiler(hass).async_fill(
+        ours, TEMP, T0.timestamp()
+    ) == compiler_module.Fill(0, ENTITY)
 
 
 async def test_fill_uses_the_count_watermark_not_the_duration_one(
@@ -3164,10 +3160,10 @@ async def test_fill_uses_the_count_watermark_not_the_duration_one(
 
     renamed_at = T0 + timedelta(hours=6, minutes=20)
     freezer.move_to(renamed_at)
-    hours = await compiler.async_fill(ours, TEMP, renamed_at.timestamp())
+    filled = await compiler.async_fill(ours, TEMP, renamed_at.timestamp())
     await async_wait_recording_done(hass)
 
-    assert hours == 3
+    assert filled.hours == 3
     # hours 0-5: on, off, off (carried), on, on, off - the replacement's
     # on/on/off reaching all the way back to T0+3h, not just its last hour.
     assert await read_sums(hass, DURATION_ON, T0, T0 + timedelta(hours=6)) == [
@@ -3214,16 +3210,21 @@ async def test_fill_returns_zero_when_the_rename_lands_within_the_last_compiled_
     with patch.object(
         compiler, "async_compile", wraps=compiler.async_compile
     ) as async_compile:
-        hours = await compiler.async_fill(ours, TEMP, renamed_at.timestamp())
+        filled = await compiler.async_fill(ours, TEMP, renamed_at.timestamp())
 
-    assert hours == 0
+    assert filled.hours == 0
     async_compile.assert_not_called()
 
 
 async def test_fill_starts_after_our_last_real_transition_when_the_old_device_overlapped(
     recorder_utc, freezer
 ):
-    """The fill must not re-open a span our own device already recorded."""
+    """The seam hour belongs to our device, not to the replacement.
+
+    Our last count row sits in the hour of our last transition, and that
+    hour holds our own device's behaviour up to it - so the fill opens at
+    the hour after it and leaves that one as we compiled it.
+    """
     hass = recorder_utc
     compiler = compiler_module.Compiler(hass)
     ours = cfg()
@@ -3248,35 +3249,36 @@ async def test_fill_starts_after_our_last_real_transition_when_the_old_device_ov
     freezer.move_to(T0 + timedelta(hours=7))
     await compiler.async_compile(ours, T0.timestamp())
     await async_wait_recording_done(hass)
-    before = await read_sums(hass, DURATION_ON, T0, T0 + timedelta(hours=4))
+    before = await read_sums(hass, DURATION_ON, T0, T0 + timedelta(hours=5))
 
     renamed_at = T0 + timedelta(hours=7, minutes=20)
     freezer.move_to(renamed_at)
-    hours = await compiler.async_fill(ours, TEMP, renamed_at.timestamp())
+    filled = await compiler.async_fill(ours, TEMP, renamed_at.timestamp())
     await async_wait_recording_done(hass)
 
-    # The count watermark is the `on` at T0+4h, not the replacement's own
-    # earlier row: the fill opens there, so hours 0-3 are untouched.
-    assert hours == 3
-    assert await read_sums(hass, DURATION_ON, T0, T0 + timedelta(hours=4)) == before
-    # hours 0-6: on, off, off, off, off (replacement), off (replacement), on (replacement)
+    # The count watermark is the `on` at T0+4h, so the fill opens at
+    # T0+5h and hours 0-4 are untouched - hour 4 included, where our own
+    # device turned back on while the replacement read `off`.
+    assert filled.hours == 2
+    assert await read_sums(hass, DURATION_ON, T0, T0 + timedelta(hours=5)) == before
+    # hours 0-6: on, off, off, off, on (ours), off (replacement), on (replacement)
     assert await read_sums(hass, DURATION_ON, T0, T0 + timedelta(hours=7)) == [
         1.0,
         1.0,
         1.0,
         1.0,
-        1.0,
-        1.0,
         2.0,
+        2.0,
+        3.0,
     ]
     assert await read_sums(hass, DURATION_OFF, T0, T0 + timedelta(hours=7)) == [
         0.0,
         1.0,
         2.0,
         3.0,
+        3.0,
         4.0,
-        5.0,
-        5.0,
+        4.0,
     ]
 
 

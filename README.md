@@ -987,12 +987,15 @@ device) from the registry first; a repair issue appears saying the entity
 is missing and its statistics are kept. Then give the replacement entity
 the old entity ID — Settings → Devices & services → Entities, open it,
 edit the ID. The hours the replacement had already run under its
-temporary ID are filled into the existing series, and the repair issue
-clears. Those filled hours are kept out of every later compile of the
-entity — the hourly run and `recompute` alike stop at the end of the
-fill — because the replacement's history stayed under its temporary ID
-and our entity's own history has none of those transitions; a
-`recompute` cannot rebuild them.
+temporary ID are filled into the existing series, from the hour after the
+old entity's last real transition, and the repair issue clears. Those
+filled hours are kept out of every later compile of the entity — the
+hourly run and `recompute` alike stop at the end of the fill — because
+the replacement's history stayed under its temporary ID and our entity's
+own history has none of those transitions; a `recompute` cannot rebuild
+them. A change to the entry's options — the states, the default, the
+rest — recompiles only from the end of the fill onward for the same
+reason, so the filled hours keep the mapping they were compiled with.
 
 Renaming the *old* entity aside instead moves its statistics with it, and
 the replacement starts a fresh series under the freed name. Two existing

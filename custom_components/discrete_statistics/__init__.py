@@ -361,6 +361,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _async_compile_and_notify(hass, entry, cfg, full=False),
             name=f"{DOMAIN} compile {cfg.entity_id}",
         )
+
+    registry.async_review_missing(hass)
     return True
 
 
