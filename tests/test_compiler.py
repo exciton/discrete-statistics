@@ -3217,3 +3217,63 @@ async def test_fill_returns_zero_when_the_rename_lands_within_the_last_compiled_
 
     assert hours == 0
     async_compile.assert_not_called()
+
+
+async def test_fill_starts_after_our_last_real_transition_when_the_old_device_overlapped(
+    recorder_utc, freezer
+):
+    """The fill must not re-open a span our own device already recorded."""
+    hass = recorder_utc
+    compiler = compiler_module.Compiler(hass)
+    ours = cfg()
+    # Ours: on at T0, off at T0+1h, on at T0+4h - the old device still
+    # flapping while the replacement was being set up.
+    await play(
+        hass,
+        freezer,
+        [
+            (T0, "on"),
+            (T0 + timedelta(hours=1), "off"),
+            (T0 + timedelta(hours=4), "on"),
+        ],
+    )
+    # The replacement, overlapping: off at T0+3h, on at T0+6h.
+    await play(
+        hass,
+        freezer,
+        [(T0 + timedelta(hours=3), "off"), (T0 + timedelta(hours=6), "on")],
+        entity_id=TEMP,
+    )
+    freezer.move_to(T0 + timedelta(hours=7))
+    await compiler.async_compile(ours, T0.timestamp())
+    await async_wait_recording_done(hass)
+    before = await read_sums(hass, DURATION_ON, T0, T0 + timedelta(hours=4))
+
+    renamed_at = T0 + timedelta(hours=7, minutes=20)
+    freezer.move_to(renamed_at)
+    hours = await compiler.async_fill(ours, TEMP, renamed_at.timestamp())
+    await async_wait_recording_done(hass)
+
+    # The count watermark is the `on` at T0+4h, not the replacement's own
+    # earlier row: the fill opens there, so hours 0-3 are untouched.
+    assert hours == 3
+    assert await read_sums(hass, DURATION_ON, T0, T0 + timedelta(hours=4)) == before
+    # hours 0-6: on, off, off, off, off (replacement), off (replacement), on (replacement)
+    assert await read_sums(hass, DURATION_ON, T0, T0 + timedelta(hours=7)) == [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        2.0,
+    ]
+    assert await read_sums(hass, DURATION_OFF, T0, T0 + timedelta(hours=7)) == [
+        0.0,
+        1.0,
+        2.0,
+        3.0,
+        4.0,
+        5.0,
+        5.0,
+    ]

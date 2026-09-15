@@ -36,7 +36,9 @@ from .conftest import existing, play, read_sums
 
 ENTITY = "binary_sensor.grid_status"
 NEW = "binary_sensor.grid_status_new"
+TEMP = "binary_sensor.grid_status_2"
 ON = "discrete_statistics:binary_sensor_grid_status_on_duration"
+OFF = "discrete_statistics:binary_sensor_grid_status_off_duration"
 NEW_ON = "discrete_statistics:binary_sensor_grid_status_new_on_duration"
 NEW_OFF = "discrete_statistics:binary_sensor_grid_status_new_off_duration"
 T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -339,6 +341,100 @@ async def test_a_removed_entity_raises_a_repair_issue(recorder_utc, freezer):
     await registered(hass, ENTITY, "grid-2")
     await settled(hass)
     assert issue(hass, entry) is None
+
+
+async def test_a_replacement_renamed_onto_our_entity_is_filled_in(
+    recorder_utc, freezer
+):
+    """Journey 2: the device swap."""
+    hass = recorder_utc
+    await registered(hass, ENTITY, "grid")
+    await play(hass, freezer, HISTORY)  # last transition: off at T0+8h
+    freezer.move_to(T0 + timedelta(hours=10))
+    entry = await setup_entry(hass)
+
+    # The old device dies at T0+10h30.
+    freezer.move_to(T0 + timedelta(hours=10, minutes=30))
+    hass.states.async_remove(ENTITY)
+    er.async_get(hass).async_remove(ENTITY)
+    await settled(hass)
+    assert issue(hass, entry) is not None
+    # The hourly runs carry on meanwhile.
+    freezer.move_to(T0 + timedelta(hours=13, minutes=3))
+    await hass.data[DOMAIN]["compile_all"]()
+    await settled(hass)
+
+    # The replacement, set up under a temporary ID: on at T0+12h, off at T0+14h.
+    await registered(hass, TEMP, "grid-2")
+    await play(
+        hass,
+        freezer,
+        [(T0 + timedelta(hours=12), "on"), (T0 + timedelta(hours=14), "off")],
+        entity_id=TEMP,
+    )
+    # Crossing the hourly run's :03 mark here, not after the rename: the
+    # scheduled run would otherwise land behind the fill and overwrite it
+    # with the dead device's own carried-forward state.
+    freezer.move_to(T0 + timedelta(hours=15, minutes=20))
+    await settled(hass)
+
+    er.async_get(hass).async_update_entity(TEMP, new_entity_id=ENTITY)
+    await settled(hass)
+
+    # The replacement's hours are in our series, under our IDs only.
+    assert await existing(hass, TEMP) == []
+    on = await read_sums(hass, ON, T0, T0 + timedelta(hours=15))
+    off = await read_sums(hass, OFF, T0, T0 + timedelta(hours=15))
+    assert on == sorted(on) and off == sorted(off)  # monotonic across the seam
+    # hours 0-14: on, on, on, off, off, on, on, on, off, off, off, off (dead,
+    # carried from T0+8h), then the replacement's own on, on, off from the fill.
+    assert on == [
+        1.0,
+        2.0,
+        3.0,
+        3.0,
+        3.0,
+        4.0,
+        5.0,
+        6.0,
+        6.0,
+        6.0,
+        6.0,
+        6.0,
+        7.0,
+        8.0,
+        8.0,
+    ]
+    assert off == [
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        2.0,
+        2.0,
+        2.0,
+        2.0,
+        3.0,
+        4.0,
+        5.0,
+        6.0,
+        6.0,
+        6.0,
+        7.0,
+    ]
+    # T0+12h and T0+13h are `on`: the sum grows by one an hour there.
+    assert on[13] - on[12] == 1.0 and on[14] - on[13] == 0.0
+    assert off[14] - off[13] == 1.0
+    assert issue(hass, entry) is None
+    assert entry.data[CONF_ENTITY_ID] == ENTITY
+    [note] = [n for n in notifications(hass).values() if "Filled" in n["message"]]
+    assert TEMP in note["message"]
+    assert "3 hour(s)" in note["message"]
+
+    # The stale state the registry-only rename leaves under TEMP never
+    # opened the fill's window: it is the replacement's own history that
+    # did. (No `Entity` removed it; in production it is gone.)
+    assert hass.states.get(TEMP) is not None
 
 
 async def test_the_issue_waits_for_home_assistant_to_start(recorder_utc, freezer):

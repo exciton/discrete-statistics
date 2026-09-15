@@ -141,6 +141,36 @@ async def async_follow(
     _notify(hass, message, f"{DOMAIN}_rename_{entry.entry_id}")
 
 
+async def async_fill(
+    hass: HomeAssistant, entry: ConfigEntry, source_entity_id: str, before: float
+) -> None:
+    """Compile a replacement's early history into the series it was renamed onto."""
+    data = hass.data[DOMAIN]
+    compiler: Compiler = data["compiler"]
+    cfg = data["entry_configs"][entry.entry_id]
+    try:
+        async with data["lock"]:
+            hours = await compiler.async_fill(cfg, source_entity_id, before)
+    except Exception as err:  # reported, not raised into the bus
+        _LOGGER.exception("Filling %s from %s failed", cfg.entity_id, source_entity_id)
+        _notify(
+            hass,
+            f"Could not fill the statistics of {describe(hass, cfg.entity_id, cfg.name)} "
+            f"from {source_entity_id}: {err}",
+            f"{DOMAIN}_fill_{entry.entry_id}",
+        )
+        return
+    if not hours:
+        return
+    message = (
+        f"Filled {hours} hour(s) of statistics for "
+        f"{describe(hass, cfg.entity_id, cfg.name)} from the history of "
+        f"{source_entity_id}, which was renamed onto it."
+    )
+    _LOGGER.info("%s", message)
+    _notify(hass, message, f"{DOMAIN}_fill_{entry.entry_id}")
+
+
 def missing_issue_id(entry: ConfigEntry) -> str:
     return f"missing_entity_{entry.entry_id}"
 
@@ -198,6 +228,8 @@ def async_setup(hass: HomeAssistant) -> None:
             old, new = data["old_entity_id"], data["entity_id"]
             if _owned(hass, old):
                 await async_follow(hass, old, new)
+            elif (entry := _entry_for(hass, new)) is not None:
+                await async_fill(hass, entry, old, event.time_fired_timestamp)
         async_review_missing(hass)
 
     @callback
