@@ -485,6 +485,9 @@ class Compiler:
         if earliest is None:
             return 0
         window_start = hour_start(earliest if start is None else start)
+        if read_from is None and cfg.filled_until is not None:
+            # A fill's own compile is exempt: it is what sets this floor.
+            window_start = max(window_start, cfg.filled_until)
         # Only completed hours are emitted.
         window_end = hour_start(
             end if end is not None else dt_util.utcnow().timestamp()

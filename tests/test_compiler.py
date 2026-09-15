@@ -3,6 +3,7 @@
 import functools as ft
 import json
 import re
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -3277,3 +3278,28 @@ async def test_fill_starts_after_our_last_real_transition_when_the_old_device_ov
         5.0,
         5.0,
     ]
+
+
+async def test_a_compile_never_opens_before_the_fill_floor(recorder_utc, freezer):
+    """A recompute must not flatten hours a fill already wrote."""
+    hass = recorder_utc
+    compiler = compiler_module.Compiler(hass)
+    ours = cfg()
+    await play(
+        hass,
+        freezer,
+        [
+            (T0, "on"),
+            (T0 + timedelta(hours=1), "off"),
+            (T0 + timedelta(hours=2), "on"),
+            (T0 + timedelta(hours=3), "off"),
+            (T0 + timedelta(hours=4), "on"),
+        ],
+    )
+    freezer.move_to(T0 + timedelta(hours=5))
+
+    floored = replace(ours, filled_until=(T0 + timedelta(hours=3)).timestamp())
+    # Hours 3-4 only: hours 0-2 are before the floor.
+    assert await compiler.async_compile(floored, T0.timestamp()) == 2
+    # A fill is exempt: it is what sets the floor in the first place.
+    assert await compiler.async_compile(floored, T0.timestamp(), read_from=ENTITY) == 5

@@ -299,10 +299,17 @@ async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
     # with no rewrite. An entity-ID change comes only from a rename we
     # followed, which reloads the entry itself: the reload's compile picks up
     # the moved series, and a full recompute here would read the whole
-    # history for nothing.
+    # history for nothing. Nor does a fill's own floor: it changes nothing
+    # already compiled, only where the next compile may open.
     if (
         old_cfg is not None
-        and replace(cfg, name=old_cfg.name, entity_id=old_cfg.entity_id) == old_cfg
+        and replace(
+            cfg,
+            name=old_cfg.name,
+            entity_id=old_cfg.entity_id,
+            filled_until=old_cfg.filled_until,
+        )
+        == old_cfg
     ):
         return
 

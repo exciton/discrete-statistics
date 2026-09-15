@@ -27,7 +27,9 @@ from homeassistant.helpers.issue_registry import (
 )
 from homeassistant.helpers.start import async_at_started
 
+from .bucketer import hour_start
 from .compiler import Compiler
+from .config import CONF_FILLED_UNTIL
 from .const import DOMAIN
 from .naming import describe
 
@@ -151,6 +153,11 @@ async def async_fill(
     try:
         async with data["lock"]:
             hours = await compiler.async_fill(cfg, source_entity_id, before)
+            if hours:
+                hass.config_entries.async_update_entry(
+                    entry,
+                    data={**entry.data, CONF_FILLED_UNTIL: hour_start(before)},
+                )
     except Exception as err:  # reported, not raised into the bus
         _LOGGER.exception("Filling %s from %s failed", cfg.entity_id, source_entity_id)
         _notify(

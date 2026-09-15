@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+import pytest
 from homeassistant.components.recorder.statistics import async_add_external_statistics
 from homeassistant.const import (
     CONF_ENTITY_ID,
@@ -24,7 +25,7 @@ from pytest_homeassistant_custom_component.components.recorder.common import (
 )
 
 from custom_components.discrete_statistics import compiler as compiler_module
-from custom_components.discrete_statistics.config import CONF_DEFAULT
+from custom_components.discrete_statistics.config import CONF_DEFAULT, CONF_FILLED_UNTIL
 from custom_components.discrete_statistics.const import (
     DEFAULT_RECORD_KNOWN,
     DOMAIN,
@@ -435,6 +436,25 @@ async def test_a_replacement_renamed_onto_our_entity_is_filled_in(
     # opened the fill's window: it is the replacement's own history that
     # did. (No `Entity` removed it; in production it is gone.)
     assert hass.states.get(TEMP) is not None
+
+    assert entry.data[CONF_FILLED_UNTIL] == (T0 + timedelta(hours=15)).timestamp()
+
+    # What a real entity does at the rename: report its own state under our
+    # ID. Off carries from the fill's last hour, so hour 15 is 20 minutes
+    # off then 40 minutes on.
+    hass.states.async_set(ENTITY, "on")
+    freezer.move_to(T0 + timedelta(hours=16, minutes=3))
+    await hass.data[DOMAIN]["compile_all"]()
+    await settled(hass)
+
+    on = await read_sums(hass, ON, T0, T0 + timedelta(hours=16))
+    off = await read_sums(hass, OFF, T0, T0 + timedelta(hours=16))
+    # Hours 12-14 unchanged from the fill: the floor kept the trailing
+    # window from reaching back over them and flattening them to `off`.
+    assert on[12:15] == [7.0, 8.0, 8.0]
+    assert off[12:15] == [6.0, 6.0, 7.0]
+    assert on[15] == pytest.approx(8.0 + 2 / 3)
+    assert off[15] == pytest.approx(7.0 + 1 / 3)
 
 
 async def test_the_issue_waits_for_home_assistant_to_start(recorder_utc, freezer):
