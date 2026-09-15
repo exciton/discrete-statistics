@@ -300,10 +300,9 @@ gets a duration row for each hour it had time in, and a count row for
 each hour it was entered. A period in which the entity was recorded but
 the state never occurred reads as zero on the integration's own card;
 the stock statistics-graph card, which reduces the rows itself, leaves
-such a period out. A period with no rows at all — the integration was not
-running — is a gap either way.
-
-![Two pairs of hourly charts, stock beside ours: a light's on-time draws as scattered dashes on the stock card and as one line touching zero on ours; a week with no grid outage is "No statistics found" on the stock card and a flat zero on ours](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/quiet-hours-stock-vs-ours.png)
+such a period out (see [Compared with the stock
+card](#compared-with-the-stock-card)). A period with no rows at all — the
+integration was not running — is a gap either way.
 
 ### Blank states
 
@@ -582,6 +581,43 @@ side of it are shorter by exactly the time it took from them.
 The card renders through Home Assistant's own chart component. Because
 that component is internal to the frontend, a Home Assistant release can
 change it; the integration's minimum version is raised when that happens.
+
+### Compared with the stock card
+
+The statistics are ordinary long-term statistics and the stock
+statistics-graph card draws them. The one difference that matters here
+is what the two cards make of a period in which nothing happened.
+
+![Two pairs of hourly charts, stock beside ours: a light's on-time draws as scattered dashes on the stock card and as one line touching zero on ours; a week with no grid outage is "No statistics found" on the stock card and a flat zero on ours](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/quiet-hours-stock-vs-ours.png)
+
+The rows are sparse: a state has a row only in an hour it had time in.
+The stock card reduces the rows on the server, so a period with no row
+is simply absent from what it draws. Top pair: a light that is on for a
+few minutes a day has a row in a few hours of each day, and the stock
+card draws those as scattered dashes with nothing between them, where
+ours draws one line that sits on zero the rest of the time. Bottom pair:
+a grid that did not fail all week has no `off` row at all, so the stock
+card reports "No statistics found" — indistinguishable from an entity
+that was never recorded — where ours draws a flat zero. Our card reads
+the rows standing at each period's edges, so it can tell "recorded, and
+the state never occurred" (zero) from "not recorded" (a gap). For an
+integration whose whole point is the quiet states — the grid that stayed
+up, the light that stayed off, the pump that never ran — the zero is
+the answer.
+
+|                                                  | Stock statistics-graph card         | Discrete Statistics card                          |
+| ------------------------------------------------ | ----------------------------------- | ------------------------------------------------- |
+| Configured by                                    | statistic ID, one per state         | entity                                            |
+| A state that appears later                       | has to be added                     | drawn automatically                               |
+| A period the state never occurred in             | left out                            | zero                                              |
+| Downtime the recorder no longer holds            | a gap                               | a gap, and the bars either side shorter by exactly the time it took |
+| Share of time (`unit: percent`)                  | —                                   | yes                                               |
+| State names, colours and order                   | per statistic, by hand              | the editor: tick, drag, name, colour              |
+| Data loaded for a year of months                 | every hour, reduced on the server   | thirteen rows a state                             |
+| Chart types                                      | bar, bar-stack, line, line-stack    | the same four                                     |
+| Energy date picker                               | yes                                 | yes                                               |
+| Other integrations' statistics on the same chart | yes                                 | no — one entity per card                          |
+| Stability                                        | part of Home Assistant              | uses an internal chart component; the minimum Home Assistant version is raised when it changes |
 
 ## Period sensors
 

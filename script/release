@@ -2,8 +2,10 @@
 # Cut a release: bump the manifest version through a pull request, then tag
 # the merge and publish.
 #
-#   script/release 0.2.0
+#   script/release 0.2.0 [NOTES.md]
 #
+# With a notes file, its text opens the release and the generated list of
+# pull requests follows it.
 # The tag is `v<version>`; the version in manifest.json is what Home
 # Assistant reports and what HACS compares, so the two are written from the
 # same argument and release.yml refuses a release where they differ. `main`
@@ -12,8 +14,10 @@
 # notes, and is squash-merged here once the checks pass.
 set -euo pipefail
 
-VERSION="${1:?usage: script/release X.Y.Z}"
+VERSION="${1:?usage: script/release X.Y.Z [NOTES.md]}"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a semantic version: $VERSION" >&2; exit 1; }
+NOTES="${2:-}"
+[[ -z "$NOTES" || -f "$NOTES" ]] || { echo "no such notes file: $NOTES" >&2; exit 1; }
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MANIFEST="$REPO_ROOT/custom_components/discrete_statistics/manifest.json"
@@ -35,7 +39,7 @@ manifest_version() {
 publish() {
   git tag -s "$TAG" -m "Release $VERSION"
   git push -q origin "$TAG"
-  gh release create "$TAG" --title "$VERSION" --generate-notes
+  gh release create "$TAG" --title "$VERSION" ${NOTES:+--notes-file "$NOTES"} --generate-notes
 }
 
 # A rerun after the bump has merged by hand - or after the tag step failed -
