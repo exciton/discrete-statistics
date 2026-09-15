@@ -7,14 +7,24 @@
 // decides where the unticked rows go: left out of `states:`, or listed in
 // `ignore_states:` — empty when every row is ticked, since the key's
 // presence is what opens the list.
-import { settingMatches, type StateStatistic } from "./statistic-ids";
-import type { StateSetting } from "./types";
+// A `states:` row can also name its own entity, one state each rather than
+// one entity's states: there the rows *are* the series, not a filter over
+// one entity's population — `seriesList` and `seriesListConfig` build and
+// read that shape, sharing `StateRow`/`StateList` with the filter above.
+import {
+  settingMatches,
+  statisticsForEntity,
+  stateToken,
+  type StateStatistic,
+} from "./statistic-ids";
+import type { Metric, StateSetting, StatisticsMetaData } from "./types";
 
 export interface StateRow {
   token: string;
   // The stored name; `name` is the configured one drawn in its place.
   label: string;
   shown: boolean;
+  entity?: string;
   name?: string;
   color?: string;
 }
@@ -22,6 +32,7 @@ export interface StateRow {
 export interface StateList {
   rows: StateRow[];
   ignoreNew: boolean;
+  mode: "states" | "entities";
 }
 
 export interface StateFilter {
@@ -58,7 +69,7 @@ export function stateList(all: StateStatistic[], filter: StateFilter): StateList
     .filter((s) => !seen.has(s))
     .sort((a, b) => a.label.localeCompare(b.label))
     .map((s) => ({ token: s.token, label: s.label, shown: !ignoreNew && !ignored(s) }));
-  return { rows: [...listed, ...rest], ignoreNew };
+  return { rows: [...listed, ...rest], ignoreNew, mode: "states" };
 }
 
 // The name a row is written under: its token, or its label for a state
@@ -91,4 +102,45 @@ export function stateListConfig(list: StateList): StateFilter {
 // would take if it were ticked.
 export function automaticIndex(rows: StateRow[], index: number): number {
   return rows.slice(0, index).filter((row) => row.shown).length;
+}
+
+export function seriesList(
+  states: StateSetting[],
+  metric: Metric,
+  metadata: StatisticsMetaData[]
+): StateList {
+  const rows = states.map((setting) => {
+    const entity = typeof setting === "string" ? "" : (setting.entity ?? "");
+    const state = typeof setting === "string" ? setting : setting.state;
+    const stat = statisticsForEntity(entity, metric, metadata).find((candidate) =>
+      settingMatches(setting, candidate)
+    );
+    const row: StateRow = {
+      token: stat?.token || stateToken(state) || state,
+      label: stat?.entityLabel ?? entity,
+      entity,
+      shown: true,
+    };
+    if (typeof setting !== "string") {
+      if (setting.name) {
+        row.name = setting.name;
+      }
+      if (setting.color) {
+        row.color = setting.color;
+      }
+    }
+    return row;
+  });
+  return { rows, ignoreNew: false, mode: "entities" };
+}
+
+export function seriesListConfig(list: StateList): StateFilter {
+  return {
+    states: list.rows.map((row) => ({
+      entity: row.entity ?? "",
+      state: row.token,
+      ...(row.name ? { name: row.name } : {}),
+      ...(row.color ? { color: row.color } : {}),
+    })),
+  };
 }
