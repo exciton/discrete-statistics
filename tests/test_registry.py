@@ -4,10 +4,15 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from homeassistant.components.recorder.statistics import async_add_external_statistics
-from homeassistant.const import CONF_ENTITY_ID, CONF_NAME
+from homeassistant.const import (
+    CONF_ENTITY_ID,
+    CONF_NAME,
+    EVENT_HOMEASSISTANT_STARTED,
+)
 from homeassistant.core import CoreState
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -295,3 +300,70 @@ async def test_a_failed_reload_is_reported_with_the_move(recorder_utc, freezer):
     assert "did not reload" in note["message"]
     assert NEW in note["message"]
     assert await existing(hass, ENTITY) == []
+
+
+def issue(hass, entry):
+    return ir.async_get(hass).async_get_issue(
+        DOMAIN, f"missing_entity_{entry.entry_id}"
+    )
+
+
+async def test_a_removed_entity_raises_a_repair_issue(recorder_utc, freezer):
+    """Journey 3: the entity goes; an unavailable one does not count."""
+    hass = recorder_utc
+    await registered(hass, ENTITY, "grid")
+    await play(hass, freezer, HISTORY)
+    freezer.move_to(T0 + timedelta(hours=10))
+    entry = await setup_entry(hass)
+    assert issue(hass, entry) is None
+
+    hass.states.async_set(ENTITY, "unavailable")
+    await settled(hass)
+    assert issue(hass, entry) is None
+
+    # A device being removed: its entity leaves the state machine and
+    # the registry, in whichever order.
+    hass.states.async_remove(ENTITY)
+    await settled(hass)
+    assert issue(hass, entry) is None  # still registered
+    er.async_get(hass).async_remove(ENTITY)
+    await settled(hass)
+
+    found = issue(hass, entry)
+    assert found is not None
+    assert found.is_fixable is False
+    assert found.severity == ir.IssueSeverity.WARNING
+    assert found.translation_placeholders == {"entity": f"Grid Status ({ENTITY})"}
+
+    # Re-registering the ID clears it.
+    await registered(hass, ENTITY, "grid-2")
+    await settled(hass)
+    assert issue(hass, entry) is None
+
+
+async def test_the_issue_waits_for_home_assistant_to_start(recorder_utc, freezer):
+    hass = recorder_utc
+    freezer.move_to(T0)
+    hass.set_state(CoreState.starting)
+    assert await async_setup_component(hass, DOMAIN, {})
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENTITY_ID: ENTITY},
+        options={CONF_NAME: "Grid Status", CONF_DEFAULT: DEFAULT_RECORD_KNOWN},
+        unique_id=ENTITY,
+        title="Grid Status",
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await settled(hass)
+    # Nothing has loaded the entity yet: no issue while starting.
+    assert issue(hass, entry) is None
+
+    hass.set_state(CoreState.running)
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+    await settled(hass)
+    assert issue(hass, entry) is not None
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await settled(hass)
+    assert issue(hass, entry) is None

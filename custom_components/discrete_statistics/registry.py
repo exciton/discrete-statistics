@@ -1,8 +1,8 @@
 """Follow the entity registry.
 
-A rename of an entity we record moves its statistics with it. One
-listener on the registry, filtered to the entities configured, and
-nothing per entry.
+A rename of an entity we record moves its statistics with it, and an
+entity that disappears raises a repair issue. One listener on the
+registry, filtered to the entities configured, and nothing per entry.
 """
 
 from __future__ import annotations
@@ -11,9 +11,21 @@ import logging
 
 from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_ENTITY_ID
-from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.const import CONF_ENTITY_ID, EVENT_STATE_CHANGED
+from homeassistant.core import (
+    CoreState,
+    Event,
+    EventStateChangedData,
+    HomeAssistant,
+    callback,
+)
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.issue_registry import (
+    IssueSeverity,
+    async_create_issue,
+    async_delete_issue,
+)
+from homeassistant.helpers.start import async_at_started
 
 from .compiler import Compiler
 from .const import DOMAIN
@@ -23,7 +35,7 @@ _LOGGER = logging.getLogger(__name__)
 
 # The registry actions this module acts on. The filter runs on every
 # registry event, so it drops the rest before a handler is woken.
-FOLLOWED_ACTIONS = ("update",)
+FOLLOWED_ACTIONS = ("create", "update", "remove")
 
 
 def _owned(hass: HomeAssistant, entity_id: str) -> bool:
@@ -129,6 +141,41 @@ async def async_follow(
     _notify(hass, message, f"{DOMAIN}_rename_{entry.entry_id}")
 
 
+def missing_issue_id(entry: ConfigEntry) -> str:
+    return f"missing_entity_{entry.entry_id}"
+
+
+@callback
+def async_review_missing(hass: HomeAssistant) -> None:
+    """Raise the repair for an entry whose entity has neither a registry entry nor a state; clear it otherwise."""
+    # Never while starting: the entity's own integration may not have loaded.
+    if hass.state is not CoreState.running:
+        return
+    registry = er.async_get(hass)
+    for entry_id, cfg in hass.data[DOMAIN]["entry_configs"].items():
+        entry = hass.config_entries.async_get_entry(entry_id)
+        if entry is None:
+            continue
+        gone = (
+            registry.async_get(cfg.entity_id) is None
+            and hass.states.get(cfg.entity_id) is None
+        )
+        if not gone:
+            async_delete_issue(hass, DOMAIN, missing_issue_id(entry))
+            continue
+        async_create_issue(
+            hass,
+            DOMAIN,
+            missing_issue_id(entry),
+            is_fixable=False,
+            severity=IssueSeverity.WARNING,
+            translation_key="missing_entity",
+            translation_placeholders={
+                "entity": describe(hass, cfg.entity_id, cfg.name)
+            },
+        )
+
+
 @callback
 def async_setup(hass: HomeAssistant) -> None:
     """Install the listeners. Called once, from the integration's setup."""
@@ -151,6 +198,21 @@ def async_setup(hass: HomeAssistant) -> None:
             old, new = data["old_entity_id"], data["entity_id"]
             if _owned(hass, old):
                 await async_follow(hass, old, new)
+        async_review_missing(hass)
+
+    @callback
+    def state_removed_filter(event_data: EventStateChangedData) -> bool:
+        return event_data["new_state"] is None and _owned(hass, event_data["entity_id"])
+
+    @callback
+    def state_removed(_event: Event[EventStateChangedData]) -> None:
+        async_review_missing(hass)
+
+    # A plain lambda here would be run in the executor, and the issue
+    # registry is event-loop only.
+    @callback
+    def started(_hass: HomeAssistant) -> None:
+        async_review_missing(hass)
 
     # `hass.bus.async_listen`, never `async_track_entity_registry_updated_event`:
     # the recorder installs its own registry listener at setup and refuses
@@ -159,3 +221,7 @@ def async_setup(hass: HomeAssistant) -> None:
     hass.bus.async_listen(
         er.EVENT_ENTITY_REGISTRY_UPDATED, registry_updated, event_filter=registry_filter
     )
+    hass.bus.async_listen(
+        EVENT_STATE_CHANGED, state_removed, event_filter=state_removed_filter
+    )
+    async_at_started(hass, started)

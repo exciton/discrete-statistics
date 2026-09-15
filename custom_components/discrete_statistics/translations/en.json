@@ -228,6 +228,10 @@
     }
   },
   "issues": {
+    "missing_entity": {
+      "title": "{entity} is missing",
+      "description": "{entity} no longer exists: it has no entity registry entry and no state, so nothing new is being recorded for it. Its statistics are kept either way. To continue the series with a replacement, give the replacement entity this entity ID and the hours it has already run will be filled in; otherwise delete the Discrete Statistics entry for it."
+    },
     "yaml_clash": {
       "title": "Duplicate configuration for {entity_id}",
       "description": "{entity_id} is configured both in configuration.yaml and as a helper. The YAML configuration is being used and the helper has been disabled, because two configurations write conflicting values to the same statistics. Remove one of them."

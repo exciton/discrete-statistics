@@ -39,6 +39,7 @@ from .compiler import Compiler
 from .config import CONFIG_SCHEMA, EntityConfig, entity_config_from_entry, is_configured
 from .const import BACKLOG_THRESHOLD, DOMAIN
 from .naming import describe
+from .registry import missing_issue_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -362,18 +363,20 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unloaded:
         hass.data[DOMAIN]["entry_configs"].pop(entry.entry_id, None)
         async_delete_issue(hass, DOMAIN, _clash_issue_id(entry))
+        async_delete_issue(hass, DOMAIN, missing_issue_id(entry))
     return unloaded
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Log what removal kept. Nothing here deletes statistics.
 
-    Also clears any yaml_clash issue this entry left behind:
+    Also clears any repair issue this entry left behind:
     async_unload_entry never runs for an entry stuck in SETUP_ERROR, so
     removal is the only remaining point that can retire the issue. A no-op
     when there is nothing to delete, so this is safe on the ordinary path.
     """
     async_delete_issue(hass, DOMAIN, _clash_issue_id(entry))
+    async_delete_issue(hass, DOMAIN, missing_issue_id(entry))
     _LOGGER.info(
         "Removed %s from %s. Its statistics are kept; delete them in "
         "Settings > System > Tools > Statistics if you no longer want them",
