@@ -587,14 +587,15 @@ entity and one of its states, carrying the states you were drawing into a
 row each — in the order they were drawn, with the names and colours you
 gave them. Switching back takes the first row's entity and every row that
 names it, in the same way, and lists that entity's remaining states under
-`ignore_states:` so the chart draws exactly what it drew before. Rows
-naming other entities are the one thing lost, since a card with an
-`entity:` of its own draws that one. Below the form, the editor lists the
-entity's states with a tick, a drag handle, a name and a colour each, and
-writes the two keys for you. Its "Ignore states that appear later" switch
-chooses which the unticked states become: with it on they are left out of `states:`; with it
-off they go in `ignore_states:`, which stays present — empty if need be —
-so the list stays open.
+`ignore_states:`, so that entity's series are unchanged — though the rows
+naming other entities go, since a card with an `entity:` of its own draws
+that one, and the surviving series are named after their states rather
+than their entity. Below the form, the editor lists the entity's states
+with a tick, a drag handle, a name and a colour each, and writes the two
+keys for you. Its "Ignore states that appear later" switch chooses which
+the unticked states become: with it on they are left out of `states:`;
+with it off they go in `ignore_states:`, which stays present — empty if
+need be — so the list stays open.
 
 `unit: percent` is the share of each period spent in the state, so a
 stacked bar whose states are all drawn is always full height — except the
