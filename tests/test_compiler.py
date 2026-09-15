@@ -3190,6 +3190,13 @@ async def test_fill_uses_the_count_watermark_not_the_duration_one(
 async def test_fill_returns_zero_when_the_rename_lands_within_the_last_compiled_hour(
     recorder_utc, freezer
 ):
+    """No compile at all, not one that happens to compile nothing.
+
+    `async_compile` would itself return 0 on an empty, hour-aligned window
+    - both `start` and `end` already are - so asserting on `hours` alone
+    cannot tell a real guard from none at all. Asserting the call never
+    happens is what pins the guard.
+    """
     hass = recorder_utc
     compiler = compiler_module.Compiler(hass)
     ours = cfg()
@@ -3203,6 +3210,10 @@ async def test_fill_returns_zero_when_the_rename_lands_within_the_last_compiled_
     renamed_at = T0 + timedelta(hours=1, minutes=30)
     freezer.move_to(renamed_at)
 
-    hours = await compiler.async_fill(ours, TEMP, renamed_at.timestamp())
+    with patch.object(
+        compiler, "async_compile", wraps=compiler.async_compile
+    ) as async_compile:
+        hours = await compiler.async_fill(ours, TEMP, renamed_at.timestamp())
 
     assert hours == 0
+    async_compile.assert_not_called()
