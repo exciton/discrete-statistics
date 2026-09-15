@@ -30,7 +30,7 @@ from homeassistant.helpers.typing import ConfigType
 from homeassistant.loader import async_get_integration
 
 from . import frontend as card_frontend
-from . import websocket
+from . import registry, websocket
 from .compiler import Compiler
 
 # CONFIG_SCHEMA is the HA hook: HA looks it up by name on this module to
@@ -204,6 +204,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         DOMAIN, SERVICE_RECOMPUTE, _async_recompute, schema=RECOMPUTE_SCHEMA
     )
 
+    # Last: the listener reads hass.data[DOMAIN] on every registry event.
+    registry.async_setup(hass)
+
     return True
 
 
@@ -289,10 +292,17 @@ async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
     if title != entry.title:
         hass.config_entries.async_update_entry(entry, title=title)
 
-    # Everything but the name changes how past states were attributed, so
-    # any of it moving means the whole history must be recompiled. A name
-    # change reaches the display on the next ordinary run with no rewrite.
-    if old_cfg is not None and replace(cfg, name=old_cfg.name) == old_cfg:
+    # Everything but the name and the entity ID changes how past states were
+    # attributed, so any of it moving means the whole history must be
+    # recompiled. A name change reaches the display on the next ordinary run
+    # with no rewrite. An entity-ID change comes only from a rename we
+    # followed, which reloads the entry itself: the reload's compile picks up
+    # the moved series, and a full recompute here would read the whole
+    # history for nothing.
+    if (
+        old_cfg is not None
+        and replace(cfg, name=old_cfg.name, entity_id=old_cfg.entity_id) == old_cfg
+    ):
         return
 
     entry.async_create_background_task(
