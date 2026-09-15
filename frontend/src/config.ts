@@ -2,7 +2,7 @@
 // of them, and how the editor's mode selector rewrites it. The card names
 // one entity and its rows are that entity's states, or it names none and
 // every row names its own.
-import { resolveSeries, settingMatches } from "./statistic-ids";
+import { resolveSeries, settingMatches, statisticsForEntity } from "./statistic-ids";
 import type { CardConfig, Metric, StateSetting, StatisticsMetaData } from "./types";
 
 const named = (setting: StateSetting) =>
@@ -60,10 +60,34 @@ export function toMultiEntity(
   return { ...rest, states: rows } as CardConfig;
 }
 
-export function toSingleEntity(config: CardConfig): CardConfig {
+// Every row naming the entity taken, and the rest of its states ignored, so
+// the card draws what it drew and the editor's list still opens to new ones.
+export function toSingleEntity(
+  config: CardConfig,
+  metric: Metric,
+  metadata: StatisticsMetaData[]
+): CardConfig {
   const { states, ignore_states: _ignored, ...rest } = config;
-  const entity = (states ?? []).map(named).find((id) => id);
-  return (entity ? { ...rest, entity } : rest) as CardConfig;
+  const rows = (states ?? []).filter(
+    (setting): setting is Exclude<StateSetting, string> => !!named(setting)
+  );
+  const entity = rows[0]?.entity;
+  if (!entity) {
+    return rest as CardConfig;
+  }
+  const mine = rows.filter((row) => row.entity === entity);
+  const drawn: StateSetting[] = mine.map(({ entity: _e, ...keep }) =>
+    keep.name || keep.color ? keep : keep.state
+  );
+  const missing = statisticsForEntity(entity, metric, metadata).filter(
+    (series) => !mine.some((row) => settingMatches(row, series))
+  );
+  return {
+    ...rest,
+    entity,
+    states: drawn,
+    ignore_states: missing.map((series) => series.token || series.label),
+  } as CardConfig;
 }
 
 export type ChartMode = "states" | "entities";
@@ -77,5 +101,5 @@ export function applyChartMode(
   if (mode === "entities") {
     return isMultiEntity(config) ? config : toMultiEntity(config, metric, metadata);
   }
-  return config.entity ? config : toSingleEntity(config);
+  return config.entity ? config : toSingleEntity(config, metric, metadata);
 }

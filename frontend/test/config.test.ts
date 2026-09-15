@@ -27,6 +27,9 @@ const metadata = [
   meta("discrete_statistics:cover_gate_open_duration", "Gate: Open (h)"),
   meta("discrete_statistics:cover_gate_closed_duration", "Gate: Closed (h)"),
   meta("discrete_statistics:cover_gate_opening_duration", "Gate: Opening (h)"),
+  meta("discrete_statistics:climate_zone_heat_duration", "Zone: Heat (h)"),
+  meta("discrete_statistics:climate_zone_cool_duration", "Zone: Cool (h)"),
+  meta("discrete_statistics:climate_zone_off_duration", "Zone: Off (h)"),
 ];
 
 describe("isMultiEntity", () => {
@@ -135,21 +138,58 @@ describe("mode flips", () => {
     );
   });
 
-  it("drops the states filter when it carries the first row's entity back", () => {
+  it("carries the whole of the first entity back, and accounts for its other states", () => {
     expect(
       toSingleEntity(
         config({
-          title: "Gate",
-          states: [{ entity: "cover.gate", state: "open", color: "red" }],
-          ignore_states: [],
-        })
+          title: "Zone",
+          states: [
+            { entity: "climate.zone", state: "heat", color: "red" },
+            { entity: "cover.gate", state: "open" },
+            { entity: "climate.zone", state: "cool" },
+          ],
+        }),
+        "duration",
+        metadata
       )
-    ).toEqual(config({ title: "Gate", entity: "cover.gate" }));
+    ).toEqual(
+      config({
+        title: "Zone",
+        entity: "climate.zone",
+        states: [{ state: "heat", color: "red" }, "cool"],
+        ignore_states: ["off"],
+      })
+    );
+  });
+
+  it("leaves ignore_states: present but empty when the rows held every state", () => {
+    expect(
+      toSingleEntity(
+        config({
+          states: [
+            { entity: "climate.zone", state: "heat" },
+            { entity: "climate.zone", state: "cool" },
+            { entity: "climate.zone", state: "off" },
+          ],
+        }),
+        "duration",
+        metadata
+      )
+    ).toEqual(
+      config({
+        entity: "climate.zone",
+        states: ["heat", "cool", "off"],
+        ignore_states: [],
+      })
+    );
   });
 
   it("leaves no entity behind when there is none to carry", () => {
     expect(toMultiEntity(config({}), "duration", metadata)).toEqual(config({}));
-    expect(toSingleEntity(config({}))).toEqual(config({}));
+    expect(toSingleEntity(config({}), "duration", metadata)).toEqual(config({}));
+    expect(toSingleEntity(config({ states: ["open"] }), "duration", metadata)).toEqual(
+      config({})
+    );
   });
 });
 
@@ -217,11 +257,22 @@ describe("applyChartMode", () => {
       to: config({ states: [{ entity: "cover.gate", state: "open" }] }),
     },
     {
-      what: "takes the first row's entity back",
-      from: config({ states: [{ entity: "cover.gate", state: "open" }], title: "Gate" }),
+      what: "takes the first row's entity back, whole",
+      from: config({
+        states: [
+          { entity: "cover.gate", state: "open" },
+          { entity: "climate.zone", state: "heat" },
+        ],
+        title: "Gate",
+      }),
       mode: "states",
       metadata,
-      to: config({ title: "Gate", entity: "cover.gate" }),
+      to: config({
+        title: "Gate",
+        entity: "cover.gate",
+        states: ["open"],
+        ignore_states: ["closed", "opening"],
+      }),
     },
     {
       what: "answers a rowless multi-entity card with a card asking for an entity",
