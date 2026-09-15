@@ -389,8 +389,7 @@ would stand ahead of every later one. A standing row is rewritten only
 where its sum *differs* from the one computed now — one that would be
 rewritten with itself is skipped, so a recompute over history that has
 not changed writes nothing at all: the write path is ~93% of a compile's
-wall clock, and that is what such a recompute saves
-(`docs/superpowers/notes/2026-09-13-lean-writes-profile.md`). By the
+wall clock, and that is what such a recompute saves. By the
 same argument a payload with no rows is imported only when its metadata
 differs from what the recorder holds, field for field (`compiler._Stored`);
 nothing else would change, and the recorder's queue is shared with every
@@ -651,8 +650,7 @@ Verified against 2026.8.3.
   per row, and a commit per task — ~2.8 ms a row, which was ~93% of a
   rebuild. A row no row stands at needs none of that, so `BulkInsertTask`
   inserts those with one `session.execute(insert(Statistics), rows)` a
-  batch, 8.8× faster over a 400-day build
-  (`docs/superpowers/notes/2026-09-14-bulk-insert-spike.md`). Three things
+  batch, 8.8× faster over a 400-day build. Three things
   make it safe and all three are load-bearing. The split is `rows.standing`
   itself, read moments earlier in the same compile under the same lock, and
   nothing else writes a `discrete_statistics:` statistic. The task is
