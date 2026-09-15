@@ -106,6 +106,9 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
        │    coordinator     one refresh per entry: frame, tail, readings
        │        │
        │    sensor          one entity per sensor subentry
+       │        │
+       │    registry        HA: the entity registry -> follow a rename,
+       │                    fill a replacement's history, raise a repair
        │
             websocket       reads the recorder through rows, for the card
                 │
@@ -114,8 +117,8 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
 ```
 
 Everything except `compiler`, `rows`, `websocket`, `config_flow`, `naming`,
-`templates`, `coordinator` and `sensor` is pure and testable without a
-`hass` instance.
+`templates`, `coordinator`, `sensor` and `registry` is pure and testable
+without a `hass` instance.
 Keep it that way: if a change needs recorder access in a lower module, the
 design is drifting. Three recorder boundaries: `compiler` is the only
 module that writes — by two paths, `async_add_external_statistics` for
@@ -181,6 +184,38 @@ sensor on the listener stays, and a refresh that finds no `sensor`
 subentries returns before the drain and every read, so the last sensor
 leaving stops the work again — the sensors are opt-in, and so is the work
 behind them.
+
+`registry.py` follows the entity registry, with one listener registered
+through `hass.bus.async_listen` and an `event_filter` — never
+`async_track_entity_registry_updated_event`, because the recorder refuses
+to install its own registry listener after that helper has been used and
+ours can be set up first. A rename of an entity we record moves its
+statistics on the recorder's thread (`RenameTask`, since
+`update_statistic_id` runs nowhere else), and only once that has
+committed is the entry updated and reloaded — the other order lets the
+reload's compile open under the new name with no watermark and rebuild
+the history as a second series. A rename *onto* an entity we record is
+the device swap: the recorder refuses to move the replacement's state
+history onto a name that already has some, so `Compiler.async_fill`
+reads it under the temporary ID (`read_from`) and writes under ours,
+from the newest count row — the last real transition, since the
+watermark marches on over an entity gone unavailable — to the hour
+before the rename. Only the recorder reads move with `read_from`; the
+state machine carry always asks for the entity configured, because the
+old ID is gone from the state machine by the time the event reaches us.
+A missing entity — no registry entry and no state — raises the
+`missing_entity` repair, reviewed at started and on the registry and
+state-removed events, never while starting. A reload that fails after a
+follow is reported in the same notification, alongside what moved.
+
+The fill records its end in the entry's data (`CONF_FILLED_UNTIL`, read
+as `EntityConfig.filled_until`), and `async_compile` never opens a
+compile reading under our own ID before it — a fill (`read_from` set) is
+exempt, since it is what sets the floor. The argument is the evidence
+floor's: the trailing window after a fill reaches back over the filled
+hours and, reading our own ID's history, would flatten every one of them
+to the carried state. `_async_entry_updated` treats a `filled_until`-only
+change as cosmetic — no recompute.
 
 States in a statistic's name are rendered by `naming.state_translator`,
 which wraps `async_translate_state`, so

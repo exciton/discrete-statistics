@@ -974,6 +974,36 @@ entity whose history the recorder keeps, or a numeric value. This
 component is for the series — every state, every hour, kept past the
 purge horizon — with the same numbers as sensors over it.
 
+## Renaming and replacing entities
+
+Renaming an entity in Home Assistant moves its statistics with it: the
+integration listens for the rename, moves every statistic to the new
+name and updates its own entry, and a notification says what moved. The
+period sensors keep their entity IDs, since those were only suggested
+when they were created.
+
+Replacing a device is two steps. Remove the old entity (or its whole
+device) from the registry first; a repair issue appears saying the entity
+is missing and its statistics are kept. Then give the replacement entity
+the old entity ID — Settings → Devices & services → Entities, open it,
+edit the ID. The hours the replacement had already run under its
+temporary ID are filled into the existing series, and the repair issue
+clears. Those filled hours are kept out of every later compile of the
+entity — the hourly run and `recompute` alike stop at the end of the
+fill — because the replacement's history stayed under its temporary ID
+and our entity's own history has none of those transitions; a
+`recompute` cannot rebuild them.
+
+Renaming the *old* entity aside instead moves its statistics with it, and
+the replacement starts a fresh series under the freed name. Two existing
+series are never merged: if a rename would land a statistic on a name
+that already holds one, that statistic stays where it was and the
+notification says so — delete the one under the new name and run
+`recompute` to rebuild it there.
+
+Entities configured in YAML are not followed, since the YAML still names
+the old entity: a notification asks you to update it.
+
 ## Limitations
 
 - The statistics are hourly: the external statistics API writes only to
