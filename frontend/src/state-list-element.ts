@@ -41,8 +41,10 @@ const stateSelector = (options: StateOption[]) => ({
 
 // One row per state: drag handle, drawn tick, name — the stored one as the
 // placeholder, so a row reads the same until it is renamed — and colour. A
-// series row carries an entity and a state instead of the tick, and takes
-// two lines: what it is, then how it is drawn.
+// series row carries an entity and a state instead of the tick, laid out on
+// a three-column grid two lines deep: handle over delete, entity over name,
+// state over colour. The picker that adds a row sits in the same columns,
+// so it starts under the entity pickers.
 // Nothing here needs importing: `ha-sortable` comes with every dashboard
 // view, `ha-input` and `ha-icon-button` with every `ha-form`, and
 // `ha-selector` fetches the ui_color selector on first use. Changes go out
@@ -97,33 +99,30 @@ export class DiscreteStatisticsStateList extends LitElement {
                 <div class="row ${multi ? "multi" : ""}">
                   ${multi
                     ? html`
-                        <div class="line">
-                          ${handle}
-                          <ha-selector
-                            class="entity"
-                            .hass=${this.hass}
-                            .selector=${entitySelector(this.entities)}
-                            .value=${row.entity}
-                            .index=${index}
-                            @value-changed=${this._entityChanged}
-                          ></ha-selector>
-                          <ha-selector
-                            class="state"
-                            .hass=${this.hass}
-                            .selector=${stateSelector(this._optionsFor(row))}
-                            .value=${row.token}
-                            .index=${index}
-                            @value-changed=${this._stateChanged}
-                          ></ha-selector>
-                          <ha-icon-button
-                            class="delete"
-                            .path=${DELETE_ICON}
-                            .label=${"Remove this series"}
-                            .index=${index}
-                            @click=${this._rowDeleted}
-                          ></ha-icon-button>
-                        </div>
-                        <div class="line drawn">${drawn}</div>
+                        ${handle}
+                        <ha-selector
+                          class="entity"
+                          .hass=${this.hass}
+                          .selector=${entitySelector(this.entities)}
+                          .value=${row.entity}
+                          .index=${index}
+                          @value-changed=${this._entityChanged}
+                        ></ha-selector>
+                        <ha-selector
+                          .hass=${this.hass}
+                          .selector=${stateSelector(this._optionsFor(row))}
+                          .value=${row.token}
+                          .index=${index}
+                          @value-changed=${this._stateChanged}
+                        ></ha-selector>
+                        <ha-icon-button
+                          class="delete"
+                          .path=${DELETE_ICON}
+                          .label=${"Remove this series"}
+                          .index=${index}
+                          @click=${this._rowDeleted}
+                        ></ha-icon-button>
+                        ${drawn}
                       `
                     : html`
                         ${handle}
@@ -143,16 +142,18 @@ export class DiscreteStatisticsStateList extends LitElement {
       ${multi
         ? // A picker per row count: the entity it took would otherwise stay
           // in it once the row is drawn above.
-          keyed(
-            list.rows.length,
-            html`<ha-selector
-              class="add"
-              .hass=${this.hass}
-              .selector=${entitySelector(this.entities)}
-              .index=${list.rows.length}
-              @value-changed=${this._entityChanged}
-            ></ha-selector>`
-          )
+          html`<div class="add">
+            ${keyed(
+              list.rows.length,
+              html`<ha-selector
+                .hass=${this.hass}
+                .selector=${entitySelector(this.entities)}
+                .label=${"Add an entity"}
+                .index=${list.rows.length}
+                @value-changed=${this._entityChanged}
+              ></ha-selector>`
+            )}
+          </div>`
         : html`<ha-selector
             .hass=${this.hass}
             .selector=${IGNORE_NEW_SELECTOR}
@@ -255,6 +256,9 @@ export class DiscreteStatisticsStateList extends LitElement {
   }
 
   static styles = css`
+    :host {
+      --row-columns: 24px 1fr 180px;
+    }
     .rows {
       display: flex;
       flex-direction: column;
@@ -283,39 +287,35 @@ export class DiscreteStatisticsStateList extends LitElement {
     ha-selector {
       width: 180px;
     }
+    .row.multi,
+    .add {
+      display: grid;
+      grid-template-columns: var(--row-columns);
+      column-gap: 8px;
+      align-items: center;
+    }
     .row.multi {
-      flex-direction: column;
-      align-items: stretch;
-      gap: 4px;
+      row-gap: 4px;
       margin-bottom: 12px;
     }
-    .line {
-      display: flex;
-      align-items: center;
-      gap: 8px;
+    .row.multi ha-selector {
+      width: auto;
       min-width: 0;
     }
-    /* Indented by the handle's width and gap, so line two sits under the
-       entity picker and the two read as one row. */
-    .line.drawn {
-      padding-left: 32px;
+    .add {
+      margin-top: 8px;
+    }
+    .add ha-selector {
+      grid-column: 2 / 4;
+      width: auto;
     }
     .delete {
       color: var(--secondary-text-color);
-      flex: none;
-    }
-    ha-selector.entity {
-      flex: 1;
-      min-width: 0;
-      width: auto;
-    }
-    ha-selector.add {
-      display: block;
-      width: auto;
-      margin-top: 8px;
-    }
-    ha-selector.state {
-      width: 140px;
+      justify-self: center;
+      /* Its 48px target would widen the column and shift the handle above it. */
+      --ha-icon-button-size: 24px;
+      --ha-icon-button-padding-inline: 0;
+      --mdc-icon-size: 20px;
     }
   `;
 }
