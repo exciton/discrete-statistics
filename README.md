@@ -591,8 +591,8 @@ charts, and what it lists below the form follows: for one entity's states,
 a row per state with a tick, a drag handle, a name and a colour; for
 several entities, a row per series naming an entity and one of its states,
 with a name and a colour apiece. Either way the editor writes the config
-for you. Under the list of one entity's states, the "Ignore states that appear
-later" switch chooses which the unticked ones become: with it on they are
+for you. Under the list of one entity's states, the "Ignore states that
+appear later" switch chooses which the unticked ones become: with it on they are
 left out of `states:`; with it off they go in `ignore_states:`, which stays
 present — empty if need be — so the list stays open.
 
