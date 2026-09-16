@@ -269,6 +269,66 @@ describe("statisticsForRows", () => {
   });
 });
 
+describe("duplicate rows", () => {
+  const dupeMeta = [
+    meta("discrete_statistics:cover_gate_open_duration", "Gate: Open (h)"),
+    meta("discrete_statistics:binary_sensor_hall_motion_on_duration", "Hall: On (h)"),
+    meta("discrete_statistics:climate_zone_heatcool_duration", "Zone: Heat/Cool (h)"),
+  ];
+
+  it("draws two rows on one statistic once, the first winning", () => {
+    const series = statisticsForRows(
+      [
+        { entity: "cover.gate", state: "open", name: "First", color: "red" },
+        { entity: "cover.gate", state: "open", name: "Second", color: "blue" },
+      ],
+      "duration",
+      dupeMeta
+    );
+    expect(series).toHaveLength(1);
+    expect(series[0].label).toBe("First");
+    expect(series[0].color).toBe("red");
+  });
+
+  it("folds two rows whose states tokenise alike", () => {
+    const series = statisticsForRows(
+      [
+        { entity: "climate.zone", state: "heat_cool" },
+        { entity: "climate.zone", state: "heatcool" },
+      ],
+      "duration",
+      dupeMeta
+    );
+    expect(series.map((s) => s.statisticId)).toEqual([
+      "discrete_statistics:climate_zone_heatcool_duration",
+    ]);
+  });
+
+  it("keeps the same state on two different entities", () => {
+    const series = statisticsForRows(
+      [
+        { entity: "binary_sensor.hall_motion", state: "on" },
+        { entity: "cover.gate", state: "open" },
+      ],
+      "duration",
+      dupeMeta
+    );
+    expect(series.map((s) => s.statisticId)).toEqual([
+      "discrete_statistics:binary_sensor_hall_motion_on_duration",
+      "discrete_statistics:cover_gate_open_duration",
+    ]);
+  });
+
+  it("draws a state listed twice on one entity once", () => {
+    const series = statisticsForEntity("cover.gate", "duration", dupeMeta, {
+      states: ["open", "open"],
+    });
+    expect(series.map((s) => s.statisticId)).toEqual([
+      "discrete_statistics:cover_gate_open_duration",
+    ]);
+  });
+});
+
 describe("resolveSeries", () => {
   it("takes the entity's states when the card names an entity", () => {
     const series = resolveSeries(

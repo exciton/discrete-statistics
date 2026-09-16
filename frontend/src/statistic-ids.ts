@@ -148,6 +148,20 @@ export function stateOptionsFor(
   return map;
 }
 
+// Two rows can resolve to one statistic — the same row twice, or two states
+// that tokenise alike — and one series drawn twice fails the chart.
+const firstOfEach = <T>(items: T[], id: (item: T) => string): T[] => {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = id(item);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+};
+
 export function statisticsForEntity(
   entityId: string,
   metric: Metric,
@@ -174,19 +188,22 @@ export function statisticsForEntity(
   }
   const ignoreList = filter.ignore_states ?? [];
   const kept = found.filter((s) => !ignoreList.some((entry) => settingMatches(entry, s)));
-  const listed = (filter.states ?? [])
-    .map((setting) => {
-      const s = kept.find((found) => settingMatches(setting, found));
-      if (!s || typeof setting === "string") {
-        return s;
-      }
-      return {
-        ...s,
-        ...(setting.name ? { label: setting.name } : {}),
-        ...(setting.color ? { color: setting.color } : {}),
-      };
-    })
-    .filter((s): s is StateStatistic => s !== undefined);
+  const listed = firstOfEach(
+    (filter.states ?? [])
+      .map((setting) => {
+        const s = kept.find((found) => settingMatches(setting, found));
+        if (!s || typeof setting === "string") {
+          return s;
+        }
+        return {
+          ...s,
+          ...(setting.name ? { label: setting.name } : {}),
+          ...(setting.color ? { color: setting.color } : {}),
+        };
+      })
+      .filter((s): s is StateStatistic => s !== undefined),
+    (s) => s.statisticId
+  );
   // `states:` alone is a closed list. `ignore_states:` opens it: a state
   // the entity gains later is appended rather than silently dropped.
   if (!filter.ignore_states) {
@@ -216,11 +233,12 @@ export function statisticsForRows(
       found.push({ setting, stat });
     }
   }
+  const unique = firstOfEach(found, ({ stat }) => stat.statisticId);
   const counts = new Map<string, number>();
-  for (const { setting } of found) {
+  for (const { setting } of unique) {
     counts.set(setting.entity!, (counts.get(setting.entity!) ?? 0) + 1);
   }
-  return found.map(({ setting, stat }) => {
+  return unique.map(({ setting, stat }) => {
     const entity = stat.entityLabel ?? setting.entity!;
     const name =
       setting.name ??

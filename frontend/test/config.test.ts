@@ -76,6 +76,19 @@ describe("validateConfig", () => {
     expect(() => validateConfig(config({ states: ["on"] }))).toThrow(/entity/);
   });
 
+  it("refuses a row with no state: at all", () => {
+    expect(() =>
+      validateConfig(config({ states: [{ entity: "light.desk_lamp" }] as never }))
+    ).toThrow(/state/);
+  });
+
+  // The editor writes one for a row whose entity has no state left to take.
+  it("accepts a row whose state is empty", () => {
+    expect(() =>
+      validateConfig(config({ states: [{ entity: "light.desk_lamp", state: "" }] }))
+    ).not.toThrow();
+  });
+
   it("refuses ignore_states: without the card's own entity", () => {
     expect(() =>
       validateConfig(

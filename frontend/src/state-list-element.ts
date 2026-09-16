@@ -148,7 +148,7 @@ export class DiscreteStatisticsStateList extends LitElement {
               html`<ha-selector
                 .hass=${this.hass}
                 .selector=${entitySelector(this.entities)}
-                .label=${"Add an entity"}
+                .placeholder=${"Add an entity"}
                 .index=${list.rows.length}
                 @value-changed=${this._entityChanged}
               ></ha-selector>`

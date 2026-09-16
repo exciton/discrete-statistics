@@ -15,6 +15,13 @@ export const isEmpty = (config: CardConfig): boolean =>
 
 export function validateConfig(config: CardConfig): void {
   const rows = config.states ?? [];
+  // An empty state is legal — the editor writes one for a row still being
+  // filled in — but an absent one has no text to resolve at all.
+  if (rows.some((setting) => typeof setting === "object" && setting.state === undefined)) {
+    throw new Error(
+      "Every states: entry needs a state:. Name the state it draws, or remove the entry."
+    );
+  }
   if (!isMultiEntity(config)) {
     const row = rows.find((setting) => named(setting));
     if (row) {
