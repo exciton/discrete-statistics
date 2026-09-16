@@ -13,6 +13,9 @@ import type { HassLike } from "./types";
 
 // mdi:drag-horizontal-variant, the handle the stock row editors use.
 const DRAG_ICON = "M21 11H3V9H21V11M21 13H3V15H21V13Z";
+// mdi:delete
+const DELETE_ICON =
+  "M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z";
 const AUTO = "auto";
 // The switch `ha-form` draws for its own boolean fields, so the tick under
 // the list looks like the ones beside it.
@@ -36,11 +39,14 @@ const stateSelector = (options: { value: string; label: string }[]) => ({
 });
 
 // One row per state: drag handle, drawn tick, name — the stored one as the
-// placeholder, so a row reads the same until it is renamed — and colour.
+// placeholder, so a row reads the same until it is renamed — and colour. A
+// series row carries an entity and a state instead of the tick, and takes
+// two lines: what it is, then how it is drawn.
 // Nothing here needs importing: `ha-sortable` comes with every dashboard
-// view, `ha-input` with every `ha-form`, and `ha-selector` fetches the
-// ui_color selector on first use. Changes go out as a whole new list
-// through `value-changed`; the editor turns it into config.
+// view, `ha-input` and `ha-icon-button` with every `ha-form`, and
+// `ha-selector` fetches the ui_color selector on first use. Changes go out
+// as a whole new list through `value-changed`; the editor turns it into
+// config.
 export class DiscreteStatisticsStateList extends LitElement {
   @property({ attribute: false }) public hass?: HassLike;
 
@@ -69,37 +75,11 @@ export class DiscreteStatisticsStateList extends LitElement {
             list.rows,
             // Two rows may name the same entity and state, so only the index is unique.
             (row, index) => (multi ? index : row.token || row.label),
-            (row, index) => html`
-              <div class="row ${multi ? "multi" : ""}">
-                <div class="handle">
-                  <ha-svg-icon .path=${DRAG_ICON}></ha-svg-icon>
-                </div>
-                ${multi
-                  ? html`
-                      <ha-selector
-                        class="entity"
-                        .hass=${this.hass}
-                        .selector=${entitySelector(this.entities)}
-                        .value=${row.entity}
-                        .index=${index}
-                        @value-changed=${this._entityChanged}
-                      ></ha-selector>
-                      <ha-selector
-                        class="state"
-                        .hass=${this.hass}
-                        .selector=${stateSelector(this._optionsFor(row))}
-                        .value=${row.token}
-                        .index=${index}
-                        @value-changed=${this._stateChanged}
-                      ></ha-selector>
-                    `
-                  : html`
-                      <ha-checkbox
-                        .checked=${row.shown}
-                        .index=${index}
-                        @change=${this._shownChanged}
-                      ></ha-checkbox>
-                    `}
+            (row, index) => {
+              const handle = html`<div class="handle">
+                <ha-svg-icon .path=${DRAG_ICON}></ha-svg-icon>
+              </div>`;
+              const drawn = html`
                 <ha-input
                   class="name"
                   .placeholder=${row.label}
@@ -114,8 +94,51 @@ export class DiscreteStatisticsStateList extends LitElement {
                   .index=${index}
                   @value-changed=${this._colorChanged}
                 ></ha-selector>
-              </div>
-            `
+              `;
+              return html`
+                <div class="row ${multi ? "multi" : ""}">
+                  ${multi
+                    ? html`
+                        <div class="line">
+                          ${handle}
+                          <ha-selector
+                            class="entity"
+                            .hass=${this.hass}
+                            .selector=${entitySelector(this.entities)}
+                            .value=${row.entity}
+                            .index=${index}
+                            @value-changed=${this._entityChanged}
+                          ></ha-selector>
+                          <ha-selector
+                            class="state"
+                            .hass=${this.hass}
+                            .selector=${stateSelector(this._optionsFor(row))}
+                            .value=${row.token}
+                            .index=${index}
+                            @value-changed=${this._stateChanged}
+                          ></ha-selector>
+                          <ha-icon-button
+                            class="delete"
+                            .path=${DELETE_ICON}
+                            .label=${"Remove this series"}
+                            .index=${index}
+                            @click=${this._rowDeleted}
+                          ></ha-icon-button>
+                        </div>
+                        <div class="line drawn">${drawn}</div>
+                      `
+                    : html`
+                        ${handle}
+                        <ha-checkbox
+                          .checked=${row.shown}
+                          .index=${index}
+                          @change=${this._shownChanged}
+                        ></ha-checkbox>
+                        ${drawn}
+                      `}
+                </div>
+              `;
+            }
           )}
         </div>
       </ha-sortable>
@@ -155,7 +178,18 @@ export class DiscreteStatisticsStateList extends LitElement {
   private _entityChanged(ev: CustomEvent<{ value?: string }>) {
     ev.stopPropagation();
     const target = ev.currentTarget as HTMLElement & { index: number };
-    const rows = rowsAfterEntityChange(this.value!.rows, target.index, ev.detail.value);
+    this._setEntity(target.index, ev.detail.value);
+  }
+
+  // Removal is clearing the row's entity, the stock convention, so the
+  // button asks for exactly that.
+  private _rowDeleted(ev: Event) {
+    const target = ev.currentTarget as HTMLElement & { index: number };
+    this._setEntity(target.index, undefined);
+  }
+
+  private _setEntity(index: number, entity: string | undefined) {
+    const rows = rowsAfterEntityChange(this.value!.rows, index, entity);
     if (rows !== this.value!.rows) {
       this._announce({ ...this.value!, rows });
     }
@@ -247,7 +281,25 @@ export class DiscreteStatisticsStateList extends LitElement {
       width: 180px;
     }
     .row.multi {
-      flex-wrap: wrap;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 4px;
+      margin-bottom: 12px;
+    }
+    .line {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    /* Indented by the handle's width and gap, so line two sits under the
+       entity picker and the two read as one row. */
+    .line.drawn {
+      padding-left: 32px;
+    }
+    .delete {
+      color: var(--secondary-text-color);
+      flex: none;
     }
     ha-selector.entity {
       flex: 1;

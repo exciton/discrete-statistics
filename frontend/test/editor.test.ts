@@ -86,9 +86,10 @@ describe("configSchema in multi-entity mode", () => {
 
   it("offers the two shapes under a key that is never written to config", () => {
     const mode = field(configSchema(), "chart_mode")!;
-    const select = (mode.selector as { select: { options: { value: string }[] } })
-      .select;
-    expect(select.options.map((o) => o.value)).toEqual(["states", "entities"]);
+    const toggle = (
+      mode.selector as { button_toggle: { options: { value: string }[] } }
+    ).button_toggle;
+    expect(toggle.options.map((o) => o.value)).toEqual(["states", "entities"]);
   });
 
   it("asks for the shape first, above the entity", () => {
@@ -97,8 +98,8 @@ describe("configSchema in multi-entity mode", () => {
     expect(schema[1].name).toBe("entity");
   });
 
-  it("labels and explains the mode field", () => {
+  it("labels the mode field, and leaves the toggle to speak for itself", () => {
     expect(computeLabel({ name: "chart_mode" })).toBe("Chart");
-    expect(computeHelper({ name: "chart_mode" })).toBeDefined();
+    expect(computeHelper({ name: "chart_mode" })).toBeUndefined();
   });
 });

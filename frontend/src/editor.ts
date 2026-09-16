@@ -57,11 +57,10 @@ export function configSchema(
       name: "chart_mode",
       required: true,
       selector: {
-        select: {
-          mode: "list",
+        button_toggle: {
           options: [
-            { value: "states", label: "States of one entity" },
-            { value: "entities", label: "One state from several" },
+            { value: "states", label: "Single entity" },
+            { value: "entities", label: "Multiple entities" },
           ],
         },
       },
@@ -173,8 +172,6 @@ export const computeLabel = (schema: { name: string }) =>
 
 export const computeHelper = (schema: { name: string }) =>
   ({
-    chart_mode:
-      "Whether the chart's series are one entity's states, or one state from each of several entities.",
     collection_key: "Names the date picker when a dashboard has more than one.",
   })[schema.name];
 
