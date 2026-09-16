@@ -526,13 +526,18 @@ period: day
 days_to_show: 14
 ```
 
-The rule cuts both ways: a row needs `entity:` when the card does not name
-one, and must not carry one when it does. Everything else — the metric, the
-period, the chart type, the names and colours — works the same in both. The
-two keys below are the exception: `states:` is a filter over one entity's
-states only where the card names one, and `ignore_states:` needs the card's
-own entity — a card without one refuses it, since a list of one state per
-row has nothing to filter.
+One entity's states answer what it was doing: the modes a heat pump sat
+in, a door's open against its closed. One state across several entities
+answers which of them did it most, the same question asked of a set of
+sensors side by side.
+
+The `entity:` rule cuts both ways: a row needs one when the card does not
+name one itself, and must not carry one when it does. Everything else —
+the metric, the period, the chart type, the names and colours — works the
+same in both. The two keys below are the exception: `states:` is a filter
+over one entity's states only where the card names one, and
+`ignore_states:` needs the card's own entity — a card without one refuses
+it, since a list of one state per row has nothing to filter.
 
 A card that names an entity draws every state that entity has statistics
 for, in the names the statistics carry. `states:` narrows and orders them;
@@ -582,20 +587,12 @@ and is drawn under that entity's name rather than the state's — or both,
 overrides either.
 
 The selector at the top of the editor's form chooses between the two
-charts: it swaps the entity field for a list of rows that each name an
-entity and one of its states, carrying the states you were drawing into a
-row each — in the order they were drawn, with the names and colours you
-gave them. Switching back takes the first row's entity and every row that
-names it, in the same way, and lists that entity's remaining states under
-`ignore_states:`, so that entity's series are unchanged — though the rows
-naming other entities go, since a card with an `entity:` of its own draws
-that one, and the surviving series are named after their states rather
-than their entity. Below the form, the editor lists the entity's states
-with a tick, a drag handle, a name and a colour each, and writes the two
-keys for you. Its "Ignore states that appear later" switch chooses which
-the unticked states become: with it on they are left out of `states:`;
-with it off they go in `ignore_states:`, which stays present — empty if
-need be — so the list stays open.
+charts. Below the form, the editor lists the entity's states with a tick,
+a drag handle, a name and a colour each, and writes the two keys for you.
+Its "Ignore states that appear later" switch chooses which the unticked
+states become: with it on they are left out of `states:`; with it off they
+go in `ignore_states:`, which stays present — empty if need be — so the
+list stays open.
 
 `unit: percent` is the share of each period spent in the state, so a
 stacked bar whose states are all drawn is always full height — except the
