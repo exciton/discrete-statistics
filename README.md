@@ -526,6 +526,8 @@ period: day
 days_to_show: 14
 ```
 
+![The card's editor with Chart set to Multiple entities: four series rows each naming a light and its On state, with a drag handle and delete button at the left of each and a name and colour beside them, the "Add an entity" picker below, beside a year of the four lights' on-time as weekly percent lines](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/card-config-multiple.png)
+
 One entity's states answer what it was doing: the modes a heat pump sat
 in, a door's open against its closed. One state across several entities
 answers which of them did it most, the same question asked of a set of
