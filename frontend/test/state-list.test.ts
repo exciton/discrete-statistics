@@ -217,34 +217,73 @@ describe("rowsAfterEntityChange", () => {
     { token: "open", label: "Gate", entity: "cover.gate", shown: true },
     { token: "on", label: "Hall", entity: "binary_sensor.hall_motion", shown: true },
   ];
+  const gate = [
+    { value: "open", label: "Open" },
+    { value: "closed", label: "Closed" },
+  ];
+  const hall = [
+    { value: "on", label: "On" },
+    { value: "off", label: "Off" },
+  ];
 
-  it("appends a stateless row for an entity chosen past the end", () => {
-    expect(rowsAfterEntityChange(rows, 2, "light.hall")).toEqual([
+  it("appends a row in the entity's first state", () => {
+    expect(rowsAfterEntityChange(rows, 2, "light.hall", hall)).toEqual([
+      ...rows,
+      { token: "on", label: "light.hall", entity: "light.hall", shown: true },
+    ]);
+  });
+
+  it("gives a second row for the same entity the second state", () => {
+    const one = rowsAfterEntityChange([], 0, "cover.gate", gate);
+    expect(one[0].token).toBe("open");
+    expect(rowsAfterEntityChange(one, 1, "cover.gate", gate)[1].token).toBe("closed");
+  });
+
+  it("is not blocked by a row naming a different entity", () => {
+    expect(rowsAfterEntityChange(rows, 2, "light.hall", hall)[2].token).toBe("on");
+  });
+
+  it("takes no state when the entity's every state is taken", () => {
+    const both = rowsAfterEntityChange(
+      rowsAfterEntityChange([], 0, "cover.gate", gate),
+      1,
+      "cover.gate",
+      gate
+    );
+    expect(rowsAfterEntityChange(both, 2, "cover.gate", gate)[2].token).toBe("");
+  });
+
+  it("takes no state when the entity has no statistics", () => {
+    expect(rowsAfterEntityChange(rows, 2, "light.hall", [])).toEqual([
       ...rows,
       { token: "", label: "light.hall", entity: "light.hall", shown: true },
     ]);
   });
 
   it("removes the row whose entity was cleared", () => {
-    expect(rowsAfterEntityChange(rows, 0, undefined)).toEqual([rows[1]]);
+    expect(rowsAfterEntityChange(rows, 0, undefined, [])).toEqual([rows[1]]);
   });
 
   it("leaves the rows alone when the picker past the end is cleared", () => {
-    expect(rowsAfterEntityChange(rows, 2, undefined)).toEqual(rows);
+    expect(rowsAfterEntityChange(rows, 2, undefined, [])).toEqual(rows);
   });
 
-  it("clears the state of a row whose entity changed, rather than carrying it", () => {
-    expect(rowsAfterEntityChange(rows, 0, "light.hall")).toEqual([
-      { token: "", label: "light.hall", entity: "light.hall", shown: true },
+  it("takes a state from the new entity, never the old one's", () => {
+    expect(rowsAfterEntityChange(rows, 0, "light.hall", hall)).toEqual([
+      { token: "on", label: "light.hall", entity: "light.hall", shown: true },
       rows[1],
     ]);
   });
 
+  it("does not let the row being changed block its own state", () => {
+    expect(rowsAfterEntityChange(rows, 0, "cover.gate", gate)[0].token).toBe("open");
+  });
+
   it("keeps the name and colour the row carried", () => {
     const named: StateRow[] = [{ ...rows[0], name: "Gate open", color: "red" }];
-    expect(rowsAfterEntityChange(named, 0, "light.hall")).toEqual([
+    expect(rowsAfterEntityChange(named, 0, "light.hall", hall)).toEqual([
       {
-        token: "",
+        token: "on",
         label: "light.hall",
         entity: "light.hall",
         shown: true,

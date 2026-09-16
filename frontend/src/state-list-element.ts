@@ -9,6 +9,7 @@ import {
   type StateList,
   type StateRow,
 } from "./state-list";
+import type { StateOption } from "./statistic-ids";
 import type { HassLike } from "./types";
 
 // mdi:drag-horizontal-variant, the handle the stock row editors use.
@@ -34,7 +35,7 @@ const colorSelector = (automatic: string) => ({
 const entitySelector = (entities?: string[]) => ({
   entity: entities ? { include_entities: entities } : {},
 });
-const stateSelector = (options: { value: string; label: string }[]) => ({
+const stateSelector = (options: StateOption[]) => ({
   select: { mode: "dropdown", options },
 });
 
@@ -52,14 +53,11 @@ export class DiscreteStatisticsStateList extends LitElement {
 
   @property({ attribute: false }) public value?: StateList;
 
-  // In entities mode only: the entities a row may name, and the states each
-  // of them has statistics for, keyed by entity ID.
+  // In entities mode only: the entities a row may name, and the states every
+  // one of them has statistics for, keyed by entity ID.
   @property({ attribute: false }) public entities?: string[];
 
-  @property({ attribute: false }) public stateOptions?: Record<
-    string,
-    { value: string; label: string }[]
-  >;
+  @property({ attribute: false }) public stateOptions?: Record<string, StateOption[]>;
 
   protected render() {
     const list: StateList = this.value ?? {
@@ -167,7 +165,7 @@ export class DiscreteStatisticsStateList extends LitElement {
 
   // An unlisted state is offered as itself, so a row the statistics do not
   // know reads as what it is rather than blank.
-  private _optionsFor(row: StateRow): { value: string; label: string }[] {
+  private _optionsFor(row: StateRow): StateOption[] {
     const options = this.stateOptions?.[row.entity ?? ""] ?? [];
     if (!row.token || options.some((option) => option.value === row.token)) {
       return options;
@@ -189,7 +187,12 @@ export class DiscreteStatisticsStateList extends LitElement {
   }
 
   private _setEntity(index: number, entity: string | undefined) {
-    const rows = rowsAfterEntityChange(this.value!.rows, index, entity);
+    const rows = rowsAfterEntityChange(
+      this.value!.rows,
+      index,
+      entity,
+      this.stateOptions?.[entity ?? ""] ?? []
+    );
     if (rows !== this.value!.rows) {
       this._announce({ ...this.value!, rows });
     }

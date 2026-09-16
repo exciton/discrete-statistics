@@ -9,7 +9,12 @@ import {
   stateListConfig,
   type StateList,
 } from "./state-list";
-import { entitiesWithStatistics, statisticsForEntity } from "./statistic-ids";
+import {
+  entitiesWithStatistics,
+  stateOptionsFor,
+  statisticsForEntity,
+  type StateOption,
+} from "./statistic-ids";
 import type {
   CardConfig,
   ChartType,
@@ -191,6 +196,30 @@ export class DiscreteStatisticsCardEditor extends LitElement {
 
   private _loading = false;
 
+  private _options?: {
+    metric: Metric;
+    metadata: StatisticsMetaData[];
+    map: Record<string, StateOption[]>;
+  };
+
+  // Every entity the row pickers offer, so a row's state is chosen the same
+  // way whichever entities the other rows happen to name. Rebuilt only when
+  // the metric or the metadata changes; render runs on every hass update.
+  private _stateOptions(metric: Metric): Record<string, StateOption[]> {
+    if (
+      !this._options ||
+      this._options.metric !== metric ||
+      this._options.metadata !== this._metadata
+    ) {
+      this._options = {
+        metric,
+        metadata: this._metadata,
+        map: stateOptionsFor(this._entities ?? [], metric, this._metadata),
+      };
+    }
+    return this._options.map;
+  }
+
   public setConfig(config: CardConfig): void {
     this._config = config;
     if (config.entity || config.states?.length) {
@@ -242,18 +271,6 @@ export class DiscreteStatisticsCardEditor extends LitElement {
           statisticsForEntity(this._config.entity ?? "", data.metric, this._metadata),
           this._config
         );
-    const stateOptions = Object.fromEntries(
-      list.rows
-        .map((row) => row.entity)
-        .filter((entity): entity is string => !!entity)
-        .map((entity) => [
-          entity,
-          statisticsForEntity(entity, data.metric, this._metadata).map((s) => ({
-            value: s.token,
-            label: s.label,
-          })),
-        ])
-    );
     return html`<ha-form
         .hass=${this.hass}
         .data=${data}
@@ -273,7 +290,7 @@ export class DiscreteStatisticsCardEditor extends LitElement {
               .hass=${this.hass}
               .value=${list}
               .entities=${this._entities ?? undefined}
-              .stateOptions=${stateOptions}
+              .stateOptions=${this._stateOptions(data.metric)}
               @value-changed=${this._statesChanged}
             ></discrete-statistics-state-list>
           </div>`

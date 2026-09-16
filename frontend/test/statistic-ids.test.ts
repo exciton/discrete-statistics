@@ -9,6 +9,7 @@ import {
   statisticsForEntity,
   statisticsForRows,
   entitiesWithStatistics,
+  stateOptionsFor,
 } from "../src/statistic-ids";
 import type { StatisticsMetaData } from "../src/types";
 
@@ -285,5 +286,38 @@ describe("resolveSeries", () => {
       rowsMeta
     );
     expect(series.map((s) => s.label)).toEqual(["Gate"]);
+  });
+});
+
+describe("stateOptionsFor", () => {
+  const optionsMeta = [
+    meta("discrete_statistics:cover_gate_open_duration", "Gate: Open (h)"),
+    meta("discrete_statistics:cover_gate_closed_duration", "Gate: Closed (h)"),
+    meta("discrete_statistics:cover_gate_open_count", "Gate: Open (#)"),
+    meta("discrete_statistics:binary_sensor_hall_motion_on_duration", "Hall: On (h)"),
+  ];
+
+  it("gives each entity its states in order, by token and label", () => {
+    expect(
+      stateOptionsFor(["cover.gate", "binary_sensor.hall_motion"], "duration", optionsMeta)
+    ).toEqual({
+      "cover.gate": [
+        { value: "open", label: "Open" },
+        { value: "closed", label: "Closed" },
+      ],
+      "binary_sensor.hall_motion": [{ value: "on", label: "On" }],
+    });
+  });
+
+  it("leaves out an entity with no statistics", () => {
+    expect(
+      Object.keys(stateOptionsFor(["light.hall", "cover.gate"], "duration", optionsMeta))
+    ).toEqual(["cover.gate"]);
+  });
+
+  it("includes only the metric asked for", () => {
+    expect(stateOptionsFor(["cover.gate"], "count", optionsMeta)).toEqual({
+      "cover.gate": [{ value: "open", label: "Open" }],
+    });
   });
 });

@@ -3,6 +3,13 @@ import type { CardConfig, Metric, StateSetting, StatisticsMetaData } from "./typ
 const DOMAIN = "discrete_statistics";
 const METRICS: readonly Metric[] = ["duration", "count"];
 
+// A state as the editor's dropdown offers it: the statistic's token, and
+// the state label drawn for it.
+export interface StateOption {
+  value: string;
+  label: string;
+}
+
 export interface StateStatistic {
   statisticId: string;
   token: string;
@@ -110,6 +117,35 @@ export function entitiesWithStatistics(
     }
   }
   return entityIds.filter((id) => slugs.has(entitySlug(id)));
+}
+
+export function stateOptionsFor(
+  entityIds: string[],
+  metric: Metric,
+  metadata: StatisticsMetaData[]
+): Record<string, StateOption[]> {
+  const bySlug = new Map<string, StateOption[]>();
+  for (const meta of metadata) {
+    const parsed = parseStatisticId(meta.statistic_id);
+    if (!parsed || parsed.metric !== metric) {
+      continue;
+    }
+    const option = { value: parsed.token, label: stateLabel(meta, parsed.token) };
+    const options = bySlug.get(parsed.entitySlug);
+    if (options) {
+      options.push(option);
+    } else {
+      bySlug.set(parsed.entitySlug, [option]);
+    }
+  }
+  const map: Record<string, StateOption[]> = {};
+  for (const entityId of entityIds) {
+    const options = bySlug.get(entitySlug(entityId));
+    if (options) {
+      map[entityId] = options;
+    }
+  }
+  return map;
 }
 
 export function statisticsForEntity(

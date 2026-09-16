@@ -15,6 +15,7 @@ import {
   settingMatches,
   statisticsForEntity,
   stateToken,
+  type StateOption,
   type StateStatistic,
 } from "./statistic-ids";
 import type { Metric, StateSetting, StatisticsMetaData } from "./types";
@@ -134,11 +135,14 @@ export function seriesList(
   return { rows, ignoreNew: false, mode: "entities" };
 }
 
-// A row's entity decides which states it may name, so a changed one clears it.
+// A row's entity decides which states it may name, so a changed one takes a
+// fresh state: the entity's first that no other row for that same entity
+// holds. A row naming another entity blocks nothing.
 export function rowsAfterEntityChange(
   rows: StateRow[],
   index: number,
-  entity: string | undefined
+  entity: string | undefined,
+  options: StateOption[]
 ): StateRow[] {
   const appending = index === rows.length;
   if (!entity) {
@@ -149,9 +153,13 @@ export function rowsAfterEntityChange(
     kept.splice(index, 1);
     return kept;
   }
+  const taken = new Set(
+    rows.filter((row, i) => i !== index && row.entity === entity).map((row) => row.token)
+  );
+  const token = options.find((option) => !taken.has(option.value))?.value ?? "";
   const row: StateRow = appending
-    ? { token: "", label: entity, entity, shown: true }
-    : { ...rows[index], token: "", label: entity, entity };
+    ? { token, label: entity, entity, shown: true }
+    : { ...rows[index], token, label: entity, entity };
   const next = [...rows];
   next.splice(index, appending ? 0 : 1, row);
   return next;
