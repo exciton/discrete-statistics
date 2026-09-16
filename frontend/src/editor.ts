@@ -1,7 +1,13 @@
 import { LitElement, css, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { listStatisticIds } from "./hass-api";
-import { applyChartMode, isEmpty, isMultiEntity, type ChartMode } from "./config";
+import {
+  applyChartMode,
+  isEmpty,
+  isMultiEntity,
+  validateConfig,
+  type ChartMode,
+} from "./config";
 import {
   seriesList,
   seriesListConfig,
@@ -220,7 +226,11 @@ export class DiscreteStatisticsCardEditor extends LitElement {
     return this._options.map;
   }
 
+  // Home Assistant wraps this call alone: a config refused here drops the
+  // user into the YAML editor with the message, where render() throwing
+  // blanks the panel.
   public setConfig(config: CardConfig): void {
+    validateConfig(config);
     this._config = config;
     if (config.entity || config.states?.length) {
       this._mode = undefined;

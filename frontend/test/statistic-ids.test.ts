@@ -273,6 +273,7 @@ describe("duplicate rows", () => {
   const dupeMeta = [
     meta("discrete_statistics:cover_gate_open_duration", "Gate: Open (h)"),
     meta("discrete_statistics:binary_sensor_hall_motion_on_duration", "Hall: On (h)"),
+    meta("discrete_statistics:binary_sensor_porch_motion_on_duration", "Porch: On (h)"),
     meta("discrete_statistics:climate_zone_heatcool_duration", "Zone: Heat/Cool (h)"),
   ];
 
@@ -308,14 +309,14 @@ describe("duplicate rows", () => {
     const series = statisticsForRows(
       [
         { entity: "binary_sensor.hall_motion", state: "on" },
-        { entity: "cover.gate", state: "open" },
+        { entity: "binary_sensor.porch_motion", state: "on" },
       ],
       "duration",
       dupeMeta
     );
     expect(series.map((s) => s.statisticId)).toEqual([
       "discrete_statistics:binary_sensor_hall_motion_on_duration",
-      "discrete_statistics:cover_gate_open_duration",
+      "discrete_statistics:binary_sensor_porch_motion_on_duration",
     ]);
   });
 

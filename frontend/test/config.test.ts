@@ -82,6 +82,12 @@ describe("validateConfig", () => {
     ).toThrow(/state/);
   });
 
+  it("refuses a row with no state: on a card that names an entity", () => {
+    expect(() =>
+      validateConfig(config({ entity: "cover.gate", states: [{ name: "x" }] as never }))
+    ).toThrow(/state/);
+  });
+
   // The editor writes one for a row whose entity has no state left to take.
   it("accepts a row whose state is empty", () => {
     expect(() =>
