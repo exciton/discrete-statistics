@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { configSchema } from "../src/editor";
+import { computeHelper, computeLabel, configSchema } from "../src/editor";
 
 // The form is nested grids; this walks it for a field by name.
 function field(schema: unknown[], name: string): Record<string, unknown> | undefined {
@@ -19,15 +19,15 @@ function field(schema: unknown[], name: string): Record<string, unknown> | undef
 
 describe("configSchema", () => {
   it("limits the entity picker to the entities given", () => {
-    const [entity] = configSchema(["climate.zone"]);
-    expect(entity.selector).toEqual({
+    expect(field(configSchema(["climate.zone"]), "entity")!.selector).toEqual({
       entity: { include_entities: ["climate.zone"] },
     });
   });
 
   it("offers every entity when the list is unknown", () => {
-    const [entity] = configSchema(undefined);
-    expect(entity.selector).toEqual({ entity: {} });
+    expect(field(configSchema(undefined), "entity")!.selector).toEqual({
+      entity: {},
+    });
   });
 
   it("offers the stock card's chart types under its key, as radio buttons", () => {
@@ -75,5 +75,31 @@ describe("configSchema", () => {
     expect(field(following, "days_to_show")).toBeUndefined();
     expect(field(following, "collection_key")).toBeDefined();
     expect(field(configSchema(undefined, false), "collection_key")).toBeUndefined();
+  });
+});
+
+describe("configSchema in multi-entity mode", () => {
+  it("drops the entity field, since the rows carry the entities", () => {
+    expect(field(configSchema(["cover.gate"], false, true), "entity")).toBeUndefined();
+    expect(field(configSchema(["cover.gate"], false, false), "entity")).toBeDefined();
+  });
+
+  it("offers the two shapes under a key that is never written to config", () => {
+    const mode = field(configSchema(), "chart_mode")!;
+    const toggle = (
+      mode.selector as { button_toggle: { options: { value: string }[] } }
+    ).button_toggle;
+    expect(toggle.options.map((o) => o.value)).toEqual(["states", "entities"]);
+  });
+
+  it("asks for the shape first, above the entity", () => {
+    const schema = configSchema() as Record<string, unknown>[];
+    expect(schema[0].name).toBe("chart_mode");
+    expect(schema[1].name).toBe("entity");
+  });
+
+  it("labels the mode field, and leaves the toggle to speak for itself", () => {
+    expect(computeLabel({ name: "chart_mode" })).toBe("Chart");
+    expect(computeHelper({ name: "chart_mode" })).toBeUndefined();
   });
 });

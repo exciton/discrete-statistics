@@ -490,8 +490,11 @@ short excursion out of a zone and back is a state change like any other —
 ## The card
 
 The integration ships its own card, so nothing needs adding under
-Resources. It draws one entity's states, stacked bars by default, and is
-configured by entity rather than by statistic ID:
+Resources. It draws one of two charts: one entity's states, or one state
+from each of several entities. Either is stacked bars by default, and
+configured by entity rather than by statistic ID.
+
+Name the entity, and the card draws its states:
 
 ```yaml
 type: custom:discrete-statistics-card
@@ -506,9 +509,41 @@ days_to_show: 365
 
 ![The card's editor: an entity picker, chart type and period radio buttons, days to show, and the metric and unit dropdowns, beside a year of a heat pump's modes as stacked percent bars](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/card-config.png)
 
-Every state the entity has statistics for is drawn, in the names the
-statistics carry. `states:` narrows and orders them; `ignore_states:`
-drops some and keeps the rest:
+Leave the entity off, and each `states:` row names its own instead, one
+state apiece — every door's open time on one chart, say:
+
+```yaml
+type: custom:discrete-statistics-card
+title: Doors
+states:
+  - entity: binary_sensor.front_door
+    state: "on"
+  - entity: binary_sensor.back_door
+    state: "on"
+metric: duration
+unit: percent
+period: day
+days_to_show: 14
+```
+
+![The card's editor with Chart set to Multiple entities: four series rows each naming a light and its On state, with a drag handle and delete button at the left of each and a name and colour beside them, the "Add an entity" picker below, beside a year of the four lights' on-time as weekly percent lines](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/card-config-multiple.png)
+
+One entity's states answer what it was doing: the modes a heat pump sat
+in, a door's open against its closed. One state across several entities
+answers which of them did it most, the same question asked of a set of
+sensors side by side.
+
+The `entity:` rule cuts both ways: a row needs one when the card does not
+name one itself, and must not carry one when it does. Everything else —
+the metric, the period, the chart type, the names and colours — works the
+same in both. The two keys below are the exception: `states:` is a filter
+over one entity's states only where the card names one, and
+`ignore_states:` needs the card's own entity — a card without one refuses
+it, since a list of one state per row has nothing to filter.
+
+A card that names an entity draws every state that entity has statistics
+for, in the names the statistics carry. `states:` narrows and orders them;
+`ignore_states:` drops some and keeps the rest:
 
 ```yaml
 states:          # only these, in this order
@@ -548,17 +583,28 @@ states:
   - "off"
 ```
 
-The editor lists the entity's states with a tick, a drag handle, a name
-and a colour each, and writes the two keys for you. Its "Ignore states that
-appear later" switch chooses which the unticked states become: with it
-on they are left out of `states:`; with it off they go in
-`ignore_states:`, which stays present — empty if need be — so the list
-stays open.
+On a card with no entity of its own an entry carries `entity:` as well,
+and is drawn under that entity's name rather than the state's — or both,
+"Front Door: Open", where the same entity is on more than one row. A `name:`
+overrides either.
+
+The selector at the top of the editor's form chooses between the two
+charts, and what it lists below the form follows: for one entity's states,
+a row per state with a tick, a drag handle, a name and a colour; for
+several entities, a row per series naming an entity and one of its states,
+with a name and a colour apiece. Either way the editor writes the config
+for you. Under the list of one entity's states, the "Ignore states that
+appear later" switch chooses which the unticked ones become: with it on they are
+left out of `states:`; with it off they go in `ignore_states:`, which stays
+present — empty if need be — so the list stays open.
 
 `unit: percent` is the share of each period spent in the state, so a
 stacked bar whose states are all drawn is always full height — except the
-last bar, which is only as full as the period it covers so far. `auto`
-picks hours for hourly and daily periods and days for coarser ones.
+last bar, which is only as full as the period it covers so far. Several
+entities' shares of the same period are not one whole between them and can
+add up past 100%, so that chart's axis follows the tallest bar rather than
+stopping at 100. `auto` picks hours for hourly and daily periods and days
+for coarser ones.
 
 `chart_type` takes the stock statistics-graph card's four values, so a
 config moves between the two cards. A line is drawn through each period's
@@ -616,7 +662,7 @@ the answer.
 | Data loaded for a year of months                 | every hour, reduced on the server   | thirteen rows a state                             |
 | Chart types                                      | bar, bar-stack, line, line-stack    | the same four                                     |
 | Energy date picker                               | yes                                 | yes                                               |
-| Other integrations' statistics on the same chart | yes                                 | no — one entity per card                          |
+| Other integrations' statistics on the same chart | yes                                 | no — but several of this integration's entities   |
 | Stability                                        | part of Home Assistant              | uses an internal chart component; the minimum Home Assistant version is raised when it changes |
 
 ## Period sensors

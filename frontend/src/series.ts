@@ -68,17 +68,20 @@ export function valueOf(
 
 // The tallest visible stack rounded up to its own order of magnitude — 37
 // to 40, 0.032 to 0.04 — so the axis follows what the legend leaves
-// showing however small that is. Capped rather than rounded at 100 because
-// a full stack's float sum can land a hair over, pushing the axis to 110.
-export function percentAxisMax({ max }: { min: number; max: number }): number {
-  if (max >= 100) {
-    return 100;
-  }
+// showing however small that is.
+export function roundUpMax({ max }: { min: number; max: number }): number {
   if (max <= 0) {
     return 1;
   }
   const step = 10 ** Math.floor(Math.log10(max));
   return Number((Math.ceil(max / step) * step).toPrecision(12));
+}
+
+// Capped rather than rounded at 100 because a full stack's float sum can
+// land a hair over, pushing the axis to 110. Several entities' shares of a
+// period can exceed it honestly, and that chart uses roundUpMax.
+export function percentAxisMax(bounds: { min: number; max: number }): number {
+  return Math.min(100, roundUpMax(bounds));
 }
 
 export function unitLabel(unit: ResolvedUnit): string {
@@ -93,7 +96,7 @@ export function unitLabel(unit: ResolvedUnit): string {
 }
 
 export function buildSeries(
-  entityId: string,
+  stack: string,
   stats: StateStatistic[],
   data: Statistics,
   unit: ResolvedUnit,
@@ -154,7 +157,7 @@ export function buildSeries(
           data: points,
         };
     if (stacked) {
-      styled.stack = entityId;
+      styled.stack = stack;
       styled.stackStrategy = "samesign";
       if (line) {
         styled.areaStyle = { color: color + "3F" };

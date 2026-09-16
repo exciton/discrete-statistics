@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  entityLabel,
   entitySlug,
   parseStatisticId,
+  resolveSeries,
   stateLabel,
   stateToken,
   statisticsForEntity,
+  statisticsForRows,
   entitiesWithStatistics,
+  stateOptionsFor,
 } from "../src/statistic-ids";
 import type { StatisticsMetaData } from "../src/types";
 
@@ -86,6 +90,7 @@ describe("statisticsForEntity", () => {
       statisticId: "discrete_statistics:climate_zone_heat_duration",
       token: "heat",
       label: "heat",
+      entityLabel: "Zone",
       metric: "duration",
     });
     expect(statisticsForEntity("climate.zone_heat", "duration", all).map((s) => s.token)).toEqual(["cool"]);
@@ -175,5 +180,205 @@ describe("entitiesWithStatistics", () => {
         meta("sensor:not_ours"),
       ])
     ).toEqual(["climate.zone", "binary_sensor.door"]);
+  });
+});
+
+const rowsMeta = [
+  meta("discrete_statistics:binary_sensor_hall_motion_on_duration", "Hall Motion: Detected (h)"),
+  meta("discrete_statistics:binary_sensor_porch_motion_on_duration", "Porch Motion: Detected (h)"),
+  meta("discrete_statistics:cover_gate_open_duration", "Gate: Open (h)"),
+  meta("discrete_statistics:cover_gate_closed_duration", "Gate: Closed (h)"),
+];
+
+describe("entityLabel", () => {
+  it("takes the entity's half of the stored name", () => {
+    expect(entityLabel(rowsMeta[0], "binary_sensor.hall_motion")).toBe("Hall Motion");
+  });
+
+  it("falls back to the entity ID when there is no stored name to split", () => {
+    expect(entityLabel(undefined, "cover.gate")).toBe("cover.gate");
+    expect(entityLabel(meta("discrete_statistics:cover_gate_open_duration", "Open (h)"), "cover.gate")).toBe("cover.gate");
+  });
+});
+
+describe("statisticsForRows", () => {
+  it("names each series for its entity, in config order", () => {
+    const series = statisticsForRows(
+      [
+        { entity: "cover.gate", state: "open" },
+        { entity: "binary_sensor.hall_motion", state: "on" },
+      ],
+      "duration",
+      rowsMeta
+    );
+    expect(series.map((s) => [s.statisticId, s.label])).toEqual([
+      ["discrete_statistics:cover_gate_open_duration", "Gate"],
+      ["discrete_statistics:binary_sensor_hall_motion_on_duration", "Hall Motion"],
+    ]);
+  });
+
+  it("names both series in full when one entity appears twice", () => {
+    const series = statisticsForRows(
+      [
+        { entity: "cover.gate", state: "open" },
+        { entity: "cover.gate", state: "closed" },
+        { entity: "binary_sensor.hall_motion", state: "on" },
+      ],
+      "duration",
+      rowsMeta
+    );
+    expect(series.map((s) => s.label)).toEqual(["Gate: Open", "Gate: Closed", "Hall Motion"]);
+  });
+
+  it("takes the configured name and colour over the entity's own", () => {
+    const [series] = statisticsForRows(
+      [{ entity: "cover.gate", state: "open", name: "Gate open", color: "red" }],
+      "duration",
+      rowsMeta
+    );
+    expect(series.label).toBe("Gate open");
+    expect(series.color).toBe("red");
+  });
+
+  it("drops a row with no statistic, and a row that names no entity", () => {
+    expect(
+      statisticsForRows(
+        [
+          { entity: "cover.gate", state: "ajar" },
+          { entity: "light.nowhere", state: "on" },
+          "on",
+          { state: "on" },
+          { entity: "cover.gate", state: "open" },
+        ],
+        "duration",
+        rowsMeta
+      ).map((s) => s.statisticId)
+    ).toEqual(["discrete_statistics:cover_gate_open_duration"]);
+  });
+
+  it("matches a state whose text has no token by its label", () => {
+    // The integration transliterates the state, the card cannot, so the
+    // token never agrees and the stored label is the only way in.
+    const cn = meta("discrete_statistics:cover_gate_dakai_duration", "Gate: 打开 (h)");
+    const [series] = statisticsForRows(
+      [{ entity: "cover.gate", state: "打开" }],
+      "duration",
+      [cn]
+    );
+    expect(series.statisticId).toBe("discrete_statistics:cover_gate_dakai_duration");
+  });
+});
+
+describe("duplicate rows", () => {
+  const dupeMeta = [
+    meta("discrete_statistics:cover_gate_open_duration", "Gate: Open (h)"),
+    meta("discrete_statistics:binary_sensor_hall_motion_on_duration", "Hall: On (h)"),
+    meta("discrete_statistics:binary_sensor_porch_motion_on_duration", "Porch: On (h)"),
+    meta("discrete_statistics:climate_zone_heatcool_duration", "Zone: Heat/Cool (h)"),
+  ];
+
+  it("draws two rows on one statistic once, the first winning", () => {
+    const series = statisticsForRows(
+      [
+        { entity: "cover.gate", state: "open", name: "First", color: "red" },
+        { entity: "cover.gate", state: "open", name: "Second", color: "blue" },
+      ],
+      "duration",
+      dupeMeta
+    );
+    expect(series).toHaveLength(1);
+    expect(series[0].label).toBe("First");
+    expect(series[0].color).toBe("red");
+  });
+
+  it("folds two rows whose states tokenise alike", () => {
+    const series = statisticsForRows(
+      [
+        { entity: "climate.zone", state: "heat_cool" },
+        { entity: "climate.zone", state: "heatcool" },
+      ],
+      "duration",
+      dupeMeta
+    );
+    expect(series.map((s) => s.statisticId)).toEqual([
+      "discrete_statistics:climate_zone_heatcool_duration",
+    ]);
+  });
+
+  it("keeps the same state on two different entities", () => {
+    const series = statisticsForRows(
+      [
+        { entity: "binary_sensor.hall_motion", state: "on" },
+        { entity: "binary_sensor.porch_motion", state: "on" },
+      ],
+      "duration",
+      dupeMeta
+    );
+    expect(series.map((s) => s.statisticId)).toEqual([
+      "discrete_statistics:binary_sensor_hall_motion_on_duration",
+      "discrete_statistics:binary_sensor_porch_motion_on_duration",
+    ]);
+  });
+
+  it("draws a state listed twice on one entity once", () => {
+    const series = statisticsForEntity("cover.gate", "duration", dupeMeta, {
+      states: ["open", "open"],
+    });
+    expect(series.map((s) => s.statisticId)).toEqual([
+      "discrete_statistics:cover_gate_open_duration",
+    ]);
+  });
+});
+
+describe("resolveSeries", () => {
+  it("takes the entity's states when the card names an entity", () => {
+    const series = resolveSeries(
+      { entity: "cover.gate", states: ["open"] },
+      "duration",
+      rowsMeta
+    );
+    expect(series.map((s) => s.label)).toEqual(["Open"]);
+  });
+
+  it("takes the rows' entities when the card names none", () => {
+    const series = resolveSeries(
+      { states: [{ entity: "cover.gate", state: "open" }] },
+      "duration",
+      rowsMeta
+    );
+    expect(series.map((s) => s.label)).toEqual(["Gate"]);
+  });
+});
+
+describe("stateOptionsFor", () => {
+  const optionsMeta = [
+    meta("discrete_statistics:cover_gate_open_duration", "Gate: Open (h)"),
+    meta("discrete_statistics:cover_gate_closed_duration", "Gate: Closed (h)"),
+    meta("discrete_statistics:cover_gate_open_count", "Gate: Open (#)"),
+    meta("discrete_statistics:binary_sensor_hall_motion_on_duration", "Hall: On (h)"),
+  ];
+
+  it("gives each entity its states in order, by token and label", () => {
+    expect(
+      stateOptionsFor(["cover.gate", "binary_sensor.hall_motion"], "duration", optionsMeta)
+    ).toEqual({
+      "cover.gate": [
+        { value: "open", label: "Open" },
+        { value: "closed", label: "Closed" },
+      ],
+      "binary_sensor.hall_motion": [{ value: "on", label: "On" }],
+    });
+  });
+
+  it("leaves out an entity with no statistics", () => {
+    expect(
+      Object.keys(stateOptionsFor(["light.hall", "cover.gate"], "duration", optionsMeta))
+    ).toEqual(["cover.gate"]);
+  });
+
+  it("includes only the metric asked for", () => {
+    expect(stateOptionsFor(["cover.gate"], "count", optionsMeta)).toEqual({
+      "cover.gate": [{ value: "open", label: "Open" }],
+    });
   });
 });

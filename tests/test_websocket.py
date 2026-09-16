@@ -556,3 +556,46 @@ async def test_hourly_buckets_cost_one_statement(hass, client, statements, fetch
     assert len(statements) == 1
     # The twelve rows inside the range, and the one the read opens on.
     assert fetched.rows == 13
+
+
+async def test_buckets_judge_each_entity_by_its_own_rows(hass, client):
+    # Grid Status holds one state across all ten days; Porch Light goes
+    # dark for three of them, with no row of either duration statistic.
+    await hass.config.async_set_time_zone("UTC")
+    start, days = utc(2026, 1, 1), 10
+    hole = range(4 * 24, 7 * 24)
+    seed(hass, ON, start, [float(i) for i in range(days * 24)])
+    seed(
+        hass,
+        OTHER_OFF,
+        start,
+        [None if i in hole else float(i) for i in range(days * 24)],
+    )
+    # OTHER occurred on the first day and on the three after the hole.
+    seed(
+        hass,
+        OTHER,
+        start,
+        [
+            0.5 * i if i < 24 else None if i < 7 * 24 else 12.0 + 0.5 * (i - 7 * 24)
+            for i in range(days * 24)
+        ],
+    )
+    await async_wait_recording_done(hass)
+
+    response = await ask(
+        client, [ON, OTHER], start, start + timedelta(days=days), "day"
+    )
+
+    every_day = [ms(start + timedelta(days=n)) for n in range(days)]
+    assert [b["start"] for b in response["result"][ON]] == every_day
+    assert [b["start"] for b in response["result"][OTHER]] == [
+        edge for n, edge in enumerate(every_day) if n not in (4, 5, 6)
+    ]
+    on_by_day = {b["start"]: b["change"] for b in response["result"][ON]}
+    other_by_day = {b["start"]: b["change"] for b in response["result"][OTHER]}
+    assert on_by_day[every_day[5]] == 24.0
+    # A day Porch Light was compiled through but OTHER did not occur in.
+    assert other_by_day[every_day[1]] == 0.0
+    assert other_by_day[every_day[0]] == 11.5
+    assert other_by_day[every_day[7]] == 12.0

@@ -2,19 +2,21 @@ import { LitElement, html, css, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { ensureChartBase } from "./chart-base";
 import { FALLBACK_COLORS, PALETTE_SIZE, resolveColor } from "./colors";
+import { isEmpty, isMultiEntity, validateConfig } from "./config";
 import { fetchStatistics, listStatisticIds, subscribeEnergyRange } from "./hass-api";
 import { rangeFromDays, resolvePeriod, resolveUnit, type Range } from "./period";
 import {
   buildSeries,
   earliestStart,
   percentAxisMax,
+  roundUpMax,
   unitLabel,
   type ChartSeries,
   type LegendItem,
 } from "./series";
 import {
   entitiesWithStatistics,
-  statisticsForEntity,
+  resolveSeries,
   type StateStatistic,
 } from "./statistic-ids";
 import type { CardConfig, HassLike } from "./types";
@@ -103,13 +105,14 @@ export class DiscreteStatisticsCard extends LitElement {
   }
 
   public setConfig(config: CardConfig): void {
+    validateConfig(config);
     this._config = config;
     this._stats = undefined;
     this._statsFor = undefined;
     this._dataStart = undefined;
-    // A card without an entity is a fresh one the editor has not filled in
-    // yet; a thrown error here would fail the picker's preview instead.
-    this._error = config.entity ? undefined : "Choose an entity in the card editor";
+    // A card with neither an entity nor rows is a fresh one the editor has
+    // not filled in yet; a thrown error here would fail the picker's preview.
+    this._error = isEmpty(config) ? "Choose an entity in the card editor" : undefined;
     this._subscribed = false;
     this._chartOptions = this._options();
   }
@@ -195,7 +198,7 @@ export class DiscreteStatisticsCard extends LitElement {
     const hass = this.hass;
     const config = this._config;
     const range = this._range;
-    if (!hass || !config?.entity || !range) {
+    if (!hass || !config || !range || isEmpty(config)) {
       return;
     }
     if (this._fetching) {
@@ -218,15 +221,17 @@ export class DiscreteStatisticsCard extends LitElement {
       ].join("|");
       if (this._statsFor !== key) {
         const metadata = await listStatisticIds(hass);
-        this._stats = statisticsForEntity(config.entity, metric, metadata, {
-          states: config.states,
-          ignore_states: config.ignore_states,
-        });
+        this._stats = resolveSeries(config, metric, metadata);
         this._statsFor = key;
       }
       const stats = this._stats ?? [];
       if (!stats.length) {
-        this._error = `No statistics recorded for ${config.entity}`;
+        const asked = config.entity
+          ? config.entity
+          : [...new Set((config.states ?? []).map((row) =>
+              typeof row === "string" ? row : row.entity
+            ))].join(", ");
+        this._error = `No statistics recorded for ${asked}`;
         this._series = [];
         this._legend = [];
         this._dataStart = undefined;
@@ -239,7 +244,7 @@ export class DiscreteStatisticsCard extends LitElement {
       const style = getComputedStyle(this);
       const cssVariable = (name: string) => style.getPropertyValue(name).trim();
       const { series, legend } = buildSeries(
-        config.entity,
+        config.entity ?? "entities",
         stats.map((s) => ({ ...s, color: resolveColor(s.color, cssVariable) })),
         data,
         unit,
@@ -353,7 +358,12 @@ export class DiscreteStatisticsCard extends LitElement {
         // echarts ignores undefined on merge, so the cap would survive a
         // switch away from percent. A function is evaluated on the series
         // the legend leaves visible, so hiding a state closes the axis in.
-        max: this._unit === "%" ? percentAxisMax : null,
+        max:
+          this._unit === "%"
+            ? this._config && isMultiEntity(this._config)
+              ? roundUpMax
+              : percentAxisMax
+            : null,
         splitLine: { show: true },
       },
       legend: {
