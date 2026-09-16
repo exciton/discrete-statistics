@@ -587,12 +587,14 @@ and is drawn under that entity's name rather than the state's — or both,
 overrides either.
 
 The selector at the top of the editor's form chooses between the two
-charts. Below the form, the editor lists the entity's states with a tick,
-a drag handle, a name and a colour each, and writes the two keys for you.
-Its "Ignore states that appear later" switch chooses which the unticked
-states become: with it on they are left out of `states:`; with it off they
-go in `ignore_states:`, which stays present — empty if need be — so the
-list stays open.
+charts, and what it lists below the form follows: for one entity's states,
+a row per state with a tick, a drag handle, a name and a colour; for
+several entities, a row per series naming an entity and one of its states,
+with a name and a colour apiece. Either way the editor writes the config
+for you. Under the list of one entity's states, the "Ignore states that appear
+later" switch chooses which the unticked ones become: with it on they are
+left out of `states:`; with it off they go in `ignore_states:`, which stays
+present — empty if need be — so the list stays open.
 
 `unit: percent` is the share of each period spent in the state, so a
 stacked bar whose states are all drawn is always full height — except the
