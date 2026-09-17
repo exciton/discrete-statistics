@@ -31,9 +31,9 @@ as external statistics, which are never purged.
   which to ignore and carry the previous state across, how long a spell must
   last to count, and which states to record as one
 
-It is not a replacement for `history_stats`, which answers a different
-question; [the comparison below](#compared-with-history_stats) says which to
-reach for.
+For much of what `history_stats` is used for, this can take its place: the
+two answer the same questions from opposite ends, and [the comparison
+below](#compared-with-history_stats) says which to reach for.
 
 ## Contents
 
