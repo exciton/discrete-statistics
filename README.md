@@ -13,8 +13,11 @@ as external statistics, which are never purged.
 
 - Works with any entity whose state is a label: binary sensors, covers,
   climate, `hvac_action`, enum sensors, `input_select`, `person`…
-- Records them hour by hour, for every state the entity has, including one
-  it starts reporting next year
+- Records each state hour by hour — the time spent in it and the number of
+  times it was entered — every state the entity has, including one it starts
+  reporting next year
+- Kept as external statistics, which are never purged: the history outlives
+  the recorder's own, so `purge_keep_days` can be short
 - Backfills from the recorder's existing history on first run, so a new
   entity starts with whatever the recorder still holds rather than from zero
 - Ships its own card: pick the entity and it draws every state, as
