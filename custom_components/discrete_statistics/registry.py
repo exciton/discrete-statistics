@@ -1,6 +1,7 @@
 """Follow the entity registry.
 
-A rename of an entity we record moves its statistics with it, and an
+A rename of an entity we record moves its statistics with it, a move
+between devices reloads the entry whose sensors follow it, and an
 entity that disappears raises a repair issue. One listener on the
 registry, filtered to the entities configured, and nothing per entry.
 """
@@ -242,6 +243,14 @@ def async_setup(hass: HomeAssistant) -> None:
                     old,
                     new,
                 )
+        elif (
+            data["action"] == "update"
+            and "device_id" in data["changes"]
+            and (entry := _entry_for(hass, data["entity_id"])) is not None
+        ):
+            # The reload rebuilds the sensors, and it is construction that
+            # reads the source's device and names them against it.
+            await hass.config_entries.async_reload(entry.entry_id)
         async_review_missing(hass)
 
     @callback

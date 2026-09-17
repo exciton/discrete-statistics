@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import pytest
 from homeassistant.components.recorder.statistics import async_add_external_statistics
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import (
     CONF_ENTITY_ID,
     CONF_NAME,
@@ -12,6 +13,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import CoreState
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.setup import async_setup_component
@@ -33,7 +35,7 @@ from custom_components.discrete_statistics.const import (
 )
 from custom_components.discrete_statistics.payload import metadata_for
 
-from .conftest import existing, play, read_sums
+from .conftest import ON_TODAY, existing, play, read_sums, sensor
 
 ENTITY = "binary_sensor.grid_status"
 NEW = "binary_sensor.grid_status_new"
@@ -69,7 +71,7 @@ async def registered(hass, entity_id, unique_id):
     return entry
 
 
-async def setup_entry(hass, entity_id=ENTITY, yaml=None):
+async def setup_entry(hass, entity_id=ENTITY, yaml=None, subentries=None):
     hass.set_state(CoreState.running)
     assert await async_setup_component(hass, DOMAIN, yaml or {})
     entry = MockConfigEntry(
@@ -78,6 +80,7 @@ async def setup_entry(hass, entity_id=ENTITY, yaml=None):
         options={CONF_NAME: "Grid Status", CONF_DEFAULT: DEFAULT_RECORD_KNOWN},
         unique_id=entity_id,
         title="Grid Status",
+        subentries_data=subentries or [],
     )
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
@@ -558,3 +561,127 @@ async def test_the_issue_waits_for_home_assistant_to_start(recorder_utc, freezer
     assert await hass.config_entries.async_unload(entry.entry_id)
     await settled(hass)
     assert issue(hass, entry) is None
+
+
+def a_device(hass, name):
+    """A device of another integration's, as that integration builds one."""
+    source = MockConfigEntry(domain="test")
+    source.add_to_hass(hass)
+    return dr.async_get(hass).async_get_or_create(
+        config_entry_id=source.entry_id,
+        identifiers={("test", name)},
+        name=name,
+    )
+
+
+async def on_a_device(hass, name, entity_id=ENTITY):
+    """A device with the source entity on it."""
+    device = a_device(hass, name)
+    domain, object_id = entity_id.split(".")
+    er.async_get(hass).async_get_or_create(
+        domain,
+        "test",
+        entity_id,
+        suggested_object_id=object_id,
+        device_id=device.id,
+    )
+    return device
+
+
+async def with_a_sensor(hass, freezer, title="Grid Status Today"):
+    await play(hass, freezer, HISTORY)
+    freezer.move_to(T0 + timedelta(hours=10))
+    return await setup_entry(hass, subentries=[sensor(title, ["on"])])
+
+
+def sensor_entry(hass):
+    return er.async_get(hass).async_get(ON_TODAY)
+
+
+async def test_a_source_moved_to_another_device_moves_the_sensors(
+    recorder_utc, freezer
+):
+    hass = recorder_utc
+    await on_a_device(hass, "Grid")
+    other = a_device(hass, "Meter")
+    await with_a_sensor(hass, freezer)
+    assert sensor_entry(hass).original_name == "Status Today"
+
+    er.async_get(hass).async_update_entity(ENTITY, device_id=other.id)
+    await settled(hass)
+
+    after = sensor_entry(hass)
+    assert after.device_id == other.id
+    assert after.has_entity_name is False
+    assert after.original_name == "Grid Status Today"
+
+
+async def test_a_source_that_gains_a_device_takes_the_sensors_onto_it(
+    recorder_utc, freezer
+):
+    """The device arrives after the sensor exists: only a reload writes it."""
+    hass = recorder_utc
+    await registered(hass, ENTITY, "grid")
+    await with_a_sensor(hass, freezer)
+    assert sensor_entry(hass).device_id is None
+
+    device = a_device(hass, "Grid")
+    er.async_get(hass).async_update_entity(ENTITY, device_id=device.id)
+    await settled(hass)
+
+    after = sensor_entry(hass)
+    assert after.device_id == device.id
+    assert after.has_entity_name is True
+    assert after.original_name == "Status Today"
+
+
+async def test_a_source_taken_off_its_device_gives_the_sensors_their_name_back(
+    recorder_utc, freezer
+):
+    hass = recorder_utc
+    device = await on_a_device(hass, "Grid")
+    await with_a_sensor(hass, freezer)
+    assert sensor_entry(hass).device_id == device.id
+
+    er.async_get(hass).async_update_entity(ENTITY, device_id=None)
+    await settled(hass)
+
+    after = sensor_entry(hass)
+    assert after.device_id is None
+    assert after.has_entity_name is False
+    assert after.original_name == "Grid Status Today"
+
+
+async def test_a_registry_update_we_do_not_care_about_reloads_nothing(
+    recorder_utc, freezer
+):
+    """The branch must not fire on every write the registry makes."""
+    hass = recorder_utc
+    await on_a_device(hass, "Grid")
+    entry = await with_a_sensor(hass, freezer)
+
+    with patch.object(
+        hass.config_entries, "async_reload", wraps=hass.config_entries.async_reload
+    ) as reload:
+        er.async_get(hass).async_update_entity(ENTITY, icon="mdi:flash")
+        await settled(hass)
+
+    assert not reload.called
+    assert entry.state is ConfigEntryState.LOADED
+
+
+async def test_a_renamed_source_carries_its_sensors_device_and_name(
+    recorder_utc, freezer
+):
+    """The rename path already reloads, so the device link follows from it."""
+    hass = recorder_utc
+    device = await on_a_device(hass, "Grid")
+    await with_a_sensor(hass, freezer)
+
+    er.async_get(hass).async_update_entity(ENTITY, new_entity_id=NEW)
+    await settled(hass)
+
+    after = sensor_entry(hass)
+    assert after.device_id == device.id
+    assert after.has_entity_name is True
+    assert after.original_name == "Status Today"
