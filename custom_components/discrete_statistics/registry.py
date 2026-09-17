@@ -259,9 +259,8 @@ def async_setup(hass: HomeAssistant) -> None:
         async_review_missing(hass)
 
     # `hass.bus.async_listen`, never `async_track_entity_registry_updated_event`:
-    # the recorder installs its own registry listener at setup and refuses
-    # to if that helper has been used first, and ours can be set up before
-    # it when configured in YAML.
+    # that helper keys a rename on the *old* entity ID, so it never reaches a
+    # rename onto an entity we record, which is the case async_fill exists for.
     hass.bus.async_listen(
         er.EVENT_ENTITY_REGISTRY_UPDATED, registry_updated, event_filter=registry_filter
     )

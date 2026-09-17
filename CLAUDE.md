@@ -261,9 +261,15 @@ default.
 
 `registry.py` follows the entity registry, with one listener registered
 through `hass.bus.async_listen` and an `event_filter` — never
-`async_track_entity_registry_updated_event`, because the recorder refuses
-to install its own registry listener after that helper has been used and
-ours can be set up first. A rename of an entity we record moves its
+`async_track_entity_registry_updated_event`. That helper dispatches a
+rename on the *old* entity ID
+(`_async_dispatch_old_entity_id_or_entity_id_event`), so a callback
+registered for an entity we record is never called when another entity is
+renamed *onto* it — the device swap `async_fill` exists for, whose
+`old_entity_id` is a temporary ID we cannot register for in advance. The
+recorder also refuses to install its own registry listener after that
+helper has been used, but that alone would not stop us: the recorder is set
+up in bootstrap stage 0, before any integration of ours can run. A rename of an entity we record moves its
 statistics on the recorder's thread (`RenameTask`, since
 `update_statistic_id` runs nowhere else), and only once that has
 committed is the entry updated and reloaded — the other order lets the
