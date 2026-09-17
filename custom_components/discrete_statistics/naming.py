@@ -9,7 +9,7 @@ from `compiler`.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 from homeassistant.const import (
     ATTR_DEVICE_CLASS,
@@ -18,6 +18,7 @@ from homeassistant.const import (
     STATE_UNKNOWN,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.translation import (
     async_get_translations,
@@ -71,6 +72,85 @@ def describe(hass: HomeAssistant, entity_id: str, name: str | None = None) -> st
     """
     label = display_name(hass, entity_id, name)
     return f"{label} ({entity_id})" if label != entity_id else entity_id
+
+
+class EntityNaming(NamedTuple):
+    """Where a sensor belongs, and what Home Assistant should call it."""
+
+    device: dr.DeviceEntry | None
+    has_entity_name: bool
+    name: str
+
+
+def source_device(hass: HomeAssistant, entity_id: str) -> dr.DeviceEntry | None:
+    """The device the source entity belongs to, if any."""
+    entry = er.async_get(hass).async_get(entity_id)
+    if entry is None or entry.device_id is None:
+        return None
+    return dr.async_get(hass).async_get(entry.device_id)
+
+
+def entity_naming(
+    hass: HomeAssistant, entity_id: str, title: str, typed_name: str | None
+) -> EntityNaming:
+    """Where a sensor derived from `entity_id` belongs, and what to call it.
+
+    A typed name is used verbatim. Otherwise, with a device present, the
+    device's name is stripped from the composed title's front so Home
+    Assistant can prefix it once rather than twice; with none, the whole
+    title stands, because `has_entity_name` with no device would render the
+    stripped part alone.
+    """
+    device = source_device(hass, entity_id)
+    prefix = device and (device.name_by_user or device.name)
+    if typed_name or not prefix:
+        return EntityNaming(device, False, typed_name or title)
+    relative = _strip_prefix(title, prefix)
+    if relative is None:
+        return EntityNaming(device, False, title)
+    return EntityNaming(device, True, relative)
+
+
+def _strip_prefix(name: str, prefix: str) -> str | None:
+    """Mirror `entity_registry._async_strip_prefix_from_entity_name`.
+
+    Home Assistant applies this same function when it assembles the
+    friendly name; diverging from it here would strip where it does not,
+    or the reverse, and the device's name would double.
+    """
+    if not name or not prefix:
+        return None
+
+    prefix_lower = prefix.casefold()
+    prefix_len = len(prefix_lower)
+
+    candidate = name[:prefix_len]
+    true_prefix_len = len(candidate)
+    candidate = candidate.casefold()
+
+    if not candidate.startswith(prefix_lower):
+        return None
+
+    prefix_diff = len(candidate) - prefix_len
+    while prefix_diff > 0:
+        true_prefix_len -= 1
+        prefix_diff -= len(name[true_prefix_len].casefold())
+
+    if prefix_diff < 0:
+        return None
+
+    new_name = name[true_prefix_len:].lstrip(" -:")
+
+    if not new_name:
+        return ""
+
+    if len(new_name) == len(name) - true_prefix_len:
+        return None
+
+    first_word = new_name.partition(" ")[0]
+    if not first_word.islower():
+        return new_name
+    return new_name[0].upper() + new_name[1:]
 
 
 # How a composed sensor title reads a metric. The title is a sentence a
