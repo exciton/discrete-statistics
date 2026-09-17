@@ -13,11 +13,8 @@ as external statistics, which are never purged.
 
 - Works with any entity whose state is a label: binary sensors, covers,
   climate, `hvac_action`, enum sensors, `input_select`, `person`…
-- Records hourly long-term statistics per state: time spent in it, and the
-  number of times it was entered — every state the entity has, including one
+- Records them hour by hour, for every state the entity has, including one
   it starts reporting next year
-- Stored as external statistics, so they are never purged — kept forever,
-  independent of `purge_keep_days`
 - Backfills from the recorder's existing history on first run, so a new
   entity starts with whatever the recorder still holds rather than from zero
 - Ships its own card: pick the entity and it draws every state, as
@@ -1066,18 +1063,18 @@ cost of both, on three database engines.
 
 **Long-term correctness.** Over a window whose hours the recorder still
 holds, both read the same state rows: no difference. Past the recorder's
-retention window `history_stats` is missing data - and the calculations
+retention window `history_stats` is missing data — and the calculations
 become incorrect. Here the historical hours are already compiled, so
-long-term calculations stay correct. For sub-hour accuracy covering purged
-data (e.g. Last 365 days, with 7 day recorder retention) - we estimate the
-first partial hour by pro-rating that hour's statistics: see `estimated`.
-
+long-term calculations stay correct. Where a window reaches back over
+purged data — the last 365 days, with seven days of recorder retention —
+the first partial hour is estimated by pro-rating that hour's statistics:
+see `estimated`.
 
 **Enables short recorder history (`purge_keep_days`).** Statistics are never
 purged. This component stores its key data in long-term statistics, so the
-recorder can be set to purge after a few days, with no impact to its graphs
-or sensors (save sub-hour pro-rating). `history_stats` requires a long recorder storage to function
-over long windows.
+recorder can be set to purge after a few days, with no impact on its graphs
+or sensors (save sub-hour pro-rating). `history_stats` needs a long recorder
+retention to work over long windows.
 
 **Every state from a single config.** A heat pump's `hvac_action` has
 `heating`, `cooling`, `idle`, `defrosting` and whatever next year's firmware
@@ -1085,8 +1082,7 @@ adds. One entry here records all of them, duration and count, and a state
 that appears later gets its statistics the first hour it is seen.
 `history_stats` matches one set of states per sensor and merges the set into
 one figure, so *time in each of N states* is N sensors, counts are N more,
-and a new state is two more to be manually added.
-
+and a new state is two more to add by hand.
 
 **Hours that sum to the day.** The states an entity was in during an hour
 are written with the time each had, and those add up to the hour, so a
@@ -1102,9 +1098,9 @@ switch-on is 1 with a daily window and 24 with an hourly one, since the
 light is present in every hour. Counting transitions gives meaningful
 long-term statistics.
 
-**State masking.** This component enables arbitrary masking/combining of
-states - so if it's known that e.g. `unavailable` means `off`, it can be
-recorded that way.
+**State masking.** This component allows any masking or combining of
+states — so where `unavailable` is known to mean `off`, it can be recorded
+that way.
 
 ### What stays with `history_stats`
 
