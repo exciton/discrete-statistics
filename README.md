@@ -1235,3 +1235,15 @@ the old entity: a notification asks you to update it.
   time it runs again cannot be compiled and leave a hole in the statistics
   (see *Gaps*) — unless the entity did not change at all across them, which
   its own last row can vouch for.
+- If the entity being recorded is removed outright, the sensors derived from
+  it are not removed with it: they belong to this integration's config entry
+  rather than to the device, so Home Assistant detaches them from the device
+  and leaves them standing. One left that way still carries a name written
+  relative to the device — "Count this month" — with no device in front of
+  it any more, and reads as that bare phrase until the next reload or
+  restart. A device being removed is not this case: that clears the entity's
+  device as well, which is a change the sensors follow on their own.
+  Reloading whenever a recorded entity disappears would fire through
+  ordinary integration churn, since plenty of integrations remove and re-add
+  their entities on a reload of their own, and that costs more than a wrong
+  name in a case the repair issue is already warning about.

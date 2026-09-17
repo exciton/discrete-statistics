@@ -334,6 +334,23 @@ leaking into a title looked like. The registry comes before the state because
 attributes are stripped while an entity is unavailable, and because it holds
 what the user asked for when the two disagree.
 
+`naming.entity_naming` answers the other half, for the sensors: which device
+they belong on and what to call them there. On the source entity's device the
+composed title goes device-relative — the device's name stripped from its
+front, `has_entity_name` true — so Home Assistant prefixes it exactly once. A
+*typed* name keeps `has_entity_name` false, because core strips a device
+prefix the user typed themselves before prefixing
+(`entity_registry._async_get_full_entity_name`, the `if not has_entity_name`
+arm); true there would skip that strip and render "Grid Grid My meter".
+`_strip_prefix` mirrors `_async_strip_prefix_from_entity_name`, which is
+private and can change under us: what guards the mirror is the end-to-end
+assertions on `hass.states.get(...).name` in `tests/test_sensor.py` and
+`tests/test_state_sensor.py`, which render through core's own function and
+fail when the two disagree. The subentry's *title* stays whole — it names the
+subentry on the entry's page, while the device-relative string names the
+entity — so `apply` compares the naming result and never the title, or an
+update carrying no change would report one every time.
+
 No `integration_type` in the manifest, deliberately. It reaches one thing:
 the heading over the entries on the integration's page, which the frontend
 picks from a fixed table keyed on the type
