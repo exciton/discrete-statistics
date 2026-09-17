@@ -125,8 +125,10 @@ change.
 | `blank` | `unknown` | what to do with a state that has no letters or digits |
 | `min_duration` | — | how long a spell of a conditionally recorded state must last |
 
-All four are available in the UI as well; `states` is the options dialog's
-**States** section, and the `ignore` default is YAML-only.
+All of these are available in the UI as well: `entity_id` is the entity you
+pick when adding the integration, `states` and `blank` are the options
+dialog's **States** section, and the rest are its fields. Only the `ignore`
+default is YAML-only.
 
 `default` accepts:
 
