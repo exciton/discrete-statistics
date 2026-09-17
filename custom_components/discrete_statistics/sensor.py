@@ -334,7 +334,6 @@ class FilteredStateSensor(RestoreEntity, SensorEntity):
         self._timer: CALLBACK_TYPE | None = None
         self._attr_unique_id = subentry.subentry_id
         self._source = entry.data[CONF_ENTITY_ID]
-        self._naming: EntityNaming | None = None
         # Set before adding: the platform takes it as the suggested object
         # id. A reconfigure keeps the entity and so this id, since the
         # unique id is the subentry's.
@@ -368,7 +367,6 @@ class FilteredStateSensor(RestoreEntity, SensorEntity):
         naming = entity_naming(
             hass, self._source, subentry.title, subentry.data.get(CONF_NAME)
         )
-        self._naming = naming
         self.device_entry = naming.device
         self._attr_has_entity_name = naming.has_entity_name
         self._attr_name = naming.name

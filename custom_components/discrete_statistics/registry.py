@@ -249,8 +249,10 @@ def async_setup(hass: HomeAssistant) -> None:
             and (entry := _entry_for(hass, data["entity_id"])) is not None
         ):
             # The reload rebuilds the sensors, and it is construction that
-            # reads the source's device and names them against it.
-            await hass.config_entries.async_reload(entry.entry_id)
+            # reads the source's device and names them against it. Scheduled,
+            # not awaited: core's advice for an integration reloading itself,
+            # and a raise here would skip the review below.
+            hass.config_entries.async_schedule_reload(entry.entry_id)
         async_review_missing(hass)
 
     @callback
