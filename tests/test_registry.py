@@ -670,18 +670,27 @@ async def test_a_registry_update_we_do_not_care_about_reloads_nothing(
     assert entry.state is ConfigEntryState.LOADED
 
 
-async def test_a_renamed_source_carries_its_sensors_device_and_name(
+async def test_a_renamed_source_carries_its_sensors_onto_its_new_device(
     recorder_utc, freezer
 ):
-    """The rename path already reloads, so the device link follows from it."""
-    hass = recorder_utc
-    device = await on_a_device(hass, "Grid")
-    await with_a_sensor(hass, freezer)
+    """The rename path already reloads, so the device link follows from it.
 
-    er.async_get(hass).async_update_entity(ENTITY, new_entity_id=NEW)
+    A rename and a move in one registry update is one event carrying both
+    changes, so it takes the rename branch - and only the reload inside
+    `async_follow` can land the sensor on the new device.
+    """
+    hass = recorder_utc
+    await on_a_device(hass, "Grid")
+    other = a_device(hass, "Grid Status")
+    await with_a_sensor(hass, freezer)
+    assert sensor_entry(hass).original_name == "Status Today"
+
+    er.async_get(hass).async_update_entity(
+        ENTITY, new_entity_id=NEW, device_id=other.id
+    )
     await settled(hass)
 
     after = sensor_entry(hass)
-    assert after.device_id == device.id
+    assert after.device_id == other.id
     assert after.has_entity_name is True
-    assert after.original_name == "Status Today"
+    assert after.original_name == "Today"
