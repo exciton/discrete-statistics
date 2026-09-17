@@ -674,7 +674,7 @@ reaches back as far as they do, and the recorder's retention does not
 shrink it.
 
 They are opt-in, one at a time. On the integration's page, open the entry
-for the entity and choose **Add sensor**:
+for the entity and choose **Add period sensor**:
 
 ![An entry's row on the integration page, expanded to show three sensors under it — count this month, on count today, on share this month — with its menu open on Add sensor](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/add-sensor.png)
 
@@ -784,7 +784,7 @@ afterwards is fine, the exclude is only a convenience. Nothing here adds a
 `state_class`, so the recorder does not build a second set of long-term
 statistics over these either.
 
-## The recorded state sensor
+## The filtered state sensor
 
 The sensors above are numbers out of the history. This one is the present
 tense: **the state the entity is in right now, as this entry records it** —
@@ -792,7 +792,7 @@ mapped, filtered and debounced by the entry's own settings. It exists so an
 automation can act on the same timeline the statistics are built from,
 without re-encoding the mapping in a template.
 
-One per entry, from the entry's menu: **Add recorded state sensor**. The only
+One per entry, from the entry's menu: **Add filtered state sensor**. The only
 field is the name.
 
 What it is for is the awkward half of the settings above:

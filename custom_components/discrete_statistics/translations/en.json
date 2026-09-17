@@ -88,9 +88,9 @@
   },
   "config_subentries": {
     "sensor": {
-      "entry_type": "Sensor",
+      "entry_type": "Period sensor",
       "initiate_flow": {
-        "user": "Add sensor"
+        "user": "Add period sensor"
       },
       "step": {
         "user": {
@@ -177,14 +177,14 @@
       }
     },
     "state": {
-      "entry_type": "Recorded state",
+      "entry_type": "Filtered state",
       "initiate_flow": {
-        "user": "Add recorded state sensor"
+        "user": "Add filtered state sensor"
       },
       "step": {
         "user": {
-          "title": "Add a recorded state sensor",
-          "description": "The state **{entity}** is in, as this entry records it: mapped, ignored and debounced by the entry's own settings, so an automation can follow the same timeline the statistics are built from.\n\nIt never reads unavailable because the entity does. A state the entry ignores is carried across, so a reload, a restart or a device dropping off the network leaves this sensor holding the state it was in.",
+          "title": "Add a filtered state sensor",
+          "description": "The state **{entity}** is in, as this entry records it: mapped, ignored and debounced by the entry's own settings, so an automation can follow the same timeline the statistics are built from.\n\nA state the entry ignores is carried across, so an entry that ignores unavailable - the default - leaves this sensor holding the state it was in through a reload, a restart or a device dropping off the network. One that records unavailable shows it like any other state.",
           "data": {
             "name": "Name"
           },
@@ -193,8 +193,8 @@
           }
         },
         "reconfigure": {
-          "title": "Recorded state sensor",
-          "description": "The state **{entity}** is in, as this entry records it: mapped, ignored and debounced by the entry's own settings, so an automation can follow the same timeline the statistics are built from.\n\nIt never reads unavailable because the entity does. A state the entry ignores is carried across, so a reload, a restart or a device dropping off the network leaves this sensor holding the state it was in.",
+          "title": "Filtered state sensor",
+          "description": "The state **{entity}** is in, as this entry records it: mapped, ignored and debounced by the entry's own settings, so an automation can follow the same timeline the statistics are built from.\n\nA state the entry ignores is carried across, so an entry that ignores unavailable - the default - leaves this sensor holding the state it was in through a reload, a restart or a device dropping off the network. One that records unavailable shows it like any other state.",
           "data": {
             "name": "Name"
           },
@@ -204,7 +204,7 @@
         }
       },
       "abort": {
-        "already_configured": "This entry already has a recorded state sensor. An entity is in one state at a time, so a second would say the same thing.",
+        "already_configured": "This entry already has a filtered state sensor. An entity is in one state at a time, so a second would say the same thing.",
         "reconfigure_successful": "The sensor was updated."
       }
     }
