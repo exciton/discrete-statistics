@@ -784,6 +784,56 @@ afterwards is fine, the exclude is only a convenience. Nothing here adds a
 `state_class`, so the recorder does not build a second set of long-term
 statistics over these either.
 
+## The recorded state sensor
+
+The sensors above are numbers out of the history. This one is the present
+tense: **the state the entity is in right now, as this entry records it** —
+mapped, filtered and debounced by the entry's own settings. It exists so an
+automation can act on the same timeline the statistics are built from,
+without re-encoding the mapping in a template.
+
+One per entry, from the entry's menu: **Add recorded state sensor**. The only
+field is the name.
+
+What it is for is the awkward half of the settings above:
+
+- **Ignored states are carried across.** Under the default *Known states
+  only*, a device that drops off the network reads `unavailable` — and this
+  sensor goes on reading whatever it was in. So does a reload, a restart, or
+  the entity being removed and added back by a YAML reload from developer
+  tools. An automation on `sensor.filtered_discrete_…` does not fire on any
+  of them.
+- **Mapped states are already mapped.** `heat` and `cool` mapped onto
+  `active` read `active` here, so the automation matches one state rather
+  than a list that has to be kept in step with the mapping.
+- **Short spells are debounced properly.** Under `ignore_short` the sensor
+  does not move until the new state has lasted `min_duration`, and a bounce
+  that ends sooner never appears at all. A `for:` in a trigger cannot do
+  this: it restarts on any state change, so a contact that reads `off`,
+  `unavailable`, `off` resets the timer, and this does not.
+
+It reads `unknown` before it has ever seen a recordable state — an entity
+that has only ever been `unavailable`, say. It never reads `unavailable`
+itself, unless the entry's settings genuinely record a state of that name.
+
+```yaml
+automation:
+  - triggers:
+      - trigger: state
+        entity_id: sensor.filtered_discrete_binary_sensor_grid_status
+        to: "unavailable"
+        for: "00:05:00"
+```
+
+The ID is `sensor.filtered_discrete_<entity>` —
+`sensor.filtered_discrete_binary_sensor_front_door`. Deliberately *not* the
+`sensor.discrete_` prefix the period sensors use, so the one-line exclude
+above leaves it alone: this one changes only when the entity's recorded
+state changes, which is a row worth keeping and far fewer of them than the
+entity itself writes. Exclude it by name if you would rather not have it in
+the history at all — nothing here reads it back, and the statistics are the
+long-term record either way.
+
 ## Backfilling
 
 An entity that has not changed within the recorder's window has no history at

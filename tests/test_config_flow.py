@@ -15,6 +15,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import CoreState
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.components.recorder.common import (
@@ -50,6 +51,7 @@ from custom_components.discrete_statistics.const import (
     METRIC_DURATION,
     METRIC_SHARE,
     SUBENTRY_SENSOR,
+    SUBENTRY_STATE,
 )
 from custom_components.discrete_statistics.payload import metadata_for
 from custom_components.discrete_statistics.statistic_ids import build
@@ -1574,3 +1576,87 @@ async def test_reconfiguring_offers_the_window_back(recorder):
         "minutes": 0,
         "seconds": 0,
     }
+
+
+# --- the state subentry flow -----------------------------------------------
+
+FILTERED = "sensor.filtered_discrete_binary_sensor_grid_status"
+
+
+async def _state_form(hass, entry, subentry_id=None):
+    context = (
+        {"source": SOURCE_USER}
+        if subentry_id is None
+        else {"source": SOURCE_RECONFIGURE, "subentry_id": subentry_id}
+    )
+    return await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_STATE), context=context
+    )
+
+
+async def test_the_state_flow_creates_a_subentry_and_its_sensor(recorder):
+    hass = recorder
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+
+    result = await _state_form(hass, entry)
+    assert result["type"] is FlowResultType.FORM
+    result = await hass.config_entries.subentries.async_configure(result["flow_id"], {})
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == "Grid Status state"
+    [subentry] = entry.subentries.values()
+    assert subentry.subentry_type == SUBENTRY_STATE
+    assert dict(subentry.data) == {CONF_NAME: None}
+    assert hass.states.get(FILTERED) is not None
+
+
+async def test_a_typed_name_titles_the_state_sensor(recorder):
+    hass = recorder
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+
+    result = await _state_form(hass, entry)
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], {CONF_NAME: "Grid"}
+    )
+    await hass.async_block_till_done()
+    assert result["title"] == "Grid"
+    [subentry] = entry.subentries.values()
+    assert subentry.data[CONF_NAME] == "Grid"
+
+
+async def test_only_one_state_sensor_per_entry(recorder):
+    # An entity is in one state at a time, so a second would be the same
+    # sensor twice.
+    hass = recorder
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+    result = await _state_form(hass, entry)
+    await hass.config_entries.subentries.async_configure(result["flow_id"], {})
+    await hass.async_block_till_done()
+
+    result = await _state_form(hass, entry)
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "already_configured"
+
+
+async def test_the_state_sensor_can_be_renamed(recorder):
+    hass = recorder
+    entry = await _entry_with(hass, {CONF_DEFAULT: DEFAULT_RECORD_KNOWN})
+    result = await _state_form(hass, entry)
+    await hass.config_entries.subentries.async_configure(result["flow_id"], {})
+    await hass.async_block_till_done()
+    [subentry_id] = entry.subentries
+    unique_id = er.async_get(hass).async_get(FILTERED).unique_id
+
+    result = await _state_form(hass, entry, subentry_id)
+    assert _suggested_value(result, CONF_NAME) is None
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], {CONF_NAME: "Outage state"}
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+    assert entry.subentries[subentry_id].title == "Outage state"
+    # The entity is kept: its unique id is the subentry's, not its name.
+    assert er.async_get(hass).async_get(FILTERED).unique_id == unique_id

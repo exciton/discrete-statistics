@@ -175,6 +175,38 @@
       "abort": {
         "reconfigure_successful": "The sensor was updated."
       }
+    },
+    "state": {
+      "entry_type": "Recorded state",
+      "initiate_flow": {
+        "user": "Add recorded state sensor"
+      },
+      "step": {
+        "user": {
+          "title": "Add a recorded state sensor",
+          "description": "The state **{entity}** is in, as this entry records it: mapped, ignored and debounced by the entry's own settings, so an automation can follow the same timeline the statistics are built from.\n\nIt never reads unavailable because the entity does. A state the entry ignores is carried across, so a reload, a restart or a device dropping off the network leaves this sensor holding the state it was in.",
+          "data": {
+            "name": "Name"
+          },
+          "data_description": {
+            "name": "Leave blank for the entity's name and the word state."
+          }
+        },
+        "reconfigure": {
+          "title": "Recorded state sensor",
+          "description": "The state **{entity}** is in, as this entry records it: mapped, ignored and debounced by the entry's own settings, so an automation can follow the same timeline the statistics are built from.\n\nIt never reads unavailable because the entity does. A state the entry ignores is carried across, so a reload, a restart or a device dropping off the network leaves this sensor holding the state it was in.",
+          "data": {
+            "name": "Name"
+          },
+          "data_description": {
+            "name": "Leave blank for the entity's name and the word state."
+          }
+        }
+      },
+      "abort": {
+        "already_configured": "This entry already has a recorded state sensor. An entity is in one state at a time, so a second would say the same thing.",
+        "reconfigure_successful": "The sensor was updated."
+      }
     }
   },
   "selector": {

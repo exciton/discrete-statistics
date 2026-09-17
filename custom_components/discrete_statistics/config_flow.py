@@ -75,12 +75,14 @@ from .const import (
     METRIC_DURATION,
     SENSOR_METRICS,
     SUBENTRY_SENSOR,
+    SUBENTRY_STATE,
 )
 from .naming import (
     async_warm_state_translations,
     describe,
     display_name,
     sensor_title,
+    state_title,
     state_translator,
 )
 from .payload import readable_state
@@ -734,6 +736,70 @@ class SensorSubentryFlow(ConfigSubentryFlow):
         )
 
 
+class StateSubentryFlow(ConfigSubentryFlow):
+    """Add or rename the entry's filtered-state sensor.
+
+    One field, the name: the sensor reports the entity's recorded state
+    and there is nothing else to choose - the states, the mapping and the
+    short-spell threshold are the entry's, which is the point of it.
+
+    At most one per entry, because an entity is in one state at a time. A
+    second would be the same sensor twice, so `user` refuses it rather
+    than offering a form that can only duplicate.
+    """
+
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        if any(
+            subentry.subentry_type == SUBENTRY_STATE
+            for subentry in self._get_entry().subentries.values()
+        ):
+            return self.async_abort(reason="already_configured")
+        return await self._async_form("user", user_input, None)
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        return await self._async_form(
+            "reconfigure", user_input, self._get_reconfigure_subentry()
+        )
+
+    async def _async_form(
+        self,
+        step_id: str,
+        user_input: dict[str, Any] | None,
+        subentry: ConfigSubentry | None,
+    ) -> SubentryFlowResult:
+        entry = self._get_entry()
+        cfg = entity_config_from_entry(entry.data, entry.options)
+        if user_input is not None:
+            name = user_input.get(CONF_NAME) or None
+            title = name or state_title(self.hass, cfg)
+            data = {CONF_NAME: name}
+            if subentry is None:
+                return self.async_create_entry(title=title, data=data)
+            return self.async_update_and_abort(entry, subentry, data=data, title=title)
+
+        stored = subentry.data if subentry else {}
+        current = {k: v for k, v in stored.items() if v is not None}
+        return self.async_show_form(
+            step_id=step_id,
+            data_schema=self.add_suggested_values_to_schema(
+                vol.Schema(
+                    {vol.Optional(CONF_NAME): _name_field(state_title(self.hass, cfg))}
+                ),
+                current,
+            ),
+            description_placeholders={
+                "entity": (
+                    f"[{describe(self.hass, cfg.entity_id, cfg.name)}]"
+                    f"(/history?entity_id={cfg.entity_id})"
+                ),
+            },
+        )
+
+
 class DiscreteStatisticsConfigFlow(ConfigFlow, domain=DOMAIN):
     """Create one tracked entity.
 
@@ -821,7 +887,10 @@ class DiscreteStatisticsConfigFlow(ConfigFlow, domain=DOMAIN):
         cls, config_entry: ConfigEntry
     ) -> dict[str, type[ConfigSubentryFlow]]:
         """Period sensors hang off the entry as subentries."""
-        return {SUBENTRY_SENSOR: SensorSubentryFlow}
+        return {
+            SUBENTRY_SENSOR: SensorSubentryFlow,
+            SUBENTRY_STATE: StateSubentryFlow,
+        }
 
 
 class DiscreteStatisticsOptionsFlow(OptionsFlow):
