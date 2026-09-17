@@ -779,6 +779,40 @@ The sensor belongs to the entry: its settings are edited from the entry's
 page and deleting it there removes the sensor. The entry itself still has
 no entities.
 
+**Where the sensor appears.** It is listed on the source entity's device,
+alongside the entity it is derived from, and each of the two shows under
+the other's **Related** tab. The device is the only join Home Assistant
+offers — there is no "derived from" edge — and one attachment makes the
+relationship visible in both directions at once. Nothing else moves: the
+sensor still belongs to this integration's entry, it is still listed under
+that entry on the integration's page, and the device stays the source
+integration's. Moving the source entity to another device takes its
+sensors with it.
+
+A source entity with no device — a template entity, a group, a `person`,
+an `input_boolean` — gives nothing to attach to, so those sensors have no
+device and no link. That is normal rather than a failure, and they keep
+the whole name they have always had.
+
+On a device the name is the device's name plus what tells the sensor
+apart — "Kitchen Lights Count this month", not the device's name twice.
+Home Assistant prefixes the device's name to every entity on it, so the
+sensor supplies only the rest, the composed title with the device's name
+stripped from its front. Because nothing here stores the device's name,
+renaming the device renames its sensors with it. A name typed into
+**Name** is not shown bare either: Home Assistant prefixes the device to
+it as it does to any other, so "My meter" on a device called "Grid" reads
+"Grid My meter". Only Home Assistant's own **Rename**, on the entity
+itself, gives a name with no prefix at all.
+
+**Sensors that already exist are renamed when you upgrade.** They take
+the device and the device-relative name the first time Home Assistant
+sets the entry up afterwards. Their entity IDs do not change — those are
+assigned once and kept — so automations, scripts and dashboard rows that
+name a sensor keep working; anything that shows a friendly name shows the
+new wording. A name you set with Home Assistant's own **Rename** is left
+alone, since that one is yours and nothing here overwrites it.
+
 A time sensor is a duration in hours with two decimals, a share a
 percentage with one, a count a whole number. Each carries `period_start`
 and `period_end`, `compiled_until` — the end of the last compiled hour,
@@ -871,6 +905,13 @@ state changes, which is a row worth keeping and far fewer of them than the
 entity itself writes. Exclude it by name if you would rather not have it in
 the history at all — nothing here reads it back, and the statistics are the
 long-term record either way.
+
+It is listed on the source entity's device like the period sensors above,
+so the two show under each other's **Related** tab, and it is named the
+same way: the device's name and the rest, "Kitchen Lights State". A source
+entity with no device leaves it without one too, keeping the whole name it
+has always had. One that already exists is renamed on upgrade and keeps its
+entity ID, exactly as described there.
 
 ## Backfilling
 
