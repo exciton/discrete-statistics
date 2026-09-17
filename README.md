@@ -14,34 +14,43 @@ as external statistics, which are never purged.
 - Works with any entity whose state is a label: binary sensors, covers,
   climate, `hvac_action`, enum sensors, `input_select`, `person`…
 - Records hourly long-term statistics per state: time spent in it, and the
-  number of times it was entered
+  number of times it was entered — every state the entity has, including one
+  it starts reporting next year
 - Stored as external statistics, so they are never purged — kept forever,
   independent of `purge_keep_days`
 - Backfills from the recorder's existing history on first run, so a new
   entity starts with whatever the recorder still holds rather than from zero
 - Ships its own card: pick the entity and it draws every state, as
   stacked or plain bars or lines per hour, day, week, month or year, in
-  hours, days or as a percentage of the time — following the dashboard's
-  date picker if there is one
-- Draws with the stock statistics-graph card too, with `change` for totals
-  over days, weeks and months
+  hours, days or as a percentage of the time. The stock statistics-graph
+  card draws them too
 - Period sensors, opt-in: "time on today", "share of this month at the
   office", "openings this year" — a number read from the statistics, so it
-  never shrinks when the recorder purges, following the entity live
-- New states are picked up automatically as they appear, in the card as
-  well as the statistics; no per-state configuration needed
-- `unavailable`, `unknown`, or any state you choose can be ignored, with
-  the previous state carried across the gap instead of a hole
-- Debounce: a state that lasts less than a minimum duration can be ignored,
-  per state or for every state
-- States can be mapped onto one another (`heat_cool` → `heating`)
-- Set up from the UI or YAML
-- Recalculate any range at any time — it only rewrites what it has source
-  data for, and never deletes anything
+  never shrinks when the recorder purges
+- Configured once per entity, from the UI or YAML: which states to record,
+  which to ignore and carry the previous state across, how long a spell must
+  last to count, and which states to record as one
 
 It is not a replacement for `history_stats`, which answers a different
 question; [the comparison below](#compared-with-history_stats) says which to
 reach for.
+
+## Contents
+
+- [Installation](#installation)
+- [A first chart](#a-first-chart)
+- [Configuration](#configuration)
+- [Configuring from the UI](#configuring-from-the-ui)
+- [Statistics produced](#statistics-produced)
+- [Charts](#charts)
+- [The card](#the-card)
+- [Period sensors](#period-sensors)
+- [The filtered state sensor](#the-filtered-state-sensor)
+- [Backfilling](#backfilling)
+- [How it works](#how-it-works)
+- [Compared with `history_stats`](#compared-with-history_stats)
+- [Renaming and replacing entities](#renaming-and-replacing-entities)
+- [Limitations](#limitations)
 
 ## Installation
 
@@ -65,6 +74,33 @@ Or by hand:
 
 Copy `custom_components/discrete_statistics` into your `config/custom_components`
 directory and restart Home Assistant.
+
+## A first chart
+
+Nothing has to be decided up front but the entity. Add the integration —
+Settings → Devices & Services → **Add integration** → **Discrete
+Statistics** — and pick one. The defaults record every real state it
+reports and carry `unavailable` and `unknown` across rather than counting
+them as changes, which is what most entities want; [Configuring from the
+UI](#configuring-from-the-ui) covers the rest of the dialog.
+
+Compiling starts in the background as soon as the entry is created, over
+whatever history the recorder still holds, and a notification says how many
+hours it compiled. Each hour after that is compiled at `:03`, once the hour
+has closed.
+
+Then put the card on a dashboard — **Discrete Statistics** in the card
+picker, or by hand:
+
+```yaml
+type: custom:discrete-statistics-card
+entity: binary_sensor.front_door
+```
+
+That draws the last thirty days of the entity's states as stacked bars, and
+nothing needs adding under Resources. [The card](#the-card) has the rest of
+its options; [Period sensors](#period-sensors) puts one of the same numbers
+on a dashboard as a figure rather than a chart.
 
 ## Configuration
 
@@ -676,7 +712,7 @@ shrink it.
 They are opt-in, one at a time. On the integration's page, open the entry
 for the entity and choose **Add period sensor**:
 
-![An entry's row on the integration page, expanded to show three sensors under it — count this month, on count today, on share this month — with its menu open on Add sensor](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/add-sensor.png)
+![An entry's row on the integration page, expanded to show four sensors under it — three period sensors, Kitchen count this month, Kitchen On share this month and Kitchen On time last 24 hours, and a filtered state sensor, Kitchen state — with its menu open on Add period sensor and Add filtered state sensor](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/add-sensor.png)
 
 - **States** — one or more, added together, from the states the entity has
   statistics for and the options of an enum sensor; any state can be typed
