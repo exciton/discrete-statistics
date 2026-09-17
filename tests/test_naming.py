@@ -69,6 +69,7 @@ async def test_naming_leaves_a_title_the_device_does_not_prefix(hass):
     naming = entity_naming(
         hass, "light.utility", "Utility Lights count this month", None
     )
+    assert naming.has_entity_name is False
     assert naming.name == "Utility Lights count this month"
 
 
@@ -81,3 +82,44 @@ async def test_two_sensors_that_strip_alike_share_a_name(hass):
     first = entity_naming(hass, "light.one", "Shed count this month", None)
     second = entity_naming(hass, "light.two", "Shed count this month", None)
     assert first.name == second.name == "Count this month"
+
+
+async def test_naming_requires_a_separator_after_the_prefix(hass):
+    # Prefix "Kitchen Lights" matches literally at the front of
+    # "Kitchen LightsLeft ...", but with no separator following it merges
+    # into the next word — not a meaningful prefix match.
+    await with_device(hass, "light.left", "Kitchen Lights")
+    naming = entity_naming(
+        hass, "light.left", "Kitchen LightsLeft count this month", None
+    )
+    assert naming.has_entity_name is False
+    assert naming.name == "Kitchen LightsLeft count this month"
+
+
+async def test_naming_with_no_device_name_keeps_the_whole_title(hass):
+    entry = MockConfigEntry(domain="test")
+    entry.add_to_hass(hass)
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={("test", "nameless")},
+    )
+    assert device.name is None
+    assert device.name_by_user is None
+    er.async_get(hass).async_get_or_create(
+        "light",
+        "test",
+        "light.nameless",
+        suggested_object_id="nameless",
+        device_id=device.id,
+    )
+    naming = entity_naming(hass, "light.nameless", "Kitchen count this month", None)
+    assert naming.device is not None
+    assert naming.has_entity_name is False
+    assert naming.name == "Kitchen count this month"
+
+
+async def test_naming_on_a_title_that_is_exactly_the_device_name(hass):
+    await with_device(hass, "light.kitchen", "Kitchen Lights")
+    naming = entity_naming(hass, "light.kitchen", "Kitchen Lights", None)
+    assert naming.has_entity_name is True
+    assert naming.name == ""
