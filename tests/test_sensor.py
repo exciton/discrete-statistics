@@ -493,6 +493,25 @@ async def test_a_typed_name_stands_on_a_device(recorder_utc, freezer):
     assert hass.states.get(ON_TODAY).name == "Grid My meter"
 
 
+async def test_a_typed_name_that_starts_with_the_device_is_not_doubled(
+    recorder_utc, freezer
+):
+    """Why a typed name keeps `has_entity_name` false.
+
+    Core strips the device's name from the front of a name typed by the
+    person before prefixing it, so the prefix they typed survives exactly
+    once. Carrying `has_entity_name` instead would skip that strip and
+    render "Grid Grid My meter".
+    """
+    hass = recorder_utc
+    await on_a_device(hass)
+    await seeded(hass, freezer, [sensor("Grid My meter", ["on"], name="Grid My meter")])
+    assert hass.states.get(ON_TODAY).name == "Grid My meter"
+    registered = er.async_get(hass).async_get(ON_TODAY)
+    assert registered.has_entity_name is False
+    assert registered.original_name == "Grid My meter"
+
+
 async def test_an_existing_sensor_gains_the_device_and_the_name(recorder_utc, freezer):
     """The migration, which has no code behind it.
 
