@@ -106,7 +106,7 @@ async def async_setup_entry(
 
     @callback
     def add_state(cfg: EntityConfig, subentry: ConfigSubentry) -> None:
-        sensor = FilteredStateSensor(cfg, entry, subentry)
+        sensor = FilteredStateSensor(hass, cfg, entry, subentry)
         states[subentry.subentry_id] = sensor
         async_add_entities([sensor], config_subentry_id=subentry.subentry_id)
 
@@ -145,7 +145,7 @@ async def async_setup_entry(
                 # in place, so the history keeps no seam at the edit - which
                 # means the dispositions can move under a live sensor and
                 # this is the only place it hears about it.
-                states[subentry_id].apply(cfg, subentry)
+                states[subentry_id].apply(hass, cfg, subentry)
             else:
                 add_state(cfg, subentry)
 
@@ -323,18 +323,25 @@ class FilteredStateSensor(RestoreEntity, SensorEntity):
     _attr_native_unit_of_measurement = None
 
     def __init__(
-        self, cfg: EntityConfig, entry: ConfigEntry, subentry: ConfigSubentry
+        self,
+        hass: HomeAssistant,
+        cfg: EntityConfig,
+        entry: ConfigEntry,
+        subentry: ConfigSubentry,
     ) -> None:
-        self._cfg = cfg
         self._tracker: Tracker | None = None
         self._unsubscribe: CALLBACK_TYPE | None = None
         self._timer: CALLBACK_TYPE | None = None
         self._attr_unique_id = subentry.subentry_id
-        self._attr_name = subentry.title
+        self._source = entry.data[CONF_ENTITY_ID]
+        self._naming: EntityNaming | None = None
         # Set before adding: the platform takes it as the suggested object
         # id. A reconfigure keeps the entity and so this id, since the
         # unique id is the subentry's.
-        self.entity_id = filtered_entity_id(entry.data[CONF_ENTITY_ID])
+        self.entity_id = filtered_entity_id(self._source)
+        # `hass` is an argument because the platform sets it on the entity
+        # only after the add, and the add is what writes `device_id`.
+        self.apply(hass, cfg, subentry)
 
     async def async_added_to_hass(self) -> None:
         """Open the tracker on what is known, then follow the entity."""
@@ -346,8 +353,10 @@ class FilteredStateSensor(RestoreEntity, SensorEntity):
         )
 
     @callback
-    def apply(self, cfg: EntityConfig, subentry: ConfigSubentry) -> None:
-        """Take the subentry's title, and rebuild on a change of settings.
+    def apply(
+        self, hass: HomeAssistant, cfg: EntityConfig, subentry: ConfigSubentry
+    ) -> None:
+        """Take the subentry's naming, and rebuild on a change of settings.
 
         The dispositions decide what every raw state means, so a change to
         them invalidates the spell in progress and the state carried into
@@ -356,7 +365,13 @@ class FilteredStateSensor(RestoreEntity, SensorEntity):
         have produced it, which is the same question `_restorable` answers
         for a restore.
         """
-        self._attr_name = subentry.title
+        naming = entity_naming(
+            hass, self._source, subentry.title, subentry.data.get(CONF_NAME)
+        )
+        self._naming = naming
+        self.device_entry = naming.device
+        self._attr_has_entity_name = naming.has_entity_name
+        self._attr_name = naming.name
         if self._tracker is None:
             self._cfg = cfg
             return

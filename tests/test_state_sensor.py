@@ -11,6 +11,7 @@ import pytest
 from homeassistant.config_entries import ConfigSubentryData
 from homeassistant.const import CONF_ENTITY_ID, CONF_NAME, STATE_UNKNOWN
 from homeassistant.core import State
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import (
@@ -376,3 +377,95 @@ def _subentry(entry):
         title="Grid Status state",
         unique_id=None,
     )
+
+
+async def on_a_device(hass, device_name="Grid"):
+    """Put the source entity on a device, as its own integration would."""
+    source = MockConfigEntry(domain="test")
+    source.add_to_hass(hass)
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=source.entry_id,
+        identifiers={("test", device_name)},
+        name=device_name,
+    )
+    er.async_get(hass).async_get_or_create(
+        "binary_sensor",
+        "test",
+        ENTITY,
+        suggested_object_id="grid_status",
+        device_id=device.id,
+    )
+    return device
+
+
+async def test_a_filtered_sensor_joins_its_source_entitys_device(recorder_utc, freezer):
+    hass = recorder_utc
+    device = await on_a_device(hass)
+    await setup(hass)
+    registered = er.async_get(hass).async_get(FILTERED)
+    assert registered.device_id == device.id
+    assert registered.has_entity_name is True
+    assert registered.original_name == "Status state"
+    # Home Assistant prefixes the device once.
+    assert hass.states.get(FILTERED).name == "Grid Status state"
+
+
+async def test_a_filtered_sensor_without_a_source_device_keeps_the_whole_name(
+    recorder_utc, freezer
+):
+    hass = recorder_utc
+    await setup(hass)
+    registered = er.async_get(hass).async_get(FILTERED)
+    assert registered.device_id is None
+    assert registered.has_entity_name is False
+    assert registered.original_name == "Grid Status state"
+    assert hass.states.get(FILTERED).name == "Grid Status state"
+
+
+async def test_a_typed_name_stands_on_a_device_for_the_filtered_sensor(
+    recorder_utc, freezer
+):
+    hass = recorder_utc
+    device = await on_a_device(hass)
+    await setup(hass, subentries=[state_subentry(name="My meter")])
+    registered = er.async_get(hass).async_get(FILTERED)
+    assert registered.device_id == device.id
+    assert registered.has_entity_name is False
+    assert registered.original_name == "My meter"
+    # Home Assistant prefixes a device's name onto an entity that does not
+    # carry `has_entity_name`, stripping what already matches.
+    assert hass.states.get(FILTERED).name == "Grid My meter"
+
+
+async def test_an_existing_filtered_sensor_gains_the_device_and_the_name(
+    recorder_utc, freezer
+):
+    """The migration, which has no code behind it.
+
+    A sensor registered before the source had a device is attached and
+    renamed by the next setup alone: `async_get_or_create` routes an
+    entity it already knows through an update with the device, the name
+    and the flag the platform passed.
+    """
+    hass = recorder_utc
+    device = await on_a_device(hass)
+    registry = er.async_get(hass)
+    before = registry.async_get_or_create(
+        "sensor",
+        DOMAIN,
+        "Grid Status state",
+        suggested_object_id=FILTERED.split(".")[1],
+        original_name="Grid Status state",
+        has_entity_name=False,
+    )
+    assert before.entity_id == FILTERED
+    assert before.device_id is None
+
+    await setup(hass)
+
+    after = registry.async_get(FILTERED)
+    assert after.id == before.id
+    assert after.entity_id == before.entity_id
+    assert after.device_id == device.id
+    assert after.has_entity_name is True
+    assert after.original_name == "Status state"
