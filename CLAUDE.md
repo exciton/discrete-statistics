@@ -79,8 +79,10 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
        │                    and tally: a timeline -> {state: (seconds, count)}
        ├─ statistic_ids     pure: build, parse and match an external statistic ID
        ├─ config ── canonicalise   pure: recorder rows -> canonical transitions
+       │   │    │    └─ filtered  pure: one row at a time -> the state the
+       │   │    │                 entity is in now, over canonicalise
        │   │    └─ config_flow    HA UI: entity -> EntityConfig, per entry;
-       │   │                      sensor subentries
+       │   │                      sensor and state subentries
        │   └─ statistic_ids       for the blank-state test
        ├─ naming            HA: entity, state -> the names a person recognises
        ├─ templates         HA: a template -> a timestamp; for config_flow
@@ -105,7 +107,8 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
        │        │
        │    coordinator     one refresh per entry: frame, tail, readings
        │        │
-       │    sensor          one entity per sensor subentry
+       │    sensor          one entity per sensor subentry, and the
+       │                    filtered-state sensor for a state subentry
        │        │
        │    registry        HA: the entity registry -> follow a rename,
        │                    fill a replacement's history, raise a repair
@@ -119,6 +122,9 @@ const ─┬─ bucketer          pure: transitions -> {(state, hour): (seconds,
 Everything except `compiler`, `rows`, `websocket`, `config_flow`, `naming`,
 `templates`, `coordinator`, `sensor` and `registry` is pure and testable
 without a `hass` instance.
+`filtered` is pure, and deliberately so: it is what the filtered-state
+sensor thinks with, and the sensor itself is the only part that needs
+`hass`.
 Keep it that way: if a change needs recorder access in a lower module, the
 design is drifting. Three recorder boundaries: `compiler` is the only
 module that writes — by two paths, `async_add_external_statistics` for
@@ -184,6 +190,74 @@ sensor on the listener stays, and a refresh that finds no `sensor`
 subentries returns before the drain and every read, so the last sensor
 leaving stops the work again — the sensors are opt-in, and so is the work
 behind them.
+
+The **filtered-state sensor** is the `state` subentry, at most one per
+entry, and it is the one sensor that never reads the recorder. It is the
+state machine and `filtered.Tracker`, so it answers in the time an event
+takes to arrive rather than behind the coordinator's debouncer and its
+queue drain — and it works on an entity with no watermark yet, which a
+`Timeline` cannot. It does not build the coordinator: a `state` subentry
+alone leaves the entry doing no periodic work at all.
+
+`filtered.Tracker` is the streaming form of the compile's read path, and
+the only reason the two cannot disagree is that the verdict itself is
+`canonicalise`'s. The tracker keeps the spell in progress rather than an
+answer, because live there is no next row to measure a spell against:
+`state(now)` is resolved against the instant asked for, so the same
+tracker reads one way before an `ignore_short` spell matures and another
+after it with no row in between, and `pending_until` is when to set a
+timer for. A spell is held as at most two rows because `canonicalise`
+reads exactly two things off one — its first row's timestamp, and the AND
+of its rows' `short` flags — so the first row and the first that clears
+the flag are the whole input. `tests/test_filtered.py` replays the same
+rows through both and asserts they agree; that test is what keeps the
+mirror honest, and it is the thing to extend when either side changes.
+
+Note that the early return in `observe` for an ignored state is a fast
+path and not the filter: `canonicalise` re-classifies the rows it is
+given, so a row wrongly kept still resolves to nothing. What the early
+return is load-bearing for is *not ending the spell in progress* — an
+ignored row landing inside a short spell must not cut it off and drop it.
+
+Three rules keep it from ever reporting what the entry does not record.
+The value comes only from `classify`, so an ignored state cannot appear.
+The entity's current state at start-up goes through `observe` rather than
+being taken as the answer, since at start-up it is usually `unavailable`.
+And a restored state is taken back only when `classify` maps a raw state
+of that name to itself (`sensor._restorable`) — which keeps `unknown` and
+`unavailable` out after a shutdown that removed the entity, without
+breaking an entry that maps onto `unavailable` deliberately, since a map
+target is recorded whatever the default says. Its own availability never
+follows the entity's: carrying a state across a device going offline is
+the point of it. Before anything recordable has been seen it is `unknown`,
+which is a different claim from `unavailable`.
+
+`new_state is None` — the entity leaving the state machine, which a YAML
+reload from developer tools does — reaches the tracker as `""`. That is
+what the recorder stores for it and what the history API hands back, so a
+compile of the same moment sees a blank state and `blank:` decides the
+rest. Skipping the event instead would disagree with the statistics for
+any entry whose `blank:` names a recorded state.
+
+An options edit does not reload the entry (`_async_entry_updated` applies
+it in place so the history keeps no seam), so `sensor.py`'s update
+listener is the only thing that tells a live sensor its dispositions
+moved; it reopens the tracker, keeping the carried state only if
+`_restorable` allows it under the new settings. That listener reads the
+config from the entry itself rather than from `entry_configs`, so it does
+not depend on which update listener runs first.
+
+Its entity ID is `sensor.filtered_discrete_<entity slug>`, deliberately
+outside the `sensor.discrete_` prefix: the README asks for the period
+sensors to be excluded from the recorder with one glob, and this one is
+worth recording — it writes a row only when the entity's recorded state
+changes. The state machine is what guarantees that, not our own check:
+`async_set` drops a write whose state and attributes both match what
+stands, and the attributes here are constant.
+
+No device class. `SensorDeviceClass.ENUM` wants an exhaustive `options`,
+and the recordable states are an open set unless the entry ignores by
+default.
 
 `registry.py` follows the entity registry, with one listener registered
 through `hass.bus.async_listen` and an `event_filter` — never

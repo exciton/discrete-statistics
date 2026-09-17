@@ -13,35 +13,44 @@ as external statistics, which are never purged.
 
 - Works with any entity whose state is a label: binary sensors, covers,
   climate, `hvac_action`, enum sensors, `input_select`, `person`…
-- Records hourly long-term statistics per state: time spent in it, and the
-  number of times it was entered
-- Stored as external statistics, so they are never purged — kept forever,
-  independent of `purge_keep_days`
+- Records each state hour by hour — the time spent in it and the number of
+  times it was entered — every state the entity has, including one it starts
+  reporting next year
+- Kept as external statistics, which are never purged: the history outlives
+  the recorder's own, so `purge_keep_days` can be short
 - Backfills from the recorder's existing history on first run, so a new
   entity starts with whatever the recorder still holds rather than from zero
 - Ships its own card: pick the entity and it draws every state, as
   stacked or plain bars or lines per hour, day, week, month or year, in
-  hours, days or as a percentage of the time — following the dashboard's
-  date picker if there is one
-- Draws with the stock statistics-graph card too, with `change` for totals
-  over days, weeks and months
+  hours, days or as a percentage of the time. The stock statistics-graph
+  card draws them too
 - Period sensors, opt-in: "time on today", "share of this month at the
   office", "openings this year" — a number read from the statistics, so it
-  never shrinks when the recorder purges, following the entity live
-- New states are picked up automatically as they appear, in the card as
-  well as the statistics; no per-state configuration needed
-- `unavailable`, `unknown`, or any state you choose can be ignored, with
-  the previous state carried across the gap instead of a hole
-- Debounce: a state that lasts less than a minimum duration can be ignored,
-  per state or for every state
-- States can be mapped onto one another (`heat_cool` → `heating`)
-- Set up from the UI or YAML
-- Recalculate any range at any time — it only rewrites what it has source
-  data for, and never deletes anything
+  never shrinks when the recorder purges
+- Configured once per entity, from the UI or YAML: which states to record,
+  which to ignore and carry the previous state across, how long a spell must
+  last to count, and which states to record as one
 
-It is not a replacement for `history_stats`, which answers a different
-question; [the comparison below](#compared-with-history_stats) says which to
-reach for.
+For much of what `history_stats` is used for, this can take its place: the
+two answer the same questions from opposite ends, and [the comparison
+below](#compared-with-history_stats) says which to reach for.
+
+## Contents
+
+- [Installation](#installation)
+- [A first chart](#a-first-chart)
+- [Configuration](#configuration)
+- [Configuring from the UI](#configuring-from-the-ui)
+- [Statistics produced](#statistics-produced)
+- [Charts](#charts)
+- [The card](#the-card)
+- [Period sensors](#period-sensors)
+- [The filtered state sensor](#the-filtered-state-sensor)
+- [Backfilling](#backfilling)
+- [How it works](#how-it-works)
+- [Compared with `history_stats`](#compared-with-history_stats)
+- [Renaming and replacing entities](#renaming-and-replacing-entities)
+- [Limitations](#limitations)
 
 ## Installation
 
@@ -66,6 +75,33 @@ Or by hand:
 Copy `custom_components/discrete_statistics` into your `config/custom_components`
 directory and restart Home Assistant.
 
+## A first chart
+
+Nothing has to be decided up front but the entity. Add the integration —
+Settings → Devices & Services → **Add integration** → **Discrete
+Statistics** — and pick one. The defaults record every real state it
+reports and carry `unavailable` and `unknown` across rather than counting
+them as changes, which is what most entities want; [Configuring from the
+UI](#configuring-from-the-ui) covers the rest of the dialog.
+
+Compiling starts in the background as soon as the entry is created, over
+whatever history the recorder still holds, and a notification says how many
+hours it compiled. Each hour after that is compiled at `:03`, once the hour
+has closed.
+
+Then put the card on a dashboard — **Discrete Statistics** in the card
+picker, or by hand:
+
+```yaml
+type: custom:discrete-statistics-card
+entity: binary_sensor.front_door
+```
+
+That draws the last thirty days of the entity's states as stacked bars, and
+nothing needs adding under Resources. [The card](#the-card) has the rest of
+its options; [Period sensors](#period-sensors) puts one of the same numbers
+on a dashboard as a figure rather than a chart.
+
 ## Configuration
 
 ```yaml
@@ -89,8 +125,10 @@ change.
 | `blank` | `unknown` | what to do with a state that has no letters or digits |
 | `min_duration` | — | how long a spell of a conditionally recorded state must last |
 
-All four are available in the UI as well; `states` is the options dialog's
-**States** section, and the `ignore` default is YAML-only.
+All of these are available in the UI as well: `entity_id` is the entity you
+pick when adding the integration, `states` and `blank` are the options
+dialog's **States** section, and the rest are its fields. Only the `ignore`
+default is YAML-only.
 
 `default` accepts:
 
@@ -674,9 +712,9 @@ reaches back as far as they do, and the recorder's retention does not
 shrink it.
 
 They are opt-in, one at a time. On the integration's page, open the entry
-for the entity and choose **Add sensor**:
+for the entity and choose **Add period sensor**:
 
-![An entry's row on the integration page, expanded to show three sensors under it — count this month, on count today, on share this month — with its menu open on Add sensor](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/add-sensor.png)
+![An entry's row on the integration page, expanded to show four sensors under it — three period sensors, Kitchen count this month, Kitchen On share this month and Kitchen On time last 24 hours, and a filtered state sensor, Kitchen state — with its menu open on Add period sensor and Add filtered state sensor](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/add-sensor.png)
 
 - **States** — one or more, added together, from the states the entity has
   statistics for and the options of an enum sensor; any state can be typed
@@ -783,6 +821,56 @@ sensor and the statistic it reads visibly match; renaming the entity ID
 afterwards is fine, the exclude is only a convenience. Nothing here adds a
 `state_class`, so the recorder does not build a second set of long-term
 statistics over these either.
+
+## The filtered state sensor
+
+The sensors above are numbers out of the history. This one is the present
+tense: **the state the entity is in right now, as this entry records it** —
+mapped, filtered and debounced by the entry's own settings. It exists so an
+automation can act on the same timeline the statistics are built from,
+without re-encoding the mapping in a template.
+
+One per entry, from the entry's menu: **Add filtered state sensor**. The only
+field is the name.
+
+What it is for is the awkward half of the settings above:
+
+- **Ignored states are carried across.** Under the default *Known states
+  only*, a device that drops off the network reads `unavailable` — and this
+  sensor goes on reading whatever it was in. So does a reload, a restart, or
+  the entity being removed and added back by a YAML reload from developer
+  tools. An automation on `sensor.filtered_discrete_…` does not fire on any
+  of them.
+- **Mapped states are already mapped.** `heat` and `cool` mapped onto
+  `active` read `active` here, so the automation matches one state rather
+  than a list that has to be kept in step with the mapping.
+- **Short spells are debounced properly.** Under `ignore_short` the sensor
+  does not move until the new state has lasted `min_duration`, and a bounce
+  that ends sooner never appears at all. A `for:` in a trigger cannot do
+  this: it restarts on any state change, so a contact that reads `off`,
+  `unavailable`, `off` resets the timer, and this does not.
+
+It reads `unknown` before it has ever seen a recordable state — an entity
+that has only ever been `unavailable`, say. It never reads `unavailable`
+itself, unless the entry's settings genuinely record a state of that name.
+
+```yaml
+automation:
+  - triggers:
+      - trigger: state
+        entity_id: sensor.filtered_discrete_binary_sensor_grid_status
+        to: "unavailable"
+        for: "00:05:00"
+```
+
+The ID is `sensor.filtered_discrete_<entity>` —
+`sensor.filtered_discrete_binary_sensor_front_door`. Deliberately *not* the
+`sensor.discrete_` prefix the period sensors use, so the one-line exclude
+above leaves it alone: this one changes only when the entity's recorded
+state changes, which is a row worth keeping and far fewer of them than the
+entity itself writes. Exclude it by name if you would rather not have it in
+the history at all — nothing here reads it back, and the statistics are the
+long-term record either way.
 
 ## Backfilling
 
@@ -978,18 +1066,18 @@ cost of both, on three database engines.
 
 **Long-term correctness.** Over a window whose hours the recorder still
 holds, both read the same state rows: no difference. Past the recorder's
-retention window `history_stats` is missing data - and the calculations
+retention window `history_stats` is missing data — and the calculations
 become incorrect. Here the historical hours are already compiled, so
-long-term calculations stay correct. For sub-hour accuracy covering purged
-data (e.g. Last 365 days, with 7 day recorder retention) - we estimate the
-first partial hour by pro-rating that hour's statistics: see `estimated`.
-
+long-term calculations stay correct. Where a window reaches back over
+purged data — the last 365 days, with seven days of recorder retention —
+the first partial hour is estimated by pro-rating that hour's statistics:
+see `estimated`.
 
 **Enables short recorder history (`purge_keep_days`).** Statistics are never
 purged. This component stores its key data in long-term statistics, so the
-recorder can be set to purge after a few days, with no impact to its graphs
-or sensors (save sub-hour pro-rating). `history_stats` requires a long recorder storage to function
-over long windows.
+recorder can be set to purge after a few days, with no impact on its graphs
+or sensors (save sub-hour pro-rating). `history_stats` needs a long recorder
+retention to work over long windows.
 
 **Every state from a single config.** A heat pump's `hvac_action` has
 `heating`, `cooling`, `idle`, `defrosting` and whatever next year's firmware
@@ -997,8 +1085,7 @@ adds. One entry here records all of them, duration and count, and a state
 that appears later gets its statistics the first hour it is seen.
 `history_stats` matches one set of states per sensor and merges the set into
 one figure, so *time in each of N states* is N sensors, counts are N more,
-and a new state is two more to be manually added.
-
+and a new state is two more to add by hand.
 
 **Hours that sum to the day.** The states an entity was in during an hour
 are written with the time each had, and those add up to the hour, so a
@@ -1014,9 +1101,9 @@ switch-on is 1 with a daily window and 24 with an hourly one, since the
 light is present in every hour. Counting transitions gives meaningful
 long-term statistics.
 
-**State masking.** This component enables arbitrary masking/combining of
-states - so if it's known that e.g. `unavailable` means `off`, it can be
-recorded that way.
+**State masking.** This component allows any masking or combining of
+states — so where `unavailable` is known to mean `off`, it can be recorded
+that way.
 
 ### What stays with `history_stats`
 

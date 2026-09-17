@@ -88,9 +88,9 @@
   },
   "config_subentries": {
     "sensor": {
-      "entry_type": "Sensor",
+      "entry_type": "Period sensor",
       "initiate_flow": {
-        "user": "Add sensor"
+        "user": "Add period sensor"
       },
       "step": {
         "user": {
@@ -173,6 +173,38 @@
         "template_invalid_end": "End did not render to a date and time. Check it in Developer tools > Template."
       },
       "abort": {
+        "reconfigure_successful": "The sensor was updated."
+      }
+    },
+    "state": {
+      "entry_type": "Filtered state",
+      "initiate_flow": {
+        "user": "Add filtered state sensor"
+      },
+      "step": {
+        "user": {
+          "title": "Add a filtered state sensor",
+          "description": "The state **{entity}** is in, as this entry records it: mapped, ignored and debounced by the entry's own settings, so an automation can follow the same timeline the statistics are built from.\n\nA state the entry ignores is carried across, so an entry that ignores unavailable - the default - leaves this sensor holding the state it was in through a reload, a restart or a device dropping off the network. One that records unavailable shows it like any other state.",
+          "data": {
+            "name": "Name"
+          },
+          "data_description": {
+            "name": "Leave blank for the entity's name and the word state."
+          }
+        },
+        "reconfigure": {
+          "title": "Filtered state sensor",
+          "description": "The state **{entity}** is in, as this entry records it: mapped, ignored and debounced by the entry's own settings, so an automation can follow the same timeline the statistics are built from.\n\nA state the entry ignores is carried across, so an entry that ignores unavailable - the default - leaves this sensor holding the state it was in through a reload, a restart or a device dropping off the network. One that records unavailable shows it like any other state.",
+          "data": {
+            "name": "Name"
+          },
+          "data_description": {
+            "name": "Leave blank for the entity's name and the word state."
+          }
+        }
+      },
+      "abort": {
+        "already_configured": "This entry already has a filtered state sensor. An entity is in one state at a time, so a second would say the same thing.",
         "reconfigure_successful": "The sensor was updated."
       }
     }

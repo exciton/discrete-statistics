@@ -39,6 +39,9 @@ BACKLOG_THRESHOLD = 1000
 
 # Period sensors: one per config subentry of this type.
 SUBENTRY_SENSOR = "sensor"
+# The filtered-state sensor: at most one subentry of this type per entry,
+# since an entity is in exactly one state at a time.
+SUBENTRY_STATE = "state"
 METRIC_SHARE = "share"
 SENSOR_METRICS = (METRIC_DURATION, METRIC_SHARE, METRIC_COUNT)
 CONF_METRIC = "metric"

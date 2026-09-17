@@ -101,6 +101,17 @@ def sensor_title(hass: HomeAssistant, cfg: EntityConfig, spec: Spec) -> str:
     return " ".join(part for part in parts if part)
 
 
+def state_title(hass: HomeAssistant, cfg: EntityConfig) -> str:
+    """What the filtered-state sensor is called when nobody has named it.
+
+    Just the entity and the word: there is one recorded state, so there is
+    nothing to tell two of these apart the way a period sensor's states,
+    metric and period do. Composed on every submit, like `sensor_title`, so
+    a renamed entity reads right the next time the dialog is saved.
+    """
+    return f"{display_name(hass, cfg.entity_id, cfg.name)} state"
+
+
 def state_translator(hass: HomeAssistant, entity_id: str) -> Callable[[str], str]:
     """Render canonical states the way Home Assistant renders them.
 
