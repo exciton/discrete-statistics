@@ -780,10 +780,11 @@ page and deleting it there removes the sensor. The entry itself still has
 no entities.
 
 **Where the sensor appears.** It is listed on the source entity's device,
-alongside the entity it is derived from, and each of the two shows under
-the other's **Related** tab. The device is the only join Home Assistant
-offers — there is no "derived from" edge — and one attachment makes the
-relationship visible in both directions at once. Nothing else moves: the
+alongside the entity it is derived from, which is where the two sit
+together. The device is the only join Home Assistant offers — there is no
+"derived from" edge — and each one's **Related** tab names that device
+rather than the other, because a search from an entity resolves up to its
+device and not back down to the device's other entities. Nothing else moves: the
 sensor still belongs to this integration's entry, it is still listed under
 that entry on the integration's page, and the device stays the source
 integration's. Moving the source entity to another device takes its
@@ -907,7 +908,7 @@ the history at all — nothing here reads it back, and the statistics are the
 long-term record either way.
 
 It is listed on the source entity's device like the period sensors above,
-so the two show under each other's **Related** tab, and it is named the
+so the two sit together on that device's page, and it is named the
 same way: the device's name and the rest, "Kitchen Lights State". A source
 entity with no device leaves it without one too, keeping the whole name it
 has always had. One that already exists is renamed on upgrade and keeps its
