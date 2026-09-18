@@ -261,9 +261,15 @@ default.
 
 `registry.py` follows the entity registry, with one listener registered
 through `hass.bus.async_listen` and an `event_filter` — never
-`async_track_entity_registry_updated_event`, because the recorder refuses
-to install its own registry listener after that helper has been used and
-ours can be set up first. A rename of an entity we record moves its
+`async_track_entity_registry_updated_event`. That helper dispatches a
+rename on the *old* entity ID
+(`_async_dispatch_old_entity_id_or_entity_id_event`), so a callback
+registered for an entity we record is never called when another entity is
+renamed *onto* it — the device swap `async_fill` exists for, whose
+`old_entity_id` is a temporary ID we cannot register for in advance. The
+recorder also refuses to install its own registry listener after that
+helper has been used, but that alone would not stop us: the recorder is set
+up in bootstrap stage 0, before any integration of ours can run. A rename of an entity we record moves its
 statistics on the recorder's thread (`RenameTask`, since
 `update_statistic_id` runs nowhere else), and only once that has
 committed is the entry updated and reloaded — the other order lets the
@@ -327,6 +333,23 @@ similarly-named entities have to be told apart — those disagreeing is what the
 leaking into a title looked like. The registry comes before the state because
 attributes are stripped while an entity is unavailable, and because it holds
 what the user asked for when the two disagree.
+
+`naming.entity_naming` answers the other half, for the sensors: which device
+they belong on and what to call them there. On the source entity's device the
+composed title goes device-relative — the device's name stripped from its
+front, `has_entity_name` true — so Home Assistant prefixes it exactly once. A
+*typed* name keeps `has_entity_name` false, because core strips a device
+prefix the user typed themselves before prefixing
+(`entity_registry._async_get_full_entity_name`, the `if not has_entity_name`
+arm); true there would skip that strip and render "Grid Grid My meter".
+`_strip_prefix` mirrors `_async_strip_prefix_from_entity_name`, which is
+private and can change under us: what guards the mirror is the end-to-end
+assertions on `hass.states.get(...).name` in `tests/test_sensor.py` and
+`tests/test_state_sensor.py`, which render through core's own function and
+fail when the two disagree. The subentry's *title* stays whole — it names the
+subentry on the entry's page, while the device-relative string names the
+entity — so `apply` compares the naming result and never the title, or an
+update carrying no change would report one every time.
 
 No `integration_type` in the manifest, deliberately. It reaches one thing:
 the heading over the entries on the integration's page, which the frontend

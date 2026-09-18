@@ -35,6 +35,7 @@ from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.const import (
     CONF_ENTITY_ID,
+    CONF_NAME,
     MATCH_ALL,
     PERCENTAGE,
     STATE_UNAVAILABLE,
@@ -63,6 +64,7 @@ from .const import (
 from .coordinator import PeriodCoordinator
 from .filtered import Tracker
 from .filtered import suggested_entity_id as filtered_entity_id
+from .naming import EntityNaming, entity_naming
 from .periods import is_custom, is_rolling
 from .reading import Reading, Spec, spec_from, suggested_entity_id
 
@@ -98,13 +100,13 @@ async def async_setup_entry(
 
     @callback
     def add(coordinator: PeriodCoordinator, subentry: ConfigSubentry) -> None:
-        sensor = DiscreteStatisticsSensor(coordinator, entry, subentry)
+        sensor = DiscreteStatisticsSensor(hass, coordinator, entry, subentry)
         sensors[subentry.subentry_id] = sensor
         async_add_entities([sensor], config_subentry_id=subentry.subentry_id)
 
     @callback
     def add_state(cfg: EntityConfig, subentry: ConfigSubentry) -> None:
-        sensor = FilteredStateSensor(cfg, entry, subentry)
+        sensor = FilteredStateSensor(hass, cfg, entry, subentry)
         states[subentry.subentry_id] = sensor
         async_add_entities([sensor], config_subentry_id=subentry.subentry_id)
 
@@ -143,7 +145,7 @@ async def async_setup_entry(
                 # in place, so the history keeps no seam at the edit - which
                 # means the dispositions can move under a live sensor and
                 # this is the only place it hears about it.
-                states[subentry_id].apply(cfg, subentry)
+                states[subentry_id].apply(hass, cfg, subentry)
             else:
                 add_state(cfg, subentry)
 
@@ -158,7 +160,7 @@ async def async_setup_entry(
         changed = False
         for subentry_id, subentry in current.items():
             if subentry_id in sensors:
-                changed = sensors[subentry_id].apply(subentry) or changed
+                changed = sensors[subentry_id].apply(hass, subentry) or changed
         if not new and not changed:
             return
         refreshed = await started()
@@ -185,28 +187,37 @@ class DiscreteStatisticsSensor(CoordinatorEntity[PeriodCoordinator], SensorEntit
 
     def __init__(
         self,
+        hass: HomeAssistant,
         coordinator: PeriodCoordinator,
         entry: ConfigEntry,
         subentry: ConfigSubentry,
     ) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = subentry.subentry_id
+        self._source = entry.data[CONF_ENTITY_ID]
         self._spec: Spec | None = None
+        self._naming: EntityNaming | None = None
         self._warned = False
         # Set before adding: the platform takes it as the suggested object
         # id. A reconfigure keeps the entity, and so this id, since the
         # unique id is the subentry's.
-        self.entity_id = suggested_entity_id(
-            entry.data[CONF_ENTITY_ID], spec_from(subentry.data)
-        )
-        self.apply(subentry)
+        self.entity_id = suggested_entity_id(self._source, spec_from(subentry.data))
+        # `hass` is an argument because the platform sets it on the entity
+        # only after the add, and the add is what writes `device_id`.
+        self.apply(hass, subentry)
 
-    def apply(self, subentry: ConfigSubentry) -> bool:
-        """Take the subentry's spec and title. True when either changed."""
+    def apply(self, hass: HomeAssistant, subentry: ConfigSubentry) -> bool:
+        """Take the subentry's spec and naming. True when either changed."""
         spec = spec_from(subentry.data)
-        changed = spec != self._spec or subentry.title != self._attr_name
+        naming = entity_naming(
+            hass, self._source, subentry.title, subentry.data.get(CONF_NAME)
+        )
+        changed = spec != self._spec or naming != self._naming
         self._spec = spec
-        self._attr_name = subentry.title
+        self._naming = naming
+        self.device_entry = naming.device
+        self._attr_has_entity_name = naming.has_entity_name
+        self._attr_name = naming.name
         if spec.metric == METRIC_DURATION:
             self._attr_device_class = SensorDeviceClass.DURATION
             self._attr_native_unit_of_measurement = UnitOfTime.HOURS
@@ -312,18 +323,24 @@ class FilteredStateSensor(RestoreEntity, SensorEntity):
     _attr_native_unit_of_measurement = None
 
     def __init__(
-        self, cfg: EntityConfig, entry: ConfigEntry, subentry: ConfigSubentry
+        self,
+        hass: HomeAssistant,
+        cfg: EntityConfig,
+        entry: ConfigEntry,
+        subentry: ConfigSubentry,
     ) -> None:
-        self._cfg = cfg
         self._tracker: Tracker | None = None
         self._unsubscribe: CALLBACK_TYPE | None = None
         self._timer: CALLBACK_TYPE | None = None
         self._attr_unique_id = subentry.subentry_id
-        self._attr_name = subentry.title
+        self._source = entry.data[CONF_ENTITY_ID]
         # Set before adding: the platform takes it as the suggested object
         # id. A reconfigure keeps the entity and so this id, since the
         # unique id is the subentry's.
-        self.entity_id = filtered_entity_id(entry.data[CONF_ENTITY_ID])
+        self.entity_id = filtered_entity_id(self._source)
+        # `hass` is an argument because the platform sets it on the entity
+        # only after the add, and the add is what writes `device_id`.
+        self.apply(hass, cfg, subentry)
 
     async def async_added_to_hass(self) -> None:
         """Open the tracker on what is known, then follow the entity."""
@@ -335,8 +352,10 @@ class FilteredStateSensor(RestoreEntity, SensorEntity):
         )
 
     @callback
-    def apply(self, cfg: EntityConfig, subentry: ConfigSubentry) -> None:
-        """Take the subentry's title, and rebuild on a change of settings.
+    def apply(
+        self, hass: HomeAssistant, cfg: EntityConfig, subentry: ConfigSubentry
+    ) -> None:
+        """Take the subentry's naming, and rebuild on a change of settings.
 
         The dispositions decide what every raw state means, so a change to
         them invalidates the spell in progress and the state carried into
@@ -345,7 +364,12 @@ class FilteredStateSensor(RestoreEntity, SensorEntity):
         have produced it, which is the same question `_restorable` answers
         for a restore.
         """
-        self._attr_name = subentry.title
+        naming = entity_naming(
+            hass, self._source, subentry.title, subentry.data.get(CONF_NAME)
+        )
+        self.device_entry = naming.device
+        self._attr_has_entity_name = naming.has_entity_name
+        self._attr_name = naming.name
         if self._tracker is None:
             self._cfg = cfg
             return

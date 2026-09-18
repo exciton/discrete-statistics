@@ -1,6 +1,7 @@
 """Follow the entity registry.
 
-A rename of an entity we record moves its statistics with it, and an
+A rename of an entity we record moves its statistics with it, a move
+between devices reloads the entry whose sensors follow it, and an
 entity that disappears raises a repair issue. One listener on the
 registry, filtered to the entities configured, and nothing per entry.
 """
@@ -242,6 +243,16 @@ def async_setup(hass: HomeAssistant) -> None:
                     old,
                     new,
                 )
+        elif (
+            data["action"] == "update"
+            and "device_id" in data["changes"]
+            and (entry := _entry_for(hass, data["entity_id"])) is not None
+        ):
+            # The reload rebuilds the sensors, and it is construction that
+            # reads the source's device and names them against it. Scheduled,
+            # not awaited: core's advice for an integration reloading itself,
+            # and a raise here would skip the review below.
+            hass.config_entries.async_schedule_reload(entry.entry_id)
         async_review_missing(hass)
 
     @callback
@@ -259,9 +270,8 @@ def async_setup(hass: HomeAssistant) -> None:
         async_review_missing(hass)
 
     # `hass.bus.async_listen`, never `async_track_entity_registry_updated_event`:
-    # the recorder installs its own registry listener at setup and refuses
-    # to if that helper has been used first, and ours can be set up before
-    # it when configured in YAML.
+    # that helper keys a rename on the *old* entity ID, so it never reaches a
+    # rename onto an entity we record, which is the case async_fill exists for.
     hass.bus.async_listen(
         er.EVENT_ENTITY_REGISTRY_UPDATED, registry_updated, event_filter=registry_filter
     )
