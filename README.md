@@ -790,6 +790,8 @@ that entry on the integration's page, and the device stays the source
 integration's. Moving the source entity to another device takes its
 sensors with it.
 
+![A light's device page: a Controls card holding the Kitchen light, and a Sensors card beneath it listing Kitchen count this month at 70, Kitchen On share this month at 17.3%, Kitchen On time last 24 hours at 12h 27m, and Kitchen state reading Off](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/device-sensors.png)
+
 A source entity with no device — a template entity, a group, a `person`,
 an `input_boolean` — gives nothing to attach to, so those sensors have no
 device and no link. That is normal rather than a failure, and they keep
