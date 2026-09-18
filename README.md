@@ -745,7 +745,10 @@ for the entity and choose **Add period sensor**:
   ![The dialog with Period set to Custom and the Custom period section open: a Start template of today_at('09:00'), an empty End, and a Duration of eight hours](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/custom-period.png)
 
 - **Name** — optional; the default is made from the entity, the states,
-  the measure and the period, "Front Door open time this month".
+  the measure and the period, "Front Door open time this month". It is
+  made again whenever the entity is renamed, so the sensor follows the
+  entity's name without this dialog being opened; a name you type here is
+  yours and is never rewritten.
 - **Include the current hour** — statistics are compiled hourly. On, the
   sensor follows the entity between compiles, reading the recorder for the
   hours since the last compiled one and updating on every change and once
@@ -1193,7 +1196,8 @@ Renaming an entity in Home Assistant moves its statistics with it: the
 integration listens for the rename, moves every statistic to the new
 name and updates its own entry, and a notification says what moved. The
 period sensors keep their entity IDs, since those were only suggested
-when they were created.
+when they were created, and those named after the entity take the new
+name as the rename lands — a name you typed yourself is left alone.
 
 Replacing a device is two steps. Remove the old entity (or its whole
 device) from the registry first; a repair issue appears saying the entity
