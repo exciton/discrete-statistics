@@ -868,3 +868,86 @@ async def test_a_registry_update_that_changes_no_name_writes_nothing(
 
     assert not written.called
     assert entry.subentries["Grid on time today"].title == "Grid on time today"
+
+
+async def a_named_source_on_a_device(hass, device_name, entity_name):
+    """A source on a device, named so a title can compose from both."""
+    device = a_device(hass, device_name)
+    domain, object_id = ENTITY.split(".")
+    er.async_get(hass).async_get_or_create(
+        domain,
+        "test",
+        ENTITY,
+        suggested_object_id=object_id,
+        device_id=device.id,
+        original_name=entity_name,
+    )
+    return device
+
+
+async def test_a_rename_across_the_prefix_boundary_updates_the_registry_flag(
+    recorder_utc, freezer
+):
+    """The stripping decision lives in the registry, and it has to follow.
+
+    Core writes `has_entity_name` only at platform registration
+    (entity_platform.py:1025) - the state write syncs `original_name` and
+    not this - so a rename that stops the device's name stripping leaves
+    the registry claiming a device-relative name the entity no longer has.
+    The device rename in the frontend reads the flag to decide which
+    entities to rewrite by hand, so a stale one types a name onto a sensor
+    that should have gone on following its source.
+    """
+    hass = recorder_utc
+    await a_named_source_on_a_device(hass, "Grid", "Grid Status")
+    await unnamed_entry(hass, freezer, [sensor("Grid Status on time today", ["on"])])
+    assert sensor_entry(hass).has_entity_name is True
+    assert hass.states.get(ON_TODAY).name == "Grid Status on time today"
+
+    er.async_get(hass).async_update_entity(ENTITY, original_name="Backup Status")
+    await settled(hass)
+
+    after = sensor_entry(hass)
+    assert after.has_entity_name is False
+    assert after.original_name == "Backup Status on time today"
+    # What a person sees is unchanged by the flag: core prefixes the device
+    # name for any device entity nobody has named, and strips the prefix
+    # itself when the flag is False. Pinned so the strip in `entity_naming`
+    # is known to still agree with it.
+    assert hass.states.get(ON_TODAY).name == "Grid Backup Status on time today"
+
+
+async def test_a_rename_onto_the_prefix_updates_the_registry_flag_back(
+    recorder_utc, freezer
+):
+    """The other direction: the flag has to go back to True as well."""
+    hass = recorder_utc
+    await a_named_source_on_a_device(hass, "Grid", "Backup Status")
+    await unnamed_entry(hass, freezer, [sensor("Backup Status on time today", ["on"])])
+    assert sensor_entry(hass).has_entity_name is False
+
+    er.async_get(hass).async_update_entity(ENTITY, original_name="Grid Status")
+    await settled(hass)
+
+    after = sensor_entry(hass)
+    assert after.has_entity_name is True
+    assert after.original_name == "Status on time today"
+    assert hass.states.get(ON_TODAY).name == "Grid Status on time today"
+
+
+async def test_the_filtered_state_sensor_follows_the_prefix_boundary_too(
+    recorder_utc, freezer
+):
+    """Both sensor classes write the flag, and they do it the same way."""
+    hass = recorder_utc
+    await a_named_source_on_a_device(hass, "Grid", "Grid Status")
+    await unnamed_entry(hass, freezer, [a_state_subentry("Grid Status state")])
+    registry = er.async_get(hass)
+    assert registry.async_get(FILTERED).has_entity_name is True
+
+    registry.async_update_entity(ENTITY, original_name="Backup Status")
+    await settled(hass)
+
+    after = registry.async_get(FILTERED)
+    assert after.has_entity_name is False
+    assert after.original_name == "Backup Status state"
