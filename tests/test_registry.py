@@ -951,3 +951,27 @@ async def test_the_filtered_state_sensor_follows_the_prefix_boundary_too(
     after = registry.async_get(FILTERED)
     assert after.has_entity_name is False
     assert after.original_name == "Backup Status state"
+
+
+async def test_a_rename_of_both_the_id_and_the_name_moves_and_recomposes(
+    recorder_utc, freezer
+):
+    """One event, two changes: the statistics move *and* the titles follow.
+
+    The recompose is not another arm of the entity-ID chain for exactly
+    this case - as an `elif` the statistics would move and every sensor
+    would keep the old entity's name.
+    """
+    hass = recorder_utc
+    await a_named_source(hass)
+    entry = await unnamed_entry(hass, freezer, [sensor("Grid on time today", ["on"])])
+    assert await existing(hass, ENTITY) != []
+
+    er.async_get(hass).async_update_entity(ENTITY, new_entity_id=NEW, name="Cooker")
+    await settled(hass)
+
+    assert await existing(hass, ENTITY) == []
+    assert NEW_ON in await existing(hass, NEW)
+    assert entry.title == f"Cooker ({NEW})"
+    assert entry.subentries["Grid on time today"].title == "Cooker on time today"
+    assert sensor_entry(hass).original_name == "Cooker on time today"
