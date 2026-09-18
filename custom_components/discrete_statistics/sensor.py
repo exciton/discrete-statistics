@@ -43,6 +43,7 @@ from homeassistant.const import (
     UnitOfTime,
 )
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import (
     EventStateChangedData,
@@ -178,7 +179,35 @@ def _iso(timestamp: float | None, whole_minutes: bool = False) -> str | None:
     return dt_util.utc_from_timestamp(timestamp).isoformat()
 
 
-class DiscreteStatisticsSensor(CoordinatorEntity[PeriodCoordinator], SensorEntity):
+class _SourceNamed(SensorEntity):
+    """The naming both sensors share: the source's device, and its name."""
+
+    _source: str
+
+    @callback
+    def _name_after_source(
+        self, hass: HomeAssistant, subentry: ConfigSubentry
+    ) -> EntityNaming:
+        """Take the naming composed from the source, registry flag included."""
+        naming = entity_naming(
+            hass, self._source, subentry.title, subentry.data.get(CONF_NAME)
+        )
+        self.device_entry = naming.device
+        self._attr_has_entity_name = naming.has_entity_name
+        self._attr_name = naming.name
+        # A state write syncs `original_name` but never `has_entity_name`,
+        # which core writes only at platform registration
+        # (entity_platform.py:1025), so a flip in place has to be written
+        # here or the registry keeps the flag the last reload wrote.
+        entry = self.registry_entry
+        if entry is not None and entry.has_entity_name != naming.has_entity_name:
+            er.async_get(hass).async_update_entity(
+                entry.entity_id, has_entity_name=naming.has_entity_name
+            )
+        return naming
+
+
+class DiscreteStatisticsSensor(CoordinatorEntity[PeriodCoordinator], _SourceNamed):
     """One number: a metric of some states over a period."""
 
     _attr_has_entity_name = False
@@ -209,15 +238,10 @@ class DiscreteStatisticsSensor(CoordinatorEntity[PeriodCoordinator], SensorEntit
     def apply(self, hass: HomeAssistant, subentry: ConfigSubentry) -> bool:
         """Take the subentry's spec and naming. True when either changed."""
         spec = spec_from(subentry.data)
-        naming = entity_naming(
-            hass, self._source, subentry.title, subentry.data.get(CONF_NAME)
-        )
+        naming = self._name_after_source(hass, subentry)
         changed = spec != self._spec or naming != self._naming
         self._spec = spec
         self._naming = naming
-        self.device_entry = naming.device
-        self._attr_has_entity_name = naming.has_entity_name
-        self._attr_name = naming.name
         if spec.metric == METRIC_DURATION:
             self._attr_device_class = SensorDeviceClass.DURATION
             self._attr_native_unit_of_measurement = UnitOfTime.HOURS
@@ -297,7 +321,7 @@ def _restorable(cfg: EntityConfig, state: str | None) -> str | None:
     return state
 
 
-class FilteredStateSensor(RestoreEntity, SensorEntity):
+class FilteredStateSensor(RestoreEntity, _SourceNamed):
     """The state the entity is in, as this entry records it.
 
     Mapped, filtered and debounced by the entry's own settings, so an
@@ -364,12 +388,7 @@ class FilteredStateSensor(RestoreEntity, SensorEntity):
         have produced it, which is the same question `_restorable` answers
         for a restore.
         """
-        naming = entity_naming(
-            hass, self._source, subentry.title, subentry.data.get(CONF_NAME)
-        )
-        self.device_entry = naming.device
-        self._attr_has_entity_name = naming.has_entity_name
-        self._attr_name = naming.name
+        self._name_after_source(hass, subentry)
         if self._tracker is None:
             self._cfg = cfg
             return

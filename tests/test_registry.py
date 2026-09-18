@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 from homeassistant.components.recorder.statistics import async_add_external_statistics
-from homeassistant.config_entries import ConfigEntryState
+from homeassistant.config_entries import ConfigEntryState, ConfigSubentryData
 from homeassistant.const import (
     CONF_ENTITY_ID,
     CONF_NAME,
@@ -32,7 +32,9 @@ from custom_components.discrete_statistics.const import (
     DEFAULT_RECORD_KNOWN,
     DOMAIN,
     METRIC_DURATION,
+    SUBENTRY_STATE,
 )
+from custom_components.discrete_statistics.naming import describe
 from custom_components.discrete_statistics.payload import metadata_for
 
 from .conftest import ON_TODAY, existing, play, read_sums, sensor
@@ -40,6 +42,7 @@ from .conftest import ON_TODAY, existing, play, read_sums, sensor
 ENTITY = "binary_sensor.grid_status"
 NEW = "binary_sensor.grid_status_new"
 TEMP = "binary_sensor.grid_status_2"
+FILTERED = "sensor.filtered_discrete_binary_sensor_grid_status"
 ON = "discrete_statistics:binary_sensor_grid_status_on_duration"
 OFF = "discrete_statistics:binary_sensor_grid_status_off_duration"
 NEW_ON = "discrete_statistics:binary_sensor_grid_status_new_on_duration"
@@ -694,3 +697,281 @@ async def test_a_renamed_source_carries_its_sensors_onto_its_new_device(
     assert after.device_id == other.id
     assert after.has_entity_name is True
     assert after.original_name == "Today"
+
+
+def a_state_subentry(title, name=None):
+    return ConfigSubentryData(
+        data={CONF_NAME: name},
+        subentry_id=title,
+        subentry_type=SUBENTRY_STATE,
+        title=title,
+        unique_id=None,
+    )
+
+
+async def a_named_source(hass, name="Grid", entity_id=ENTITY):
+    """A registry entry whose own name is what the titles are composed from."""
+    domain, object_id = entity_id.split(".")
+    return er.async_get(hass).async_get_or_create(
+        domain,
+        "test",
+        entity_id,
+        suggested_object_id=object_id,
+        original_name=name,
+    )
+
+
+async def unnamed_entry(hass, freezer, subentries):
+    """An entry with no typed name, so every title follows the source's."""
+    await play(hass, freezer, HISTORY)
+    freezer.move_to(T0 + timedelta(hours=10))
+    hass.set_state(CoreState.running)
+    assert await async_setup_component(hass, DOMAIN, {})
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENTITY_ID: ENTITY},
+        options={CONF_DEFAULT: DEFAULT_RECORD_KNOWN},
+        unique_id=ENTITY,
+        title=describe(hass, ENTITY),
+        subentries_data=subentries,
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await settled(hass)
+    return entry
+
+
+async def test_a_renamed_source_recomposes_a_period_sensors_title(
+    recorder_utc, freezer
+):
+    """ "Grid on time today" must not still say Grid once Grid is Cooker."""
+    hass = recorder_utc
+    await a_named_source(hass)
+    entry = await unnamed_entry(hass, freezer, [sensor("Grid on time today", ["on"])])
+    assert sensor_entry(hass).original_name == "Grid on time today"
+
+    er.async_get(hass).async_update_entity(ENTITY, name="Cooker")
+    await settled(hass)
+
+    assert entry.subentries["Grid on time today"].title == "Cooker on time today"
+    assert sensor_entry(hass).original_name == "Cooker on time today"
+
+
+async def test_a_renamed_source_recomposes_the_state_sensors_title(
+    recorder_utc, freezer
+):
+    hass = recorder_utc
+    await a_named_source(hass)
+    entry = await unnamed_entry(hass, freezer, [a_state_subentry("Grid state")])
+    registry = er.async_get(hass)
+    assert registry.async_get(FILTERED).original_name == "Grid state"
+
+    registry.async_update_entity(ENTITY, name="Cooker")
+    await settled(hass)
+
+    assert entry.subentries["Grid state"].title == "Cooker state"
+    assert registry.async_get(FILTERED).original_name == "Cooker state"
+
+
+async def test_a_source_relabelled_by_its_integration_recomposes_the_titles(
+    recorder_utc, freezer
+):
+    """`original_name` is half of what `display_name` resolves, so it counts.
+
+    A device re-provisioned or relabelled upstream moves the displayed name
+    without anyone typing anything, and the titles must follow it.
+    """
+    hass = recorder_utc
+    await a_named_source(hass)
+    entry = await unnamed_entry(hass, freezer, [sensor("Grid on time today", ["on"])])
+
+    er.async_get(hass).async_update_entity(ENTITY, original_name="Cooker")
+    await settled(hass)
+
+    assert entry.title == f"Cooker ({ENTITY})"
+    assert entry.subentries["Grid on time today"].title == "Cooker on time today"
+    assert sensor_entry(hass).original_name == "Cooker on time today"
+
+
+async def test_a_typed_subentry_name_survives_a_rename_of_the_source(
+    recorder_utc, freezer
+):
+    """A name someone typed is what they asked for; it is never recomposed."""
+    hass = recorder_utc
+    await a_named_source(hass)
+    entry = await unnamed_entry(
+        hass,
+        freezer,
+        [
+            sensor("My meter", ["on"], name="My meter"),
+            a_state_subentry("My state", name="My state"),
+        ],
+    )
+
+    er.async_get(hass).async_update_entity(ENTITY, name="Cooker")
+    await settled(hass)
+
+    assert entry.subentries["My meter"].title == "My meter"
+    assert entry.subentries["My state"].title == "My state"
+
+
+async def test_a_renamed_source_recomposes_the_entry_title(recorder_utc, freezer):
+    """The entry row carries the display name, so it follows too."""
+    hass = recorder_utc
+    await a_named_source(hass)
+    entry = await unnamed_entry(hass, freezer, [])
+    assert entry.title == f"Grid ({ENTITY})"
+
+    er.async_get(hass).async_update_entity(ENTITY, name="Cooker")
+    await settled(hass)
+
+    assert entry.title == f"Cooker ({ENTITY})"
+
+
+async def test_a_renamed_source_does_not_recompute(recorder_utc, freezer):
+    """A title is not attribution.
+
+    `_async_entry_updated` rebuilds the whole history when the EntityConfig
+    moves, so a rename reaching that path would have a large installation
+    recompiling every recorded entity because somebody edited a name.
+    """
+    hass = recorder_utc
+    await a_named_source(hass)
+    entry = await unnamed_entry(hass, freezer, [sensor("Grid on time today", ["on"])])
+
+    with patch("custom_components.discrete_statistics.Compiler.async_compile") as full:
+        er.async_get(hass).async_update_entity(ENTITY, name="Cooker")
+        await settled(hass)
+
+    assert not full.called
+    assert entry.title == f"Cooker ({ENTITY})"
+    assert entry.subentries["Grid on time today"].title == "Cooker on time today"
+
+
+async def test_a_registry_update_that_changes_no_name_writes_nothing(
+    recorder_utc, freezer
+):
+    """A no-op rename must cost nothing: no subentry write, no listener."""
+    hass = recorder_utc
+    await a_named_source(hass)
+    entry = await unnamed_entry(hass, freezer, [sensor("Grid on time today", ["on"])])
+
+    with patch.object(
+        hass.config_entries,
+        "async_update_subentry",
+        wraps=hass.config_entries.async_update_subentry,
+    ) as written:
+        er.async_get(hass).async_update_entity(ENTITY, name="Grid")
+        await settled(hass)
+        er.async_get(hass).async_update_entity(ENTITY, original_name="Grid Status")
+        await settled(hass)
+
+    assert not written.called
+    assert entry.subentries["Grid on time today"].title == "Grid on time today"
+
+
+async def a_named_source_on_a_device(hass, device_name, entity_name):
+    """A source on a device, named so a title can compose from both."""
+    device = a_device(hass, device_name)
+    domain, object_id = ENTITY.split(".")
+    er.async_get(hass).async_get_or_create(
+        domain,
+        "test",
+        ENTITY,
+        suggested_object_id=object_id,
+        device_id=device.id,
+        original_name=entity_name,
+    )
+    return device
+
+
+async def test_a_rename_across_the_prefix_boundary_updates_the_registry_flag(
+    recorder_utc, freezer
+):
+    """The stripping decision lives in the registry, and it has to follow.
+
+    Core writes `has_entity_name` only at platform registration
+    (entity_platform.py:1025) - the state write syncs `original_name` and
+    not this - so a rename that stops the device's name stripping leaves
+    the registry claiming a device-relative name the entity no longer has.
+    The device rename in the frontend reads the flag to decide which
+    entities to rewrite by hand, so a stale one types a name onto a sensor
+    that should have gone on following its source.
+    """
+    hass = recorder_utc
+    await a_named_source_on_a_device(hass, "Grid", "Grid Status")
+    await unnamed_entry(hass, freezer, [sensor("Grid Status on time today", ["on"])])
+    assert sensor_entry(hass).has_entity_name is True
+    assert hass.states.get(ON_TODAY).name == "Grid Status on time today"
+
+    er.async_get(hass).async_update_entity(ENTITY, original_name="Backup Status")
+    await settled(hass)
+
+    after = sensor_entry(hass)
+    assert after.has_entity_name is False
+    assert after.original_name == "Backup Status on time today"
+    # What a person sees is unchanged by the flag: core prefixes the device
+    # name for any device entity nobody has named, and strips the prefix
+    # itself when the flag is False. Pinned so the strip in `entity_naming`
+    # is known to still agree with it.
+    assert hass.states.get(ON_TODAY).name == "Grid Backup Status on time today"
+
+
+async def test_a_rename_onto_the_prefix_updates_the_registry_flag_back(
+    recorder_utc, freezer
+):
+    """The other direction: the flag has to go back to True as well."""
+    hass = recorder_utc
+    await a_named_source_on_a_device(hass, "Grid", "Backup Status")
+    await unnamed_entry(hass, freezer, [sensor("Backup Status on time today", ["on"])])
+    assert sensor_entry(hass).has_entity_name is False
+
+    er.async_get(hass).async_update_entity(ENTITY, original_name="Grid Status")
+    await settled(hass)
+
+    after = sensor_entry(hass)
+    assert after.has_entity_name is True
+    assert after.original_name == "Status on time today"
+    assert hass.states.get(ON_TODAY).name == "Grid Status on time today"
+
+
+async def test_the_filtered_state_sensor_follows_the_prefix_boundary_too(
+    recorder_utc, freezer
+):
+    """Both sensor classes write the flag, and they do it the same way."""
+    hass = recorder_utc
+    await a_named_source_on_a_device(hass, "Grid", "Grid Status")
+    await unnamed_entry(hass, freezer, [a_state_subentry("Grid Status state")])
+    registry = er.async_get(hass)
+    assert registry.async_get(FILTERED).has_entity_name is True
+
+    registry.async_update_entity(ENTITY, original_name="Backup Status")
+    await settled(hass)
+
+    after = registry.async_get(FILTERED)
+    assert after.has_entity_name is False
+    assert after.original_name == "Backup Status state"
+
+
+async def test_a_rename_of_both_the_id_and_the_name_moves_and_recomposes(
+    recorder_utc, freezer
+):
+    """One event, two changes: the statistics move *and* the titles follow.
+
+    The recompose is not another arm of the entity-ID chain for exactly
+    this case - as an `elif` the statistics would move and every sensor
+    would keep the old entity's name.
+    """
+    hass = recorder_utc
+    await a_named_source(hass)
+    entry = await unnamed_entry(hass, freezer, [sensor("Grid on time today", ["on"])])
+    assert await existing(hass, ENTITY) != []
+
+    er.async_get(hass).async_update_entity(ENTITY, new_entity_id=NEW, name="Cooker")
+    await settled(hass)
+
+    assert await existing(hass, ENTITY) == []
+    assert NEW_ON in await existing(hass, NEW)
+    assert entry.title == f"Cooker ({NEW})"
+    assert entry.subentries["Grid on time today"].title == "Cooker on time today"
+    assert sensor_entry(hass).original_name == "Cooker on time today"

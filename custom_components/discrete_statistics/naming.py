@@ -167,9 +167,9 @@ def sensor_title(hass: HomeAssistant, cfg: EntityConfig, spec: Spec) -> str:
     The entity's name, the states as Home Assistant renders them joined by
     "or", the metric and the period: "Front Door open time this month",
     "Thermostat heat or cool share this year", "Front Door count today"
-    for a count over every state. Composed on every submit rather than
-    stored, so a renamed entity or state reads right the next time the
-    dialog is saved.
+    for a count over every state. Recomposed when the entity is renamed,
+    so the title follows it; a state renamed by a mapping or a translation
+    fires nothing, and reads right the next time the dialog is saved.
     """
     translate = state_translator(hass, cfg.entity_id)
     parts = [
@@ -186,8 +186,8 @@ def state_title(hass: HomeAssistant, cfg: EntityConfig) -> str:
 
     Just the entity and the word: there is one recorded state, so there is
     nothing to tell two of these apart the way a period sensor's states,
-    metric and period do. Composed on every submit, like `sensor_title`, so
-    a renamed entity reads right the next time the dialog is saved.
+    metric and period do. Recomposed when the entity is renamed, like
+    `sensor_title`, so the title follows it.
     """
     return f"{display_name(hass, cfg.entity_id, cfg.name)} state"
 
