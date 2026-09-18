@@ -1,9 +1,10 @@
 """Follow the entity registry.
 
-A rename of an entity we record moves its statistics with it, a move
-between devices reloads the entry whose sensors follow it, and an
-entity that disappears raises a repair issue. One listener on the
-registry, filtered to the entities configured, and nothing per entry.
+A rename of an entity we record moves its statistics with it, a change
+of its name recomposes the titles built from it, a move between devices
+reloads the entry whose sensors follow it, and an entity that disappears
+raises a repair issue. One listener on the registry, filtered to the
+entities configured, and nothing per entry.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ import logging
 
 from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_ENTITY_ID, EVENT_STATE_CHANGED
+from homeassistant.const import CONF_ENTITY_ID, CONF_NAME, EVENT_STATE_CHANGED
 from homeassistant.core import (
     CoreState,
     Event,
@@ -31,8 +32,9 @@ from homeassistant.helpers.start import async_at_started
 from .bucketer import hour_start
 from .compiler import Compiler
 from .config import CONF_FILLED_UNTIL
-from .const import DOMAIN
-from .naming import describe
+from .const import DOMAIN, SUBENTRY_SENSOR, SUBENTRY_STATE
+from .naming import describe, sensor_title, state_title
+from .reading import spec_from
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -176,6 +178,37 @@ async def async_fill(
     _notify(hass, message, f"{DOMAIN}_fill_{entry.entry_id}")
 
 
+@callback
+def async_recompose(hass: HomeAssistant, entity_id: str) -> None:
+    """Rewrite the titles composed from a renamed entity's display name.
+
+    The entry row and every subentry nobody typed a name into: a typed
+    name is what the person asked for and is never recomposed. Only a
+    differing title is written, so a rename that changes no displayed
+    name fires no update listener at all - and writing the title alone is
+    what keeps `_async_entry_updated` from taking the compile lock for a
+    full recompute, since the EntityConfig it compares is untouched.
+    """
+    entry = _entry_for(hass, entity_id)
+    if entry is None:
+        return
+    cfg = hass.data[DOMAIN]["entry_configs"][entry.entry_id]
+    for subentry in list(entry.subentries.values()):
+        if subentry.data.get(CONF_NAME) is not None:
+            continue
+        if subentry.subentry_type == SUBENTRY_SENSOR:
+            title = sensor_title(hass, cfg, spec_from(subentry.data))
+        elif subentry.subentry_type == SUBENTRY_STATE:
+            title = state_title(hass, cfg)
+        else:
+            continue
+        if title != subentry.title:
+            hass.config_entries.async_update_subentry(entry, subentry, title=title)
+    title = describe(hass, cfg.entity_id, cfg.name)
+    if title != entry.title:
+        hass.config_entries.async_update_entry(entry, title=title)
+
+
 def missing_issue_id(entry: ConfigEntry) -> str:
     return f"missing_entity_{entry.entry_id}"
 
@@ -253,6 +286,10 @@ def async_setup(hass: HomeAssistant) -> None:
             # not awaited: core's advice for an integration reloading itself,
             # and a raise here would skip the review below.
             hass.config_entries.async_schedule_reload(entry.entry_id)
+        # Not part of the chain above: a rename can move the entity ID and
+        # the name in one event, and the titles follow the name either way.
+        if data["action"] == "update" and "name" in data["changes"]:
+            async_recompose(hass, data["entity_id"])
         async_review_missing(hass)
 
     @callback
