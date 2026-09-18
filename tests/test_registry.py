@@ -773,6 +773,26 @@ async def test_a_renamed_source_recomposes_the_state_sensors_title(
     assert registry.async_get(FILTERED).original_name == "Cooker state"
 
 
+async def test_a_source_relabelled_by_its_integration_recomposes_the_titles(
+    recorder_utc, freezer
+):
+    """`original_name` is half of what `display_name` resolves, so it counts.
+
+    A device re-provisioned or relabelled upstream moves the displayed name
+    without anyone typing anything, and the titles must follow it.
+    """
+    hass = recorder_utc
+    await a_named_source(hass)
+    entry = await unnamed_entry(hass, freezer, [sensor("Grid on time today", ["on"])])
+
+    er.async_get(hass).async_update_entity(ENTITY, original_name="Cooker")
+    await settled(hass)
+
+    assert entry.title == f"Cooker ({ENTITY})"
+    assert entry.subentries["Grid on time today"].title == "Cooker on time today"
+    assert sensor_entry(hass).original_name == "Cooker on time today"
+
+
 async def test_a_typed_subentry_name_survives_a_rename_of_the_source(
     recorder_utc, freezer
 ):
@@ -842,6 +862,8 @@ async def test_a_registry_update_that_changes_no_name_writes_nothing(
         wraps=hass.config_entries.async_update_subentry,
     ) as written:
         er.async_get(hass).async_update_entity(ENTITY, name="Grid")
+        await settled(hass)
+        er.async_get(hass).async_update_entity(ENTITY, original_name="Grid Status")
         await settled(hass)
 
     assert not written.called

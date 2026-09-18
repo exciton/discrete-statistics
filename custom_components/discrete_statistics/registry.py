@@ -42,6 +42,9 @@ _LOGGER = logging.getLogger(__name__)
 # a handler is woken.
 FOLLOWED_ACTIONS = ("create", "update", "remove")
 
+# Either half of what `display_name` resolves an entity's name from.
+_NAMES = frozenset({"name", "original_name"})
+
 
 def _owned(hass: HomeAssistant, entity_id: str) -> bool:
     return any(cfg.entity_id == entity_id for cfg in hass.data[DOMAIN]["all_configs"]())
@@ -182,18 +185,15 @@ async def async_fill(
 def async_recompose(hass: HomeAssistant, entity_id: str) -> None:
     """Rewrite the titles composed from a renamed entity's display name.
 
-    The entry row and every subentry nobody typed a name into: a typed
-    name is what the person asked for and is never recomposed. Only a
-    differing title is written, so a rename that changes no displayed
-    name fires no update listener at all - and writing the title alone is
-    what keeps `_async_entry_updated` from taking the compile lock for a
-    full recompute, since the EntityConfig it compares is untouched.
+    The title alone, never the data or options: that is what leaves the
+    EntityConfig `_async_entry_updated` compares untouched, so a rename
+    cannot take the compile lock for a full recompute.
     """
     entry = _entry_for(hass, entity_id)
     if entry is None:
         return
     cfg = hass.data[DOMAIN]["entry_configs"][entry.entry_id]
-    for subentry in list(entry.subentries.values()):
+    for subentry in entry.subentries.values():
         if subentry.data.get(CONF_NAME) is not None:
             continue
         if subentry.subentry_type == SUBENTRY_SENSOR:
@@ -288,7 +288,8 @@ def async_setup(hass: HomeAssistant) -> None:
             hass.config_entries.async_schedule_reload(entry.entry_id)
         # Not part of the chain above: a rename can move the entity ID and
         # the name in one event, and the titles follow the name either way.
-        if data["action"] == "update" and "name" in data["changes"]:
+        # Both names, because `display_name` resolves either of them.
+        if data["action"] == "update" and not _NAMES.isdisjoint(data["changes"]):
             async_recompose(hass, data["entity_id"])
         async_review_missing(hass)
 
