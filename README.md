@@ -545,7 +545,7 @@ chart_type: bar-stack   # bar-stack, bar, line-stack or line
 days_to_show: 365
 ```
 
-![The card's editor: an entity picker, chart type and period radio buttons, days to show, and the metric and unit dropdowns, beside a year of a heat pump's modes as stacked percent bars](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/card-config.png)
+![The card's editor on Single entity: an entity picker, a title, chart type and period radio buttons, days to show, the metric and unit dropdowns and the states list, beside a year of a heat pump water heater's modes as stacked bars in days](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/card-config.png)
 
 Leave the entity off, and each `states:` row names its own instead, one
 state apiece — every door's open time on one chart, say:
