@@ -244,25 +244,30 @@ async def test_the_entry_is_updated_only_after_the_rename_committed(
     await setup_entry(hass)
 
     order: list[str] = []
-    real_run = compiler_module.RenameTask.run
+    real_rename = compiler_module.Compiler.async_rename
     real_update = hass.config_entries.async_update_entry
 
-    def run(self, instance):
-        real_run(self, instance)
+    # Both marks are taken on the event loop. `RenameTask.run` schedules the
+    # future's result and only then returns, so a mark after it races the
+    # loop it has already freed; `async_rename` returns once that future has
+    # resolved, which is the commit the order is about.
+    async def rename(self, old_entity_id, new_entity_id):
+        renamed = await real_rename(self, old_entity_id, new_entity_id)
         order.append("committed")
+        return renamed
 
     def update(entry, **kwargs):
         if "unique_id" in kwargs:
             order.append("entry updated")
         return real_update(entry, **kwargs)
 
-    monkeypatch.setattr(compiler_module.RenameTask, "run", run)
+    monkeypatch.setattr(compiler_module.Compiler, "async_rename", rename)
     monkeypatch.setattr(hass.config_entries, "async_update_entry", update)
 
     er.async_get(hass).async_update_entity(ENTITY, new_entity_id=NEW)
     await settled(hass)
 
-    assert order[:2] == ["committed", "entry updated"]
+    assert order == ["committed", "entry updated"]
 
 
 async def test_a_collision_is_reported_and_the_rest_still_move(recorder_utc, freezer):
