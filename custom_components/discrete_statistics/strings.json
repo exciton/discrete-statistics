@@ -46,6 +46,7 @@
       "blank_record": "A blank state has no name to record it under. Choose Ignore, or type a state name to record it as.",
       "blank_unusable": "That has no letters or digits either, so it cannot name a statistic. Choose Ignore, or type a state name.",
       "continuous_state": "That entity reports a continuous measurement. Discrete Statistics tracks entities with a fixed set of states, such as on/off or a list of modes.",
+      "ignore_needs_mapping": "Ignore all records nothing on its own. Map at least one state to Record, Ignore if short, or a state name.",
       "min_duration_too_long": "At most one hour.",
       "target_unusable": "A state name typed here needs letters or digits, so it can name a statistic."
     }
@@ -82,6 +83,7 @@
     "error": {
       "blank_record": "A blank state has no name to record it under. Choose Ignore, or type a state name to record it as.",
       "blank_unusable": "That has no letters or digits either, so it cannot name a statistic. Choose Ignore, or type a state name.",
+      "ignore_needs_mapping": "Ignore all records nothing on its own. Map at least one state to Record, Ignore if short, or a state name.",
       "min_duration_too_long": "At most one hour.",
       "target_unusable": "A state name typed here needs letters or digits, so it can name a statistic."
     }
@@ -215,7 +217,8 @@
         "record": "Record every state, including unavailable and unknown",
         "record_known": "Record known states, ignoring unavailable and unknown",
         "ignore_short_unknown": "Record known states, and unavailable and unknown only when they last a minimum duration",
-        "ignore_short": "Record every state only when it lasts a minimum duration, including unavailable and unknown"
+        "ignore_short": "Record every state only when it lasts a minimum duration, including unavailable and unknown",
+        "ignore": "Ignore all unless explicitly mapped in States below"
       }
     },
     "blank": {

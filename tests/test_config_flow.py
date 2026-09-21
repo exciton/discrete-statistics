@@ -4,13 +4,13 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
-import voluptuous as vol
 from homeassistant.components.recorder.statistics import async_add_external_statistics
 from homeassistant.config_entries import SOURCE_RECONFIGURE, SOURCE_USER
 from homeassistant.const import (
     ATTR_UNIT_OF_MEASUREMENT,
     CONF_ENTITY_ID,
     CONF_NAME,
+    STATE_UNAVAILABLE,
     STATE_UNKNOWN,
 )
 from homeassistant.core import CoreState
@@ -130,18 +130,68 @@ async def test_flow_rejects_an_entity_configured_in_yaml(recorder):
     assert result["reason"] == "yaml_configured"
 
 
-async def test_flow_does_not_offer_ignore(recorder):
+def _collapsed(result):
+    """Whether the returned form folds the state mapping away."""
+    return result["data_schema"].schema[CONF_STATES].options["collapsed"]
+
+
+async def test_ignore_with_no_mapping_keeps_the_form_open(recorder):
     # `ignore` with no per-state mapping makes every state resolve to None,
-    # so the entity never compiles an hour. It returns to the
-    # dropdown with the state-mapping screen. YAML still accepts it.
+    # so the entity would never compile an hour.
     hass = recorder
     assert await async_setup_component(hass, DOMAIN, {})
 
     result = await _pick(hass)
-    with pytest.raises(vol.Invalid):
-        result["data_schema"](
-            {CONF_DEFAULT: DEFAULT_IGNORE, CONF_STATES: {CONF_BLANK: STATE_UNKNOWN}}
-        )
+    assert _collapsed(result)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_DEFAULT: DEFAULT_IGNORE, CONF_STATES: {CONF_BLANK: STATE_UNKNOWN}},
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "ignore_needs_mapping"}
+    assert not _collapsed(result)
+
+
+async def test_ignore_all_but_one_mapped_state_creates_the_entry(recorder):
+    hass = recorder
+    assert await async_setup_component(hass, DOMAIN, {})
+
+    result = await _pick(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_DEFAULT: DEFAULT_IGNORE,
+            CONF_STATES: {
+                STATE_UNAVAILABLE: DISPOSITION_RECORD,
+                CONF_BLANK: STATE_UNKNOWN,
+            },
+        },
+    )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["options"][CONF_DEFAULT] == DEFAULT_IGNORE
+    assert result["options"][CONF_STATES] == {STATE_UNAVAILABLE: DISPOSITION_RECORD}
+
+
+async def test_a_state_mapped_only_to_ignore_is_not_a_mapping(recorder):
+    """Every state ignored is the same as no mapping at all."""
+    hass = recorder
+    assert await async_setup_component(hass, DOMAIN, {})
+
+    result = await _pick(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_DEFAULT: DEFAULT_IGNORE,
+            CONF_STATES: {
+                STATE_UNAVAILABLE: DISPOSITION_IGNORE,
+                CONF_BLANK: STATE_UNKNOWN,
+            },
+        },
+    )
+
+    assert result["errors"] == {"base": "ignore_needs_mapping"}
 
 
 async def test_options_flow_updates_and_recompiles(recorder):
