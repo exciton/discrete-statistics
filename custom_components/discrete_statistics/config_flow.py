@@ -62,6 +62,7 @@ from .const import (
     CONF_WINDOW_DURATION,
     CONF_WINDOW_END,
     CONF_WINDOW_START,
+    DEFAULT_IGNORE,
     DEFAULT_IGNORE_SHORT,
     DEFAULT_IGNORE_SHORT_UNKNOWN,
     DEFAULT_MIN_DURATION,
@@ -91,15 +92,14 @@ from .reading import Custom, Spec, spec_from
 from .statistic_ids import build, is_blank, parse, state_token
 from .templates import render_datetime
 
-# `ignore` is deliberately absent. With no per-state mapping to supply
-# exceptions it makes resolve() return None for every state, so nothing is
-# ever recordable and the entity never compiles an hour.
-# It stays valid in YAML, where `states:` supplies those exceptions.
+# `ignore` records nothing on its own, so `_errors` refuses it without a
+# mapping and the section is opened for one to be typed.
 UI_DEFAULTS = [
     DEFAULT_RECORD,
     DEFAULT_RECORD_KNOWN,
     DEFAULT_IGNORE_SHORT,
     DEFAULT_IGNORE_SHORT_UNKNOWN,
+    DEFAULT_IGNORE,
 ]
 
 # Offered, not exhaustive: `blank` takes any state name, and mapping to a
@@ -382,6 +382,10 @@ def _errors(user_input: dict[str, Any]) -> dict[str, str]:
     if problem := blank_error(_blank(user_input)):
         errors["base"] = problem
     mapping = _mapping(user_input.get(CONF_STATES, {}))
+    if user_input[CONF_DEFAULT] == DEFAULT_IGNORE and not any(
+        disposition != DISPOSITION_IGNORE for disposition in mapping.values()
+    ):
+        errors["base"] = "ignore_needs_mapping"
     if problem := min_duration_error(
         _seconds(user_input.get(CONF_MIN_DURATION)), user_input[CONF_DEFAULT], mapping
     ):
@@ -429,19 +433,22 @@ async def _async_options_form(
     prefilled into it: a suggested value comes back on submit, which would
     freeze the name instead of letting it follow the entity.
     """
-    if user_input:
-        mapping = _mapping(user_input.get(CONF_STATES, {}))
-        blank = _blank(user_input)
-    else:
-        mapping = stored.get(CONF_STATES) or {}
-        blank = stored.get(CONF_BLANK, STATE_UNKNOWN)
+    source = user_input or stored
+    mapping = (
+        _mapping(user_input.get(CONF_STATES, {}))
+        if user_input
+        else stored.get(CONF_STATES) or {}
+    )
+    blank = _blank(user_input) if user_input else stored.get(CONF_BLANK, STATE_UNKNOWN)
     known = await async_known_states(flow.hass, entity_id, mapping)
     return flow.async_show_form(
         step_id=step_id,
         data_schema=flow.add_suggested_values_to_schema(
             _options_schema(
                 _known(known),
-                bool(mapping) or blank != STATE_UNKNOWN,
+                bool(mapping)
+                or blank != STATE_UNKNOWN
+                or source.get(CONF_DEFAULT) == DEFAULT_IGNORE,
                 display_name(flow.hass, entity_id),
             ),
             user_input or _suggested(stored),

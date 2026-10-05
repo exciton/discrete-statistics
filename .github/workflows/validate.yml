@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
       # Same version as .pre-commit-config.yaml and .devcontainer/Dockerfile.
@@ -48,7 +48,7 @@ jobs:
       # too old for Home Assistant; a runner can supply the interpreter
       # directly, which is a minute faster than building the image. Keep
       # python-version on the same minor as .devcontainer/Dockerfile.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
           cache: pip
@@ -64,7 +64,7 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm

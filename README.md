@@ -127,8 +127,7 @@ change.
 
 All of these are available in the UI as well: `entity_id` is the entity you
 pick when adding the integration, `states` and `blank` are the options
-dialog's **States** section, and the rest are its fields. Only the `ignore`
-default is YAML-only.
+dialog's **States** section, and the rest are its fields.
 
 `default` accepts:
 
@@ -302,8 +301,7 @@ than in the picker, because "has no unit" cannot be expressed as a picker
 filter, and a domain allowlist would exclude enum `sensor.*` entities, which
 are a main use case.
 
-YAML configuration keeps working unchanged, and is still the only way to
-set the `ignore` default.
+YAML configuration keeps working unchanged.
 
 ## Statistics produced
 
