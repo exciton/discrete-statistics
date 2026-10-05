@@ -1,7 +1,7 @@
 # Discrete Statistics for Home Assistant
 
-Long-term statistics for binary and enum entities: how many times an entity
-entered each state, and how long it spent there. Retained forever,
+Long-term statistics for all binary and discrete entities: how many times an entity
+entered each state, and how long it spent there. Retained forever at hourly resolution,
 independent of `purge_keep_days`.
 
 Home Assistant's own long-term statistics cover numeric sensors only, so
@@ -11,25 +11,24 @@ as external statistics, which are never purged.
 
 ![A year of a heat pump's mode, week by week: hours in heat, cool and off](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/heat-pump-weekly.png)
 
-- Works with any entity whose state is a label: binary sensors, covers,
+- Works with any entity whose state is a label: binary sensors, covers, lights, switches,
   climate, `hvac_action`, enum sensors, `input_select`, `person`…
 - Records each state hour by hour — the time spent in it and the number of
-  times it was entered — every state the entity has, including one it starts
-  reporting next year
+  times it was entered — every state the entity has, including new ones that may appear
 - Kept as external statistics, which are never purged: the history outlives
   the recorder's own, so `purge_keep_days` can be short
 - Backfills from the recorder's existing history on first run, so a new
-  entity starts with whatever the recorder still holds rather than from zero
+  entity starts with whatever history the recorder still holds rather than from zero
 - Ships its own card: pick the entity and it draws every state, as
   stacked or plain bars or lines per hour, day, week, month or year, in
   hours, days or as a percentage of the time. The stock statistics-graph
-  card draws them too
+  card can draw them too, with a bit more configuration
 - Period sensors, opt-in: "time on today", "share of this month at the
-  office", "openings this year" — a number read from the statistics, so it
-  never shrinks when the recorder purges
+  office", "openings this year" — a single number calculated from the statistics, so it can cover a time period longer than the recorder keeps
+- Filtered state sensor, opt-in: the filtered state value, exactly as this integration would record it in statistics. Useful for triggering automations
 - Configured once per entity, from the UI or YAML: which states to record,
   which to ignore and carry the previous state across, how long a spell must
-  last to count, and which states to record as one
+  last to count (debounce), and which states to record as one
 
 For much of what `history_stats` is used for, this can take its place: the
 two answer the same questions from opposite ends, and [the comparison
@@ -38,14 +37,12 @@ below](#compared-with-history_stats) says which to reach for.
 ## Contents
 
 - [Installation](#installation)
-- [A first chart](#a-first-chart)
+- [Quick Start](#quick-start)
 - [Configuration](#configuration)
-- [Configuring from the UI](#configuring-from-the-ui)
 - [Statistics produced](#statistics-produced)
 - [Charts](#charts)
-- [The card](#the-card)
 - [Period sensors](#period-sensors)
-- [The filtered state sensor](#the-filtered-state-sensor)
+- [Filtered state sensor](#filtered-state-sensor)
 - [Backfilling](#backfilling)
 - [How it works](#how-it-works)
 - [Compared with `history_stats`](#compared-with-history_stats)
@@ -69,40 +66,65 @@ Or by hand:
 3. Type: **Integration**
 4. Add, then install **Discrete Statistics**
 5. Restart Home Assistant
+6. You may need to hard-refresh your browser (ctrl-shift-r) or reset the frontend cache in your app for everything to show up properly
 
 ### Manually
 
 Copy `custom_components/discrete_statistics` into your `config/custom_components`
 directory and restart Home Assistant.
 
-## A first chart
-
-Nothing has to be decided up front but the entity. Add the integration —
-Settings → Devices & Services → **Add integration** → **Discrete
-Statistics** — and pick one. The defaults record every real state it
-reports and carry `unavailable` and `unknown` across rather than counting
-them as changes, which is what most entities want; [Configuring from the
-UI](#configuring-from-the-ui) covers the rest of the dialog.
-
-Compiling starts in the background as soon as the entry is created, over
-whatever history the recorder still holds, and a notification says how many
-hours it compiled. Each hour after that is compiled at `:03`, once the hour
-has closed.
-
-Then put the card on a dashboard — **Discrete Statistics** in the card
-picker, or by hand:
-
-```yaml
-type: custom:discrete-statistics-card
-entity: binary_sensor.front_door
-```
-
-That draws the last thirty days of the entity's states as stacked bars, and
-nothing needs adding under Resources. [The card](#the-card) has the rest of
-its options; [Period sensors](#period-sensors) puts one of the same numbers
-on a dashboard as a figure rather than a chart.
+## Quick Start
+1. [![Add Discrete Statistics](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=discrete_statistics) or Settings → Devices & Services → **Add integration** → **Discrete
+Statistics**
+2. Select an entity and hit submit
+3. The state history is compiled into statistics in the background, and a notification tells you when it's done
+4. Add to dashboard — search **Discrete Statistics** in the card picker
 
 ## Configuration
+There are options to configure how statistics are compiled from the state data for each entity. All configuration options are available from the UI, or from [YAML](#yaml).
+
+[![Show the Discrete Statistics integration](https://my.home-assistant.io/badges/integration.svg)](https://my.home-assistant.io/redirect/integration/?domain=discrete_statistics)
+
+From the **Discrete Statistics** integration page (link above) you can add more entities to be tracked - **Add entry** - or configure how existing entities are recorded with the gear icon ⚙. All options can be changed after creation safely, and existing history will be backfilled.
+
+![Configure Discrete Statistics](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/integration-page.png)
+
+- The **name** will show up when you're building statistics charts - it takes the source entity name by default.
+- **States to record** determines the default mapping between the entity's state and the recorded statistic.
+- **Minimum duration** is used to ignore short spells in a state
+- The **States** section allows you to map how individual states are recorded - overriding the default set in **States to record**. It shows every state the
+entity has reported, its `options` (for enum sensors), plus `unavailable` and `unknown`. Each state can be configured to record, record only when it lasts the minimum duration, ignore (continue previous state), or record as another state. Custom state names can be set by typing in the box. States that appear later follow the
+default rule. **Blank states** is for mapping states with no letters or digits (e.g. an empty string).
+
+
+<img src="https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/options-dialog.png" width="496" alt="The options dialog: name, the states-to-record dropdown open on its four choices, minimum duration, and the States section with a row per state and one for blank states">
+
+Compiling statistics starts in the background as soon as the entry is created,
+and a notification reports how many hours were compiled.
+
+Changing an entry's recording rule, a state's row or the minimum duration
+recompiles that entity's existing history (whatever is still present in the recorder), so the change applies to the past as well as the future. Statistics that are older than the recorded state are left untouched.
+
+When a source entity is renamed or has its entity_id changed - the corresponding statistics entry will be updated automatically.
+
+When a source entity is deleted - the statistics entry will stop compiling, and raise a repair issue warning you about it.
+
+It's safe to delete a statistics configuration entry - the already compiled statistics are kept, and the source entity is untouched. If you create it again for the same source, it will pick up where it left off and backfill the existing history. If you want to delete the compiled statistics data as well you can do so in Settings → Tools → Statistics. The Statistic IDs all begin with `discrete_statistics:`.
+
+The entry's ⋮ menu has **Download diagnostics**: the entry and the
+disposition table built from it, the statistics the recorder holds and
+where they end, the entity's earliest retained state and current one, the
+recorder's backlog and retention, and every period sensor's state.
+
+Entities that report a *measurement* are refused — anything with a
+`state_class` or a unit. Each distinct reading would otherwise become its own
+pair of statistics. This kind of entity is handled by the built-in long-term statistics.
+
+### YAML
+
+It's possible to configure `discrete_statistics` via YAML.
+
+An entity may only have one configuration, either in YAML or through the UI, with YAML taking precedence if both exist (a repair issue will be raised in this case).
 
 ```yaml
 discrete_statistics:
@@ -110,9 +132,9 @@ discrete_statistics:
     name: "Grid Status"
 ```
 
-`unavailable` and `unknown` are ignored by default: the previous state
-carries forward, so a Home Assistant restart does not look like a state
-change.
+By default `unavailable` and `unknown` are ignored: the previous state
+carries forward, so any intermittent sensor reporting is not counted as a state change.
+
 
 ### Options
 
@@ -125,9 +147,6 @@ change.
 | `blank` | `unknown` | what to do with a state that has no letters or digits |
 | `min_duration` | — | how long a spell of a conditionally recorded state must last |
 
-All of these are available in the UI as well: `entity_id` is the entity you
-pick when adding the integration, `states` and `blank` are the options
-dialog's **States** section, and the rest are its fields.
 
 `default` accepts:
 
@@ -186,23 +205,20 @@ never left the state before it: no transition is counted, and the time goes
 to the state it interrupted. `min_duration` takes a duration — `00:00:30`,
 `{minutes: 5}` — and can be at most one hour.
 
-Two uses. A device that drops off the network for a few seconds on every
-router reboot, but whose real outages are worth a band on the chart:
+**Connection Blips** e.g. A device that drops off the network for brief periods, but whose real outages are worth capturing:
 
 ```yaml
 discrete_statistics:
-  - entity_id: binary_sensor.grid_status
+  - entity_id: light.kitchen
     default: ignore_short_unknown
-    min_duration: "00:05:00"
+    min_duration: "00:02:00"
 ```
 
 `on` and `off` are recorded as they come. A five-minute outage is recorded
 as five minutes of `unavailable` and one transition; a twenty-second blip is
-twenty more seconds of `on`, and no transition at all. The same for one
-state only is a `states:` entry — `unavailable: ignore_short` with the
-`default` left alone.
+twenty more seconds of `on`, and no transition at all.
 
-And a contact that bounces — a door that reads `off`, `on`, `off` in the
+**Debouncing** e.g. a door that reads `off`, `on`, `off` in the
 half-second it takes to close:
 
 ```yaml
@@ -214,26 +230,24 @@ discrete_statistics:
 ```
 
 Every state is conditional then, so the bounce is not counted and the door
-closed once. `unavailable` and `unknown` are recorded under it whenever
-they last long enough; add `unavailable: ignore` to `states:` to carry them
-forward regardless.
+closed once.
 
 Each spell is judged on its own length, not on the run it sits in: `on` for
-two seconds then `unknown` for two seconds, under a five-second threshold, is
-two short spells, not one four-second one. Until a spell has ended the
+three seconds then `unknown` for three seconds, under a five-second threshold, is
+two short spells, not one six-second one. Until a spell has ended the
 component cannot know how long it will be, so an hour compiled while one is
 running treats it as short and is compiled again once the answer is in —
 the same trailing recompile that picks up a late-committed state.
 
 ```yaml
 discrete_statistics:
-  # chart dropouts as their own band
+  # combine unavailable and unknown into one
   - entity_id: binary_sensor.grid_status
     states:
       unknown: record
       unavailable: unknown
 
-  # closed vocabulary; a new state cannot appear
+  # fixed list of states; a new state cannot appear
   - entity_id: sensor.heat_pump_hvac_action
     default: ignore
     states:
@@ -243,65 +257,6 @@ discrete_statistics:
       cool: cooling
 ```
 
-## Configuring from the UI
-
-[![Add Discrete Statistics](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=discrete_statistics)
-
-Or Settings → Devices & Services → **Add integration** → **Discrete
-Statistics**. Pick an entity, then fill in the dialog shown below: a name
-if the entity's own will not do, and which states to record - the two
-choices that mention a minimum duration read the duration field below
-them, a minute if it is left blank. The same dialog is the entry's options dialog afterwards, so nothing
-is set on creation that cannot be changed later. Compiling starts in the
-background as soon as the entry is created,
-and a notification reports how many hours were compiled: the entity's full
-retained history for a genuinely new entity, or just the trailing window if
-it was previously configured and deleted, since statistics are kept on
-removal and compiling resumes from that watermark.
-
-![The options dialog: name, the states-to-record dropdown open on its four choices, minimum duration, and the States section with a row per state and one for blank states](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/options-dialog.png)
-
-The dialog has a **States** section with a row for every state the
-entity has reported — its history, its current state and, for an enum
-sensor, its `options` — then `unavailable` and `unknown`, which every
-entity can report, folded away until something in it is set. Each row
-is the `states:` entry for that state: leave it following the recording
-rule above, record it, record it only when it lasts the minimum duration,
-ignore it, or pick another state to record it as. Typing a name the entity
-has never reported works too. A state that appears later follows the
-recording rule, as in YAML. The section's last row is `blank:`, for a state
-with no letters or digits, and the section is open when either is set.
-
-Changing an entry's recording rule, a state's row or the minimum duration
-recompiles that entity's whole history, so the change applies to the past
-as well as the future; changing only its name does not.
-
-The entity itself cannot be changed after creation: it determines the
-statistic IDs, so a change would orphan the existing series. Delete the
-entry and make a new one instead.
-
-An entity may be configured once, either in YAML or through the UI. The
-dialog refuses an entity that YAML already configures; a YAML block added
-later for an entity the UI owns disables that entry and raises a repair
-issue.
-
-The entry's ⋮ menu has **Download diagnostics**: the entry and the
-disposition table built from it, the statistics the recorder holds and
-where they end, the entity's earliest retained state and current one, the
-recorder's backlog and retention, and every period sensor's state — what a
-report of "it isn't compiling" needs.
-
-Removing an entry stops compiling. It never deletes statistics — do that
-in Settings → System → Tools → Statistics.
-
-Entities that report a *measurement* are refused — anything with a
-`state_class` or a unit. Each distinct reading would otherwise become its own
-pair of statistics, written every hour forever. The check is on submit rather
-than in the picker, because "has no unit" cannot be expressed as a picker
-filter, and a domain allowlist would exclude enum `sensor.*` entities, which
-are a main use case.
-
-YAML configuration keeps working unchanged.
 
 ## Statistics produced
 
@@ -333,44 +288,31 @@ is observed — no configuration change is needed when a new state shows up.
 
 A row is written only for an hour in which something happened: a state
 gets a duration row for each hour it had time in, and a count row for
-each hour it was entered. A period in which the entity was recorded but
-the state never occurred reads as zero on the integration's own card;
-the stock statistics-graph card, which reduces the rows itself, leaves
-such a period out (see [Compared with the stock
-card](#compared-with-the-stock-card)). A period with no rows at all — the
-integration was not running — is a gap either way.
-
-### Blank states
-
-A state that cannot be recorded at all is treated as `unknown` rather than as
-a gap: an empty one, which Home Assistant produces when an entity is removed
-or reloaded, or one made only of punctuation. So it is ignored or recorded
-according to the same setting that governs `unknown`.
+each hour it was entered.
 
 ### Gaps
 
-An hour the component cannot open in a known state is not recorded. That
-is the hour before an entity's first state — it rarely lands exactly on
-the hour, and recording the minutes before it would describe nothing more
-than the moment it was switched on — and, rarely, a stretch after the
-integration has been off for longer than the recorder's `purge_keep_days`,
-when the source rows for it are gone and nothing else can vouch for the
-state. Such hours have no rows at all: a chart shows a gap there, and the
-cumulative totals carry across unchanged.
-Everything on either side is untouched, and a `recompute` reaching into
-the stretch leaves it alone too.
+The component only records statistics for whole hours. The partial hour when an entity first appeared is not recorded. When performing a `recompute`, only hours completely covered with state data are updated - everything prior to that is left as-is.
 
 ## Charts
 
-The statistics are ordinary long-term statistics, so the stock
-statistics-graph card draws them; the integration also ships its own card
-(below), which is configured by entity rather than by statistic ID and
-draws every state the entity has, including one it gains later. Most
-examples here are given both ways; the share of time has no stock-card
-equivalent.
+The integration ships its own card for discrete-statistics graphs, which has all the same functions as the stock statistics-graph card, is easier to configure, and adds some features specific to discrete-statistics (see below). The statistics data are ordinary long-term statistics, so the stock statistics-graph card can also draw them.
 
 Time in each state per day, stacked:
 
+```yaml
+type: custom:discrete-statistics-card
+title: Grid Status
+# Only the source entity needs to be specified
+# Individual states are added automatically
+entity: binary_sensor.grid_status
+period: day
+days_to_show: 30
+```
+
+![Thirty days of grid status: a full bar of on each day, with two short bands of off](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/grid-state-daily.png)
+
+The same chart with stock statistics-graph.
 ```yaml
 type: statistics-graph
 title: Grid Status
@@ -378,39 +320,13 @@ chart_type: bar-stack
 period: day
 days_to_show: 30
 stat_types:
-  - change
-entities:
+  - change # Only change and sum types make sense
+entities: # Each state needs to be added manually
   - discrete_statistics:binary_sensor_grid_status_on_duration
   - discrete_statistics:binary_sensor_grid_status_off_duration
 ```
 
-![Thirty days of grid status: a full bar of on each day, with two short bands of off](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/grid-state-daily.png)
-
-The same chart from the card:
-
-```yaml
-type: custom:discrete-statistics-card
-title: Grid Status
-entity: binary_sensor.grid_status
-period: day
-days_to_show: 30
-```
-
 Outages per month:
-
-```yaml
-type: statistics-graph
-title: Monthly Outages
-chart_type: bar
-period: month
-days_to_show: 365
-stat_types:
-  - change
-entities:
-  - discrete_statistics:binary_sensor_grid_status_off_count
-```
-
-![A year of outages per month, none to five](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/outages-monthly.png)
 
 ```yaml
 type: custom:discrete-statistics-card
@@ -424,22 +340,12 @@ period: month
 days_to_show: 365
 ```
 
-A year of a heat pump's mode, week by week — the chart at the top of this
-page:
+![A year of outages per month, none to five](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/outages-monthly.png)
 
-```yaml
-type: statistics-graph
-title: Heat Pump
-chart_type: bar-stack
-period: week
-days_to_show: 365
-stat_types:
-  - change
-entities:
-  - discrete_statistics:climate_heat_pump_heat_duration
-  - discrete_statistics:climate_heat_pump_cool_duration
-  - discrete_statistics:climate_heat_pump_off_duration
-```
+
+
+A year of a heat pump's modes, week by week — the chart at the top of this
+page:
 
 ```yaml
 type: custom:discrete-statistics-card
@@ -449,7 +355,7 @@ period: week
 days_to_show: 365
 ```
 
-The share of time a light is on, as a percentage, on an axis that fits it:
+The share of time a light is on, as a percentage:
 
 ```yaml
 type: custom:discrete-statistics-card
@@ -466,11 +372,6 @@ hide_legend: true
 
 ![A year of the kitchen light's share of time on, between 2 % and 19 % on an axis topping out at 20 %](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/lights-share-of-time-custom.png)
 
-With the stock card a state that appears later accumulates immediately
-but must be added to the card's `entities` list to be drawn; the card
-below draws it as soon as it has statistics.
-
-### Time at places
 
 A `person` or `device_tracker` entity's state is the zone it is in —
 `home`, `Work`, `Gym`, or `not_home` for anywhere else — so it is an enum
@@ -483,7 +384,7 @@ discrete_statistics:
   - entity_id: person.alice
 ```
 
-Hours at each place per week, stacked, with the integration's card:
+Hours at each place per week, stacked:
 
 ```yaml
 type: custom:discrete-statistics-card
@@ -494,47 +395,30 @@ period: week
 days_to_show: 90
 ```
 
-The same with the stock card, naming the places to draw. The state is the
-zone's name, and the statistic ID holds it as a token — lower case, spaces
-and punctuation dropped — so a zone named *Work* is `work` and *Mum's
-House* is `mumshouse`:
+The stock Statistics card can display a single calculated number, from the compiled discrete statistics:
 
 ```yaml
-type: statistics-graph
-title: Alice
-chart_type: bar-stack
-period: week
-days_to_show: 90
-stat_types:
-  - change
-entities:
-  - discrete_statistics:person_alice_home_duration
-  - discrete_statistics:person_alice_work_duration
-  - discrete_statistics:person_alice_not_home_duration
+type: statistic
+entity: discrete_statistics:person_alice_gym_count
+period:
+  calendar:
+    period: year
+stat_type: change
 ```
-
-Trips are the count statistic: `discrete_statistics:person_alice_gym_count`
-per month is how often the gym was visited, and a [period
-sensor](#period-sensors) over the `gym` state with the count measure and
-*This year* puts that number in a tile. A zone is a state from the moment
-its entity crosses the boundary, so a phone that reports its position
-every few minutes gives an arrival time accurate to that interval, and a
-short excursion out of a zone and back is a state change like any other —
-`min_duration` with `ignore_short` on `not_home` smooths those out.
+![Total trips to the gym this year](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/gym-sessions.png)
 
 
-## The card
 
-The integration ships its own card, so nothing needs adding under
-Resources. It draws one of two charts: one entity's states, or one state
-from each of several entities. Either is stacked bars by default, and
-configured by entity rather than by statistic ID.
+### Card configuration
+The card draws one of two charts: all of one entity's states, or multiple states from several entities.
 
-Name the entity, and the card draws its states:
+All options are available from the UI, and can be manually configured via YAML as well.
+
+![The card's editor on Single entity: an entity picker, a title, chart type and period radio buttons, days to show, the metric and unit dropdowns and the states list, beside a year of a heat pump water heater's modes as stacked bars in days](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/card-config.png)
 
 ```yaml
 type: custom:discrete-statistics-card
-entity: climate.living_room
+entity: climate.living_room #  single entity charts (all states by default)
 title: Heat pump
 metric: duration        # duration (time in state) or count (transitions)
 unit: percent           # auto, h, d or percent; only for duration
@@ -543,43 +427,7 @@ chart_type: bar-stack   # bar-stack, bar, line-stack or line
 days_to_show: 365
 ```
 
-![The card's editor on Single entity: an entity picker, a title, chart type and period radio buttons, days to show, the metric and unit dropdowns and the states list, beside a year of a heat pump water heater's modes as stacked bars in days](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/card-config.png)
-
-Leave the entity off, and each `states:` row names its own instead, one
-state apiece — every door's open time on one chart, say:
-
-```yaml
-type: custom:discrete-statistics-card
-title: Doors
-states:
-  - entity: binary_sensor.front_door
-    state: "on"
-  - entity: binary_sensor.back_door
-    state: "on"
-metric: duration
-unit: percent
-period: day
-days_to_show: 14
-```
-
-![The card's editor with Chart set to Multiple entities: four series rows each naming a light and its On state, with a drag handle and delete button at the left of each and a name and colour beside them, the "Add an entity" picker below, beside a year of the four lights' on-time as weekly percent lines](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/card-config-multiple.png)
-
-One entity's states answer what it was doing: the modes a heat pump sat
-in, a door's open against its closed. One state across several entities
-answers which of them did it most, the same question asked of a set of
-sensors side by side.
-
-The `entity:` rule cuts both ways: a row needs one when the card does not
-name one itself, and must not carry one when it does. Everything else —
-the metric, the period, the chart type, the names and colours — works the
-same in both. The two keys below are the exception: `states:` is a filter
-over one entity's states only where the card names one, and
-`ignore_states:` needs the card's own entity — a card without one refuses
-it, since a list of one state per row has nothing to filter.
-
-A card that names an entity draws every state that entity has statistics
-for, in the names the statistics carry. `states:` narrows and orders them;
-`ignore_states:` drops some and keeps the rest:
+**Single Entity Charts** show all states by default. `states:` narrows the list, and orders them; `ignore_states:` ignores some and keeps the rest. Use both together to ignore some, but automatically add any new ones when they show up:
 
 ```yaml
 states:          # only these, in this order
@@ -588,19 +436,16 @@ states:          # only these, in this order
 ```
 
 ```yaml
-ignore_states:   # everything but these, alphabetically
+ignore_states:   # everything but these
   - unavailable
 ```
 
-Together they order the front and leave the list open: the states in
-`states:` come first, then every other state alphabetically, so a state
-the entity gains later still shows up, at the end:
-
 ```yaml
-states:
+states:          # show these
   - heat
   - cool
-ignore_states:
+  # Any new states that are recorded show up here
+ignore_states:   # don't show these
   - unavailable
 ```
 
@@ -619,73 +464,50 @@ states:
   - "off"
 ```
 
-On a card with no entity of its own an entry carries `entity:` as well,
-and is drawn under that entity's name rather than the state's — or both,
-"Front Door: Open", where the same entity is on more than one row. A `name:`
-overrides either.
+**Multiple entity charts** must list `states:` with each row describing one `entity:` and one `state:`
 
-The selector at the top of the editor's form chooses between the two
-charts, and what it lists below the form follows: for one entity's states,
-a row per state with a tick, a drag handle, a name and a colour; for
-several entities, a row per series naming an entity and one of its states,
-with a name and a colour apiece. Either way the editor writes the config
-for you. Under the list of one entity's states, the "Ignore states that
-appear later" switch chooses which the unticked ones become: with it on they are
-left out of `states:`; with it off they go in `ignore_states:`, which stays
-present — empty if need be — so the list stays open.
+```yaml
+type: custom:discrete-statistics-card
+title: Doors
+states:
+  - entity: binary_sensor.front_door
+    state: "on"
+  - entity: binary_sensor.back_door
+    state: "on"
+metric: duration
+unit: percent
+period: day
+days_to_show: 14
+```
 
-`unit: percent` is the share of each period spent in the state, so a
-stacked bar whose states are all drawn is always full height — except the
-last bar, which is only as full as the period it covers so far. Several
-entities' shares of the same period are not one whole between them and can
-add up past 100%, so that chart's axis follows the tallest bar rather than
-stopping at 100. `auto` picks hours for hourly and daily periods and days
-for coarser ones.
 
-`chart_type` takes the stock statistics-graph card's four values, so a
-config moves between the two cards. A line is drawn through each period's
-start, as the stock card draws it.
 
-`hide_legend: true` leaves the legend off.
+![The card's editor with Chart set to Multiple entities: four series rows each naming a light and its On state, with a drag handle and delete button at the left of each and a name and colour beside them, the "Add an entity" picker below, beside a year of the four lights' on-time as weekly percent lines](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/card-config-multiple.png)
+
+
 
 `energy_date_selection: true` makes the card follow a dashboard's
-`energy-date-selection` card instead of `days_to_show`; `collection_key`
-names the picker when a dashboard has more than one.
-
-The card asks the integration for its buckets rather than the recorder.
-The sums are cumulative, so a period's value is the difference between
-the rows at its two edges: a year of months is thirteen rows a state,
-not every hour of the year reduced on the server, and the card loads in
-the time it takes to draw. A gap in the statistics — downtime
-longer than the recorder keeps — is time in no state, so the bars either
-side of it are shorter by exactly the time it took from them.
-
-The card renders through Home Assistant's own chart component. Because
-that component is internal to the frontend, a Home Assistant release can
-change it; the integration's minimum version is raised when that happens.
+`energy-date-selection` card instead of `days_to_show`; `collection_key` names the picker when a dashboard has more than one.
 
 ### Compared with the stock card
 
-The statistics are ordinary long-term statistics and the stock
-statistics-graph card draws them. The one difference that matters here
+The statistics created by this integration are ordinary long-term statistics and the stock
+statistics-graph card can also draw them. The one difference that matters here
 is what the two cards make of a period in which nothing happened.
 
 ![Two pairs of hourly charts, stock beside ours: a light's on-time draws as scattered dashes on the stock card and as one line touching zero on ours; a week with no grid outage is "No statistics found" on the stock card and a flat zero on ours](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/quiet-hours-stock-vs-ours.png)
 
-The rows are sparse: a state has a row only in an hour it had time in.
+The statistics rows are sparse: a state has a row only in an hour it had time in.
 The stock card reduces the rows on the server, so a period with no row
-is simply absent from what it draws. Top pair: a light that is on for a
+is simply absent from what it draws. Left pair: a light that is on for a
 few minutes a day has a row in a few hours of each day, and the stock
 card draws those as scattered dashes with nothing between them, where
-ours draws one line that sits on zero the rest of the time. Bottom pair:
+ours draws one line that sits on zero the rest of the time. Right pair:
 a grid that did not fail all week has no `off` row at all, so the stock
 card reports "No statistics found" — indistinguishable from an entity
 that was never recorded — where ours draws a flat zero. Our card reads
-the rows standing at each period's edges, so it can tell "recorded, and
-the state never occurred" (zero) from "not recorded" (a gap). For an
-integration whose whole point is the quiet states — the grid that stayed
-up, the light that stayed off, the pump that never ran — the zero is
-the answer.
+the rows at each period's edges, so it can tell "recorded, and
+the state never occurred" (zero) from "not recorded" (a gap).
 
 |                                                  | Stock statistics-graph card         | Discrete Statistics card                          |
 | ------------------------------------------------ | ----------------------------------- | ------------------------------------------------- |
@@ -695,7 +517,7 @@ the answer.
 | Downtime the recorder no longer holds            | a gap                               | a gap, and the bars either side shorter by exactly the time it took |
 | Share of time (`unit: percent`)                  | —                                   | yes                                               |
 | State names, colours and order                   | per statistic, by hand              | the editor: tick, drag, name, colour              |
-| Data loaded for a year of months                 | every hour, reduced on the server   | thirteen rows a state                             |
+| Data loaded for a year of months                 | every hour - 8760 rows per state   | 13 rows per state                             |
 | Chart types                                      | bar, bar-stack, line, line-stack    | the same four                                     |
 | Energy date picker                               | yes                                 | yes                                               |
 | Other integrations' statistics on the same chart | yes                                 | no — but several of this integration's entities   |
@@ -716,8 +538,7 @@ for the entity and choose **Add period sensor**:
 
 - **States** — one or more, added together, from the states the entity has
   statistics for and the options of an enum sensor; any state can be typed
-  in. A state the entry's own settings ignore is refused, since a sensor
-  over it would never move. Leave it empty to count changes between every
+  in. Leave it empty to count changes between every
   state.
 - **Measure** — time in the states in hours, the share of the period spent
   in them as a percentage, or the number of changes into them.
@@ -725,11 +546,11 @@ for the entity and choose **Add period sensor**:
   month, this year, last year, or all time; weeks start on Monday, days at
   midnight in Home Assistant's own time zone. Or the last hour, 24 hours,
   7, 30 or 365 days, ending now — exactly that long, across a clock change
-  too. Or *Custom*, for a window the section below describes.
+  too. Or *Custom*.
 
   ![The Period dropdown open: the nine calendar periods, then Last hour, Last 24 hours, Last 7 days, Last 30 days, Last 365 days and Custom](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/sensor-dialog-period-options.png)
 
-- **Custom period** — a folded section with **Start**, **End** and
+- **Custom period** — calculated from **Start**, **End** and
   **Duration**. Fill in any two, or Start alone to run to now. Start and
   End are templates that render to a date and time —
   `{{ today_at('09:00') }}`, `{{ state_attr('sun.sun', 'next_rising') }}`,
@@ -780,45 +601,17 @@ The sensor belongs to the entry: its settings are edited from the entry's
 page and deleting it there removes the sensor. The entry itself still has
 no entities.
 
-**Where the sensor appears.** It is listed on the source entity's device,
-alongside the entity it is derived from, which is where the two sit
-together. The device is the only join Home Assistant offers — there is no
-"derived from" edge — and each one's **Related** tab names that device
-rather than the other, because a search from an entity resolves up to its
-device and not back down to the device's other entities. Nothing else moves: the
-sensor still belongs to this integration's entry, it is still listed under
-that entry on the integration's page, and the device stays the source
-integration's. Moving the source entity to another device takes its
-sensors with it.
+**Where the sensor appears.** It is listed on the source entity's device (if it has one), alongside the entity it is derived from.
 
 ![A light's device page: a Controls card holding the Kitchen light, and a Sensors card beneath it listing Kitchen count this month at 70, Kitchen On share this month at 17.3%, Kitchen On time last 24 hours at 12h 27m, and Kitchen state reading Off](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/device-sensors.png)
 
-A source entity with no device — a template entity, a group, a `person`,
-an `input_boolean` — gives nothing to attach to, so those sensors have no
-device and no link. That is normal rather than a failure, and they keep
-the whole name they have always had.
+There are two ways to adjust the name on a period sensor:
+- Inside the integration - Home Assistant prefixes the device's name to it, and the prefix follows the device if it is renamed.
+- Directly at the sensor entity - no prefix is added, and the name is never adjusted.
 
-On a device the name is the device's name plus what tells the sensor
-apart — "Kitchen Lights Count this month", not the device's name twice.
-Home Assistant prefixes the device's name to every entity on it, so the
-sensor supplies only the rest, the composed title with the device's name
-stripped from its front. Because nothing here stores the device's name,
-renaming the device renames its sensors with it. A name typed into
-**Name** is not shown bare either: Home Assistant prefixes the device to
-it as it does to any other, so "My meter" on a device called "Grid" reads
-"Grid My meter". Only Home Assistant's own **Rename**, on the entity
-itself, gives a name with no prefix at all.
 
-**Sensors that already exist are renamed when you upgrade.** They take
-the device and the device-relative name the first time Home Assistant
-sets the entry up afterwards. Their entity IDs do not change — those are
-assigned once and kept — so automations, scripts and dashboard rows that
-name a sensor keep working; anything that shows a friendly name shows the
-new wording. A name you set with Home Assistant's own **Rename** is left
-alone, since that one is yours and nothing here overwrites it.
-
-A time sensor is a duration in hours with two decimals, a share a
-percentage with one, a count a whole number. Each carries `period_start`
+A time sensor is a duration in hours, a share is a
+percentage, a count is a whole number. Each carries `period_start`
 and `period_end`, `compiled_until` — the end of the last compiled hour,
 which is where the statistics stop and the live reading starts —
 `live`, and `estimated` (see *Part hours*). A rolling or custom window's
@@ -826,9 +619,7 @@ edges are shown to the minute. A period that starts before the entity's
 statistics do is measured from where they start, and the share is of the
 time actually measured, so a sensor over all time on an entity with a
 month of statistics reads the
-share of that month. A sensor whose states are all ignored by the entry,
-or whose entity has no statistics yet, is `unavailable`, with the reason in
-the log — as is a custom sensor whose templates do not render.
+share of that month.
 
 ![A time sensor's details: 38 h 15 m this month, with Period start, Period end, Compiled until, Live and Estimated attributes](https://raw.githubusercontent.com/exciton/discrete-statistics/main/docs/images/sensor-details.png)
 
@@ -860,7 +651,7 @@ afterwards is fine, the exclude is only a convenience. Nothing here adds a
 `state_class`, so the recorder does not build a second set of long-term
 statistics over these either.
 
-## The filtered state sensor
+## Filtered state sensor
 
 The sensors above are numbers out of the history. This one is the present
 tense: **the state the entity is in right now, as this entry records it** —
@@ -902,32 +693,17 @@ automation:
 ```
 
 The ID is `sensor.filtered_discrete_<entity>` —
-`sensor.filtered_discrete_binary_sensor_front_door`. Deliberately *not* the
-`sensor.discrete_` prefix the period sensors use, so the one-line exclude
-above leaves it alone: this one changes only when the entity's recorded
-state changes, which is a row worth keeping and far fewer of them than the
-entity itself writes. Exclude it by name if you would rather not have it in
-the history at all — nothing here reads it back, and the statistics are the
-long-term record either way.
+`sensor.filtered_discrete_binary_sensor_front_door`. Exclude it from the recorder if you would rather not have it in
+the history - the long-term statistics are recorded regardless.
 
 It is listed on the source entity's device like the period sensors above,
 so the two sit together on that device's page, and it is named the
-same way: the device's name and the rest, "Kitchen Lights State". A source
-entity with no device leaves it without one too, keeping the whole name it
-has always had. One that already exists is renamed on upgrade and keeps its
-entity ID, exactly as described there.
+same way: the device's name and the rest, "Kitchen Lights State".
 
 ## Backfilling
 
-An entity that has not changed within the recorder's window has no history at
-all — purge keeps nothing per entity — but it is still recorded: Home
-Assistant knows its current state and when that began, which is enough to
-account for every whole hour since. An entity with neither history nor a
-current state records nothing.
-
 A newly configured entity compiles its whole retained history on its first
-ordinary run — there is no watermark to trail, so there is nothing to do but
-start at the beginning. `recompute` is for the cases that first run cannot
+ordinary run. `recompute` is for the cases that first run cannot
 cover: re-attributing history after a configuration change, or repairing a
 range.
 
@@ -966,12 +742,9 @@ the old state stop growing but remain as a historical record. That is
 deliberate — they describe hours that really happened, and the recorder can no
 longer prove otherwise. Drop them from your charts if they are noise.
 
-To delete one properly, use Home Assistant's own tool at **Settings → System →
+To delete a statistic permanently, use Home Assistant's own tool at **Settings →
 Tools → Statistics**, which removes a single statistic with a confirmation
-step. It stays deleted — nothing else records that it existed, so the next
-compile simply stops writing it. The one exception is a state that happens
-again: an observed state is always recorded, both its duration and its count. Deletion should be a decision you make, not a side effect of a routine
-rebuild.
+step. That statistic will only return if the state occurs again and the integration does not filter it.
 
 ## How it works
 
@@ -984,7 +757,8 @@ state change at `10:59:58` may not be committed when the hour is first
 compiled; recomputing picks it up, and the recorder's upsert on
 `(metadata_id, start_ts)` makes the correction invisible. The same property
 means the component can run at any cadence, catch up after downtime, and
-backfill using one code path.
+backfill using one code path. A state the recorder commits more than three
+hours late is missed, and needs a manual `recompute` over that range.
 
 Runs are skipped while the recorder's queue is deep, since compiling is
 idempotent and the next run catches up.
@@ -1000,7 +774,7 @@ rows, to the same result. The two approach it from opposite ends.
 `history_stats` is sensor first. Its sensor is the product: on every
 refresh it reads the recorder's raw states for whatever window its
 templates render to now, and long-term statistics of that number are
-optional, a `state_class` on the sensor for the recorder to sum. This
+optional (`state_class` must be added to the entity). This
 component is statistics first. The hourly rows are the product, compiled
 once from the raw states and kept past the recorder's retention, and a
 sensor over them is optional, a period sensor on the entry. That order is
@@ -1195,7 +969,7 @@ integration listens for the rename, moves every statistic to the new
 name and updates its own entry, and a notification says what moved. The
 period sensors keep their entity IDs, since those were only suggested
 when they were created, and those named after the entity take the new
-name as the rename lands — a name you typed yourself is left alone.
+name as the rename lands — a name you entered yourself is left alone.
 
 Replacing a device is two steps. Remove the old entity (or its whole
 device) from the registry first; a repair issue appears saying the entity
@@ -1225,30 +999,7 @@ the old entity: a notification asks you to update it.
 ## Limitations
 
 - The statistics are hourly: the external statistics API writes only to
-  the hourly table, so a chart's finest bucket is an hour. A period sensor
-  reads the recorder for the hours not yet compiled and for a window edge
-  inside an hour it still holds, so a number is exact to the state change
-  and, with the current hour included, current to it; only the charts are
-  hourly, and an hour reaches them once it closes.
-- Each hourly run recompiles the trailing three hours, so a state the
-  recorder commits within three hours of when it happened is picked up. One
-  committed later than that needs a manual `recompute`. That takes a state
-  committed after states that happened later than it, which the recorder's
-  own queue makes close to impossible.
-- If the component is disabled, or Home Assistant is down, for longer than
-  the recorder's `purge_keep_days`, the hours the recorder has purged by the
-  time it runs again cannot be compiled and leave a hole in the statistics
-  (see *Gaps*) — unless the entity did not change at all across them, which
-  its own last row can vouch for.
-- If the entity being recorded is removed outright, the sensors derived from
-  it are not removed with it: they belong to this integration's config entry
-  rather than to the device, so Home Assistant detaches them from the device
-  and leaves them standing. One left that way still carries a name written
-  relative to the device — "Count this month" — with no device in front of
-  it any more, and reads as that bare phrase until the next reload or
-  restart. A device being removed is not this case: that clears the entity's
-  device as well, which is a change the sensors follow on their own.
-  Reloading whenever a recorded entity disappears would fire through
-  ordinary integration churn, since plenty of integrations remove and re-add
-  their entities on a reload of their own, and that costs more than a wrong
-  name in a case the repair issue is already warning about.
+  the hourly table, so a chart's finest bucket is an hour. Finer granularity is possible with period sensors - which read the most recent part-hour as well.
+- If the entity being recorded is removed, the sensors derived from
+  it are not removed: they belong to this integration's config entry
+  rather than to the device, so Home Assistant detaches them from the device and leaves them standing.

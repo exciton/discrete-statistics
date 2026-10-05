@@ -722,7 +722,7 @@ attribute, and the dialog's warning on the Period field.
 **Nothing in this integration deletes statistics.** Recompute overwrites
 buckets it has source data for and leaves everything else alone, so a rebuild
 can never discard statistics whose source states have already been purged.
-Deleting a statistic is the user's decision, made in Settings → System → Tools
+Deleting a statistic is the user's decision, made in Settings → Tools
 → Statistics — and it sticks, because nothing else records that the statistic
 existed. It is absent from `statistics_meta` on the next compile, so it is
 absent from `existing` and is never written again. A state that *recurs* is
