@@ -55,18 +55,14 @@ Requires Home Assistant 2026.8.3 or later.
 
 ### HACS (recommended)
 
-This is not in the HACS default store, so add it as a custom repository:
-
 [![Open this repository in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=exciton&repository=discrete-statistics&category=integration)
 
 Or by hand:
 
-1. HACS → three-dot menu → **Custom repositories**
-2. Repository: `https://github.com/exciton/discrete-statistics`
-3. Type: **Integration**
-4. Add, then install **Discrete Statistics**
-5. Restart Home Assistant
-6. You may need to hard-refresh your browser (ctrl-shift-r) or reset the frontend cache in your app for everything to show up properly
+1. Open HACS and search for **Discrete Statistics**
+2. Download it
+3. Restart Home Assistant
+4. You may need to hard-refresh your browser (ctrl-shift-r) or reset the frontend cache in your app for everything to show up properly
 
 ### Manually
 
